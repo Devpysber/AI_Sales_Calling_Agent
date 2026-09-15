@@ -92,7 +92,7 @@ class PlivoService:
         status = self.inbound_status(number)
         urls = dict(answer_url=self.webhook("answer"), answer_method="POST",
                     hangup_url=self.webhook("hangup"), hangup_method="POST")
-        ours = next((a for a in self.client.applications.list(limit=50) if getattr(a, "app_name", "") == self.INBOUND_APP), None)
+        ours = next((a for a in self.client.applications.list(limit=20) if getattr(a, "app_name", "") == self.INBOUND_APP), None)
         if ours:
             self.client.applications.update(ours.app_id, **urls)
             app_id = ours.app_id
