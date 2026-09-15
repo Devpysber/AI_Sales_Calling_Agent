@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import workspace
 from app.core.auth import actor
-from app.services import rag
+from app.services import knowledge_profile, rag
 
 router = APIRouter(prefix="/api/agents/{agent_id}/knowledge", tags=["knowledge"])
 MAX_UPLOAD = 25 * 1024 * 1024
@@ -21,7 +21,14 @@ class Query(BaseModel):
 
 @router.get("")
 def list_documents(agent_id: int = Depends(workspace)):
-    return {"documents": rag.list_documents(agent_id), "stats": rag.stats(agent_id)}
+    return {"documents": rag.list_documents(agent_id), "stats": rag.stats(agent_id), "coverage": knowledge_profile.get(agent_id)}
+
+
+@router.post("/coverage")
+def refresh_coverage(agent_id: int = Depends(workspace)):
+    """Re-read the documents and refill topic coverage (runs in the background)."""
+    knowledge_profile.rebuild_async(agent_id)
+    return {"status": "analyzing"}
 
 
 @router.post("/upload")

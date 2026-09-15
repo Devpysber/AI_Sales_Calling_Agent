@@ -136,6 +136,8 @@ def _process(agent_id: int, doc_id: int, text: str, actor: str):
             doc.status = "ready"
             title = doc.title
         _bump_version(agent_id)
+        from app.services import knowledge_profile
+        knowledge_profile.rebuild_async(agent_id)
         events.record("document.added", f"Knowledge added: {title}",
                       f"{len(chunks)} chunks · {'semantic + keyword' if vectors else 'keyword'} search",
                       agent_id=agent_id, actor=actor, data={"document_id": doc_id})
@@ -161,6 +163,8 @@ def delete_document(agent_id: int, doc_id: int, actor: str = "admin") -> bool:
         db.delete(doc)
         title = doc.title
     _bump_version(agent_id)
+    from app.services import knowledge_profile
+    knowledge_profile.rebuild_async(agent_id)
     events.record("document.deleted", f"Knowledge removed: {title}", agent_id=agent_id, actor=actor)
     return True
 

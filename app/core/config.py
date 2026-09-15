@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     plivo_validate_signature: bool = Field(True, alias="PLIVO_VALIDATE_SIGNATURE")
 
     # ---------------- Email ----------------
+    # Email: Resend (preferred) or SMTP
+    resend_api_key: str = Field("", alias="RESEND_API_KEY")
+    email_from: str = Field("", alias="EMAIL_FROM")
+    email_reply_to: str = Field("", alias="EMAIL_REPLY_TO")
     smtp_host: str = Field("", alias="SMTP_HOST")
     smtp_port: int = Field(587, alias="SMTP_PORT")
     smtp_username: str = Field("", alias="SMTP_USERNAME")

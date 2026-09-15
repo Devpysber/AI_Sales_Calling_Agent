@@ -10,7 +10,7 @@ from app.core import store
 from app.core.config import settings
 from app.core.database import engine
 from app.services import tts
-from app.services.notification_service import email_configured
+from app.services.notification_service import email_configured, email_detail
 
 router = APIRouter(prefix="/api", tags=["system"])
 STATIC_AUDIO = Path(__file__).resolve().parents[2] / "audio" / "static"
@@ -112,7 +112,7 @@ async def status():
         "plivo": plivo, "openrouter": openrouter, "sarvam": sarvam, "public_url": public,
         "llm_providers": settings.llm_providers.split(","),
         "signature_validation": settings.plivo_validate_signature,
-        "email": {"ok": email_configured(), "detail": settings.smtp_host or "SMTP not configured"},
+        "email": {"ok": email_configured(), "detail": email_detail()},
         "infrastructure": {
             "environment": settings.environment,
             "database": engine.dialect.name,

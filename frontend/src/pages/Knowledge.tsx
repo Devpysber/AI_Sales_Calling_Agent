@@ -1,17 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  BookOpen, Check, CheckCircle2, CircleAlert, CircleDashed, FilePlus2, FileText, FileType2, Loader2, Search, Sparkles,
+  BookOpen, Check, CheckCircle2, RefreshCw, CircleAlert, CircleDashed, FilePlus2, FileText, FileType2, Loader2, Search, Sparkles,
   Trash2, Type, Upload, X,
 } from 'lucide-react'
 import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, PageHeader, Sheet, Skeleton, Tabs, Textarea, useConfirm } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, PageHeader, Sheet, ShowMore, Skeleton, Tabs, Textarea, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
 import type { KnowledgeDoc } from '@/lib/types'
 import { cn, formatDate, timeAgo } from '@/lib/utils'
 import { useAgent } from '@/lib/agent'
 
-type ListResponse = { documents: KnowledgeDoc[]; stats: { chunks: number; documents: number; semantic: boolean } }
+type CoverageTopic = { summary: string; documents: string[] }
+type Coverage = { status: 'empty' | 'analyzing' | 'ready' | 'failed'; topics: Record<string, CoverageTopic>; updated_at?: string; model?: string; error?: string }
+type ListResponse = { documents: KnowledgeDoc[]; stats: { chunks: number; documents: number; semantic: boolean }; coverage?: Coverage }
 type SearchResult = { title: string; text: string; score: number }
 type Filter = 'all' | 'ready' | 'processing' | 'failed'
 type UploadItem = { id: string; name: string; state: 'uploading' | 'done' | 'error'; error?: string }
@@ -21,7 +23,7 @@ const MAX_BYTES = 25 * 1024 * 1024
 
 const size = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1000))} KB`)
 
-// What a sales agent needs to answer most calls. Matched against document titles and filenames.
+// What a sales agent needs to answer most calls. Keys match app/services/knowledge_profile.py; the AI fills them from the documents.
 const TOPICS: { key: string; label: string; hint: string; match: RegExp; template: string }[] = [
   { key: 'overview', label: 'Company overview', hint: 'Who you are, years in business, locations', match: /about|company|overview|profile|who we/i,
     template: 'About us\nWe are … founded in … and based in …. We help … by ….\n\nWhy customers choose us\n- …\n- …' },
@@ -36,6 +38,8 @@ const TOPICS: { key: string; label: string; hint: string; match: RegExp; templat
   { key: 'policy', label: 'Process & policies', hint: 'Onboarding, support, refunds, contracts', match: /process|policy|policies|terms|support|onboard|refund|warranty/i,
     template: 'How we work\n1. Discovery call\n2. Proposal within … days\n3. …\n\nSupport: …\nRefunds: …' },
 ]
+
+const anyProcessing = (docs: KnowledgeDoc[]) => docs.some((d) => d.status === 'processing')
 
 export default function Knowledge() {
   const { agent, base } = useAgent()
@@ -52,7 +56,9 @@ export default function Knowledge() {
   const list = useQuery({
     queryKey: ['knowledge'],
     queryFn: () => api<ListResponse>(`${base}/knowledge`),
-    refetchInterval: (q) => (q.state.data?.documents.some((d) => d.status === 'processing') ? 1500 : false),
+    // Poll while documents are processed and while the AI fills topic coverage
+    refetchInterval: (q) => (q.state.data?.documents.some((d) => d.status === 'processing') ? 1500
+      : q.state.data?.coverage?.status === 'analyzing' ? 2500 : false),
   })
   const docs = useMemo(() => list.data?.documents ?? [], [list.data])
   const stats = list.data?.stats
@@ -94,8 +100,21 @@ export default function Knowledge() {
     }
   }
 
-  const coverage = TOPICS.map((t) => ({ ...t, doc: docs.find((d) => d.status === 'ready' && t.match.test(`${d.title} ${d.filename ?? ''}`)) }))
-  const covered = coverage.filter((c) => c.doc).length
+  const cov = list.data?.coverage
+  const analyzing = cov?.status === 'analyzing' || anyProcessing(docs)
+  // AI-filled topics; before the first analysis finishes, fall back to matching document names
+  const coverage = TOPICS.map((t) => {
+    const fromAi = cov?.topics?.[t.key]
+    const doc = fromAi?.summary ? docs.find((d) => fromAi.documents.includes(d.title)) ?? docs.find((d) => d.status === 'ready')
+      : cov?.status === 'ready' ? undefined : docs.find((d) => d.status === 'ready' && t.match.test(`${d.title} ${d.filename ?? ''}`))
+    return { ...t, summary: fromAi?.summary ?? '', doc }
+  })
+  const covered = coverage.filter((c) => c.summary || c.doc).length
+  const refresh = useMutation({
+    mutationFn: () => api(`${base}/knowledge/coverage`, { method: 'POST' }),
+    onSuccess: () => { toast.success('Re-reading your documents', { description: 'Coverage updates in a few seconds.' }); setTimeout(() => qc.invalidateQueries({ queryKey: ['knowledge'] }), 800) },
+    onError: (e) => toast.error('Could not refresh coverage', { description: e.message }),
+  })
   const counts = { all: docs.length, ready: 0, processing: 0, failed: 0 } as Record<Filter, number>
   docs.forEach((d) => counts[d.status]++)
   const shown = docs.filter((d) => (filter === 'all' || d.status === filter) && `${d.title} ${d.filename ?? ''}`.toLowerCase().includes(find.toLowerCase()))
@@ -111,7 +130,8 @@ export default function Knowledge() {
         <Stat label="Documents" value={stats?.documents ?? '—'} sub={counts.processing ? `${counts.processing} processing` : counts.failed ? <span className="text-danger">{counts.failed} failed</span> : 'All processed'} />
         <Stat label="Searchable passages" value={stats?.chunks ?? '—'} sub="Chunks the agent retrieves from" />
         <Stat label="Search mode" value={stats ? (stats.semantic ? 'Semantic' : 'Keyword') : '—'} sub={stats?.semantic ? 'Meaning + keyword match' : 'Exact word match only'} />
-        <Stat label="Topic coverage" value={`${covered}/${TOPICS.length}`} sub={lastUpdate ? `Last added ${timeAgo(lastUpdate)}` : 'Nothing added yet'} />
+        <Stat label="Topic coverage" value={analyzing ? <span className="inline-flex items-center gap-2">{covered}/{TOPICS.length}<Loader2 className="size-4 animate-spin text-muted" /></span> : `${covered}/${TOPICS.length}`}
+          sub={analyzing ? 'AI is reading your documents…' : lastUpdate ? `Last added ${timeAgo(lastUpdate)}` : 'Nothing added yet'} />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
@@ -182,20 +202,34 @@ export default function Knowledge() {
           <RetrievalTester docs={docs} onOpen={setViewId} />
 
           <Card>
-            <CardHeader title="Coverage" description="Topics prospects ask about most. Detected from document names." />
+            <CardHeader title="Coverage"
+              description={analyzing ? 'AI is reading your documents to fill each topic…'
+                : cov?.status === 'failed' ? 'Could not analyse the documents. Try Refresh.'
+                : cov?.updated_at ? `What your documents say, filled by AI · ${timeAgo(cov.updated_at)}` : 'Topics prospects ask about most.'}
+              action={docs.some((d) => d.status === 'ready') && (
+                <Button size="sm" variant="ghost" loading={refresh.isPending} disabled={analyzing} onClick={() => refresh.mutate()} title="Re-read documents"><RefreshCw />Refresh</Button>
+              )} />
             <ul className="divide-y divide-border">
-              {coverage.map((c) => (
-                <li key={c.key} className="flex items-center gap-3 px-5 py-2.5">
-                  {c.doc ? <Check className="size-4 shrink-0 text-success" /> : <CircleDashed className="size-4 shrink-0 text-muted" />}
-                  <div className="min-w-0 flex-1">
-                    <div className={cn('text-sm', c.doc ? 'text-fg' : 'text-fg-2')}>{c.label}</div>
-                    <div className="truncate text-xs text-muted">{c.doc ? c.doc.title : c.hint}</div>
-                  </div>
-                  {c.doc
-                    ? <Button size="sm" variant="ghost" onClick={() => setViewId(c.doc!.id)}>View</Button>
-                    : <Button size="sm" onClick={() => setNote({ title: c.label, text: c.template })}>Add</Button>}
-                </li>
-              ))}
+              {coverage.map((c) => {
+                const filled = Boolean(c.summary || c.doc)
+                return (
+                  <li key={c.key} className="flex gap-3 px-5 py-3">
+                    {analyzing && !filled ? <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin text-muted" />
+                      : filled ? <Check className="mt-0.5 size-4 shrink-0 text-success" /> : <CircleDashed className="mt-0.5 size-4 shrink-0 text-muted" />}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className={cn('flex-1 text-sm font-medium', filled ? 'text-fg' : 'text-fg-2')}>{c.label}</span>
+                        {filled && c.doc
+                          ? <Button size="sm" variant="ghost" onClick={() => setViewId(c.doc!.id)}>View</Button>
+                          : !filled && <Button size="sm" onClick={() => setNote({ title: c.label, text: c.template })}>Add</Button>}
+                      </div>
+                      {c.summary
+                        ? <div className="mt-1 text-xs leading-relaxed text-fg-2"><ShowMore text={c.summary} lines={3} limit={160} /></div>
+                        : <div className="mt-0.5 text-xs text-muted">{filled ? c.doc?.title : `Missing · ${c.hint}`}</div>}
+                    </div>
+                  </li>
+                )
+              })}
             </ul>
           </Card>
         </div>
