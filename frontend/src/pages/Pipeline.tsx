@@ -34,13 +34,18 @@ function LeadCard({ lead, onOpen, onDragStart, onMove }: { lead: Lead; onOpen: (
       <div className="flex items-start gap-2.5">
         <Avatar name={lead.name ?? lead.phone} className="size-8 text-[11px]" />
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-1.5 text-[13.5px] font-bold"><span className="truncate">{lead.name ?? 'Unnamed'}</span>{lead.do_not_call && <Ban className="size-3 shrink-0 text-danger" />}</div>
-          <div className="flex min-w-0 items-center gap-1 text-[11.5px] text-muted">{lead.company ? <><Building2 className="size-3 shrink-0" /><span className="truncate">{lead.company}</span></> : <span className="truncate">{lead.phone}</span>}</div>
+          <div className="flex min-w-0 items-start gap-1.5 text-[13.5px] font-bold break-words">{lead.name ?? 'Unnamed'}{lead.do_not_call && <Ban className="mt-0.5 size-3 shrink-0 text-danger" />}</div>
+          <div className="font-mono text-[11.5px] text-fg-2">{lead.phone}</div>
+          {lead.company && <div className="flex items-start gap-1 text-[11.5px] break-words text-muted"><Building2 className="mt-0.5 size-3 shrink-0" />{lead.company}</div>}
+          {(lead.city || lead.email) && <div className="text-[11.5px] break-all text-muted">{[lead.city, lead.email].filter(Boolean).join(' · ')}</div>}
         </div>
         <GripVertical className="size-4 shrink-0 text-muted opacity-0 transition group-hover:opacity-100" />
       </div>
-      {lead.summary && <p className="mt-2.5 line-clamp-2 break-words text-[12px] leading-snug text-fg-2">{lead.summary}</p>}
-      {lead.meeting_at && <div className="mt-2.5 flex min-w-0 items-center gap-1.5 rounded-lg bg-success-soft px-2 py-1 text-[11.5px] font-semibold text-success"><CalendarClock className="size-3 shrink-0" /><span className="truncate">{lead.meeting_at}</span></div>}
+      {lead.summary && <p className="mt-2.5 text-[12px] leading-snug break-words whitespace-pre-wrap text-fg-2">{lead.summary}</p>}
+      {lead.requirements && <p className="mt-1.5 text-[11.5px] leading-snug break-words text-muted"><span className="font-semibold text-fg-2">Needs: </span>{lead.requirements}</p>}
+      {lead.meeting_at && <div className="mt-2.5 flex min-w-0 items-center gap-1.5 rounded-lg bg-success-soft px-2 py-1 text-[11.5px] font-semibold text-success"><CalendarClock className="size-3 shrink-0" />Meeting {lead.meeting_at}</div>}
+      {lead.callback_at && <div className="mt-1.5 flex min-w-0 items-center gap-1.5 rounded-lg bg-brand-soft px-2 py-1 text-[11.5px] font-semibold text-brand"><CalendarClock className="size-3 shrink-0" />Callback {lead.callback_at}</div>}
+      {lead.tags.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{lead.tags.map((t) => <span key={t} className="rounded-md bg-surface-2 px-1.5 py-px text-[10.5px] text-fg-2">{t}</span>)}</div>}
       <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5">
         <QualificationBadge value={lead.qualification} />
         {lead.call_status && <CallStatusBadge status={lead.call_status} />}
@@ -59,7 +64,7 @@ function LeadCard({ lead, onOpen, onDragStart, onMove }: { lead: Lead; onOpen: (
           <PhoneCall className="size-3.5" />
         </button>
       </div>
-      <div className="mt-2 truncate text-[10.5px] text-muted">{lead.last_contacted_at ? `Contacted ${timeAgo(lead.last_contacted_at)}` : `Added ${timeAgo(lead.created_at)}`}</div>
+      <div className="mt-2 text-[10.5px] text-muted">{lead.last_contacted_at ? `Contacted ${timeAgo(lead.last_contacted_at)}` : `Added ${timeAgo(lead.created_at)}`}</div>
     </div>
   )
 }
@@ -142,10 +147,9 @@ export default function Pipeline() {
         </div>
       </PageHeader>
 
-      {/* Responsive board: stacked on phones, a grid on tablets/laptops, all columns in one row on wide screens */}
-      <div className="pb-4">
-        <div className={cn('grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3',
-          scope === 'open' ? '2xl:grid-cols-6' : 'xl:grid-cols-4 2xl:grid-cols-5')}>
+      {/* Stacked on phones; from tablets up one row of full-detail columns with an outer horizontal scrollbar */}
+      <div className="-mx-4 overflow-x-auto px-4 pb-4 [scrollbar-width:thin] sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+        <div className="flex flex-col gap-4 sm:w-max sm:flex-row">
           {columns.map((stage) => {
             const col = data?.[stage]
             const hot = col?.items.filter((l) => l.qualification === 'Hot').length ?? 0
@@ -159,14 +163,14 @@ export default function Pipeline() {
                   if (dragging && dragging.from !== stage) move.mutate({ id: dragging.id, status: stage })
                   setDragging(null); setOver(null)
                 }}
-                className={cn('flex min-w-0 flex-col rounded-[var(--radius-card)] border bg-surface-2/60 transition', isOver ? 'border-fg bg-surface-2' : 'border-transparent')}>
+                className={cn('flex w-full flex-col rounded-[var(--radius-card)] border bg-surface-2/60 transition sm:w-80 sm:shrink-0', isOver ? 'border-fg bg-surface-2' : 'border-transparent')}>
                 <div className="flex items-center gap-2 px-3.5 pt-3.5 pb-2">
                   <span className={cn('size-2 rounded-full', stage === 'Closed Won' || stage === 'Meeting Booked' ? 'bg-success' : ['Not Interested', 'Do Not Call', 'Closed Lost'].includes(stage) ? 'bg-danger' : 'bg-fg')} />
                   <h3 className="flex-1 text-[13px] font-extrabold">{stage}</h3>
                   {hot > 0 && <span className="flex items-center gap-0.5 text-[11px] font-bold text-danger"><Flame className="size-3" />{hot}</span>}
                   <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] font-bold tabular-nums ring-1 ring-border">{col?.total ?? '…'}</span>
                 </div>
-                <div className="flex max-h-[70vh] min-h-24 flex-col gap-2.5 overflow-y-auto px-2.5 pb-3 sm:min-h-40 lg:max-h-[calc(100vh-320px)]">
+                <div className="flex max-h-[70vh] min-h-24 flex-col gap-2.5 overflow-y-auto px-2.5 pb-3 [scrollbar-width:thin] sm:min-h-40 sm:max-h-[calc(100vh-300px)]">
                   {board.isLoading ? [0, 1].map((i) => <Skeleton key={i} className="h-28" />)
                     : col?.items.length ? col.items.map((lead) => (
                       <LeadCard key={lead.id} lead={lead} onOpen={() => navigate(path(`/leads/${lead.id}`))}
