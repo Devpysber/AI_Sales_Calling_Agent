@@ -3,6 +3,7 @@ import {
   AlertTriangle, BellRing, Bell, CalendarCheck, Clock, CreditCard, ExternalLink, Flame, PhoneOff, PlugZap, RefreshCw, Timer, X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useLocation } from 'react-router-dom'
 import { Button, Dialog } from '@/components/ui'
 import { api } from '@/lib/api'
@@ -24,6 +25,7 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<'reminders' | 'balances'>('reminders')
   const ref = useRef<HTMLDivElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
   const location = useLocation()
   const qc = useQueryClient()
   const { data, isFetching, refetch } = useQuery({
@@ -40,7 +42,7 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
   useEffect(() => { setOpen(false) }, [location.pathname])
   useEffect(() => {
     if (!open) return
-    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false) }
+    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node) && !panel.current?.contains(e.target as Node)) setOpen(false) }
     document.addEventListener('mousedown', close)
     return () => document.removeEventListener('mousedown', close)
   }, [open])
@@ -65,8 +67,8 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
         )}
       </button>
 
-      {open && (
-        <div className="fixed bottom-4 left-4 z-50 w-[min(380px,calc(100vw-2rem))] animate-pop-in overflow-hidden rounded-2xl border border-border bg-elevated text-fg shadow-pop lg:left-[calc(var(--sidebar-w,272px)+12px)]"
+      {open && createPortal(
+        <div ref={panel} className="fixed bottom-4 left-4 z-[70] w-[min(380px,calc(100vw-2rem))] animate-pop-in overflow-hidden rounded-2xl border border-border bg-elevated text-fg shadow-pop lg:left-[calc(var(--sidebar-w,272px)+12px)]"
           style={{ ['--sidebar-w' as string]: compact ? '76px' : '272px' }}>
           <div className="flex items-center gap-2 border-b border-border px-4 py-3">
             <div className="min-w-0 flex-1">
@@ -135,7 +137,7 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
             ))}
           </div>
         </div>
-      )}
+      , document.body)}
 
       <LowCreditPopup popup={data?.popup && Array.isArray(data.popup.facts) ? data.popup : null} onSnooze={(hours) => data?.popup && snooze.mutate({ key: `popup:${data.popup.provider}`, hours })} />
     </div>
