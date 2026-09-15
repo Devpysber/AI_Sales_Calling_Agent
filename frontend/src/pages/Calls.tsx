@@ -9,6 +9,7 @@ import CallQueue from '@/components/CallQueue'
 import { Button, Card, EmptyState, Input, PageHeader, Pagination, Select, Skeleton, StatTile, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
 import { useAgent } from '@/lib/agent'
+import { useDebounced } from '@/lib/useDebounced'
 import type { Call, CallStats, Page } from '@/lib/types'
 import { CALL_STATUSES, cn, formatDate, formatDuration, timeAgo, titleCase } from '@/lib/utils'
 
@@ -49,14 +50,15 @@ export default function Calls() {
   const [status, setStatus] = useState('')
   const [direction, setDirection] = useState('')
   const [search, setSearch] = useState('')
+  const q = useDebounced(search)
   const [page, setPage] = useState(1)
   const [callId, setCallId] = useState<number | null>(null)
 
-  useEffect(() => { setPage(1); setParams(view === 'active' ? { status: 'active' } : view === 'queue' ? { view: 'queue' } : {}, { replace: true }) }, [view, status, direction, search, setParams])
+  useEffect(() => { setPage(1); setParams(view === 'active' ? { status: 'active' } : view === 'queue' ? { view: 'queue' } : {}, { replace: true }) }, [view, status, direction, q, setParams])
 
   const { data, isLoading } = useQuery({
-    queryKey: ['calls', view, status, direction, search, page],
-    queryFn: () => api<Page<Call>>(`${base}/calls`, { params: { status: view === 'active' ? 'active' : status, direction, search, page, page_size: 25 } }),
+    queryKey: ['calls', view, status, direction, q, page],
+    queryFn: () => api<Page<Call>>(`${base}/calls`, { params: { status: view === 'active' ? 'active' : status, direction, search: q, page, page_size: 25 } }),
     placeholderData: keepPreviousData,
     refetchInterval: view === 'active' ? 2000 : 4000,
     enabled: view !== 'queue',

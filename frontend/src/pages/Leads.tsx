@@ -193,7 +193,7 @@ export default function Leads() {
         <div className="flex flex-wrap items-center gap-2 border-b border-border p-3">
           <div className="relative min-w-56 flex-1 sm:max-w-sm">
             <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
-            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, company, phone, city, tag…" className="pl-9" aria-label="Search leads" />
+            <Input value={search} onChange={(e) => { setSearch(e.target.value); if (e.target.value && filters.view) setFilters({ ...filters, view: '' }) }} placeholder="Search name, company, phone, city, tag…" className="pl-9" aria-label="Search leads" />
           </div>
           <Select value={filters.call_status} onChange={(e) => setFilters({ ...filters, call_status: e.target.value })} className="w-auto" aria-label="Last call">
             <option value="">Any call result</option>{CALL_STATUSES.map((x) => <option key={x}>{x}</option>)}

@@ -457,9 +457,14 @@ class CallService:
                 query = query.where(Call.status == status)
             if direction:
                 query = query.where(Call.direction == direction)
-            if search:
-                like = f"%{search}%"
-                query = query.where((Lead.name.ilike(like)) | (Call.to_number.ilike(like)) | (Call.from_number.ilike(like)))
+            if search and search.strip():
+                from app.services.crm_service import search_terms
+                like, phone_like = search_terms(search)
+                condition = Lead.name.ilike(like) | Lead.company.ilike(like) | Call.to_number.ilike(like) | Call.from_number.ilike(like) \
+                    | Call.summary.ilike(like) | Call.outcome.ilike(like)
+                if phone_like:
+                    condition = condition | Call.to_number.like(phone_like) | Call.from_number.like(phone_like)
+                query = query.where(condition)
             total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
             rows = db.execute(query.order_by(Call.id.desc()).offset((page - 1) * page_size).limit(page_size)).all()
             return {"items": [c.to_dict(n, with_transcript=False) for c, n in rows], "total": total,

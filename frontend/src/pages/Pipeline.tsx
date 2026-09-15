@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Ban, Building2, CalendarClock, ChevronLeft, ChevronRight, Columns3, Flame, GripVertical, PhoneCall, Search } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -8,6 +8,7 @@ import { CallStatusBadge, QualificationBadge } from '@/components/status'
 import { Avatar, Button, Card, Input, PageHeader, Select, Skeleton, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
 import { useAgent } from '@/lib/agent'
+import { useDebounced } from '@/lib/useDebounced'
 import type { Board, Lead } from '@/lib/types'
 import { cn, QUALIFICATIONS, timeAgo } from '@/lib/utils'
 
@@ -74,6 +75,7 @@ export default function Pipeline() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [search, setSearch] = useState('')
+  const q = useDebounced(search)
   const [qualification, setQualification] = useState('')
   const [scope, setScope] = useState<'open' | 'all'>('open')
   const [dragging, setDragging] = useState<{ id: number; from: string } | null>(null)
@@ -114,8 +116,9 @@ export default function Pipeline() {
   const scrollBoard = (dir: 1 | -1) => boardRef.current?.scrollBy({ left: dir * 340, behavior: 'smooth' })
 
   const board = useQuery({
-    queryKey: ['leads', 'board', search, qualification],
-    queryFn: () => api<Board>(`${base}/leads/board`, { params: { search, qualification, per_column: 100 } }),
+    queryKey: ['leads', 'board', q, qualification],
+    queryFn: () => api<Board>(`${base}/leads/board`, { params: { search: q, qualification, per_column: 100 } }),
+    placeholderData: keepPreviousData,
     // Live board: the AI moves leads after every call; faster while a call is running
     refetchInterval: (q) => (Object.values(q.state.data ?? {}).some((c) => c.items.some((l) => LIVE_CALL.includes(l.call_status ?? ''))) ? 2000 : 4000),
     refetchIntervalInBackground: false,
@@ -124,7 +127,7 @@ export default function Pipeline() {
   const move = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) => api<Lead>(`${base}/leads/${id}`, { method: 'PATCH', json: { status } }),
     onMutate: async ({ id, status }) => {
-      const key = ['leads', 'board', search, qualification]
+      const key = ['leads', 'board', q, qualification]
       await qc.cancelQueries({ queryKey: key })
       const prev = qc.getQueryData<Board>(key)
       if (prev) {

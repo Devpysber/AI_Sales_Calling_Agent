@@ -56,6 +56,24 @@ def _clean(value):
     return text or None
 
 
+def search_terms(search: str) -> tuple[str, str | None]:
+    """(text pattern, phone-digits pattern): '95845 16352', '09584516352' and '+91-9584516352' all match +919584516352."""
+    text = search.strip()
+    digits = "".join(c for c in text if c.isdigit())
+    if len(digits) == 11 and digits.startswith("0"):
+        digits = digits[1:]
+    return f"%{text}%", (f"%{digits}%" if len(digits) >= 4 else None)
+
+
+def lead_search_filter(search: str):
+    like, phone_like = search_terms(search)
+    conditions = [Lead.name.ilike(like), Lead.company.ilike(like), Lead.phone.ilike(like), Lead.email.ilike(like),
+                  Lead.city.ilike(like), Lead.tags.ilike(like), Lead.source.ilike(like)]
+    if phone_like:
+        conditions.append(Lead.phone.like(phone_like))
+    return or_(*conditions)
+
+
 def normalize_phone(phone) -> str | None:
     text = _clean(phone)
     if not text:
@@ -136,10 +154,8 @@ class CRMService:
             query = self._view(self._scoped(select(Lead)), view)
             if source:
                 query = query.where(Lead.source == source)
-            if search:
-                like = f"%{search.strip()}%"
-                query = query.where(or_(Lead.name.ilike(like), Lead.company.ilike(like), Lead.phone.ilike(like),
-                                        Lead.email.ilike(like), Lead.city.ilike(like), Lead.tags.ilike(like)))
+            if search and search.strip():
+                query = query.where(lead_search_filter(search))
             if status:
                 query = query.where(Lead.status == status)
             if call_status:
@@ -156,10 +172,8 @@ class CRMService:
         """Leads grouped by status for the pipeline board: the most recently active per column plus totals."""
         with get_db() as db:
             base = self._scoped(select(Lead))
-            if search:
-                like = f"%{search.strip()}%"
-                base = base.where(or_(Lead.name.ilike(like), Lead.company.ilike(like), Lead.phone.ilike(like),
-                                      Lead.city.ilike(like), Lead.tags.ilike(like)))
+            if search and search.strip():
+                base = base.where(lead_search_filter(search))
             if qualification:
                 base = base.where(Lead.qualification == qualification)
             columns = {}

@@ -123,3 +123,12 @@ def test_schedule_queue_and_follow_up_time(client, base):
     assert got["callback_at"] == later and got["follow_up_date"] == later[:10]
     assert client.patch(f"{base}/leads/{lead['id']}", json={"callback_at": "2001-01-01 10:00"}).status_code == 400
     assert client.patch(f"{base}/leads/{lead['id']}", json={"callback_at": ""}).json()["callback_at"] in ("", None)
+
+
+def test_search_matches_any_phone_format(client, base):
+    client.post(f"{base}/leads", json={"name": "Format Test", "phone": "9876544444", "city": "Indore"})
+    for q in ["98765 44444", "09876544444", "+91-9876544444", "format", "indore"]:
+        items = client.get(f"{base}/leads", params={"search": q}).json()["items"]
+        assert any(l["name"] == "Format Test" for l in items), q
+    board = client.get(f"{base}/leads/board", params={"search": "98765 44444", "per_column": 100}).json()
+    assert sum(c["total"] for c in board.values()) >= 1
