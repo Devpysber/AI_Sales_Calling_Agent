@@ -210,7 +210,7 @@ export default function Leads() {
         </div>
 
         {selected.size > 0 && (
-          <div className="flex flex-wrap items-center gap-2 border-b border-border bg-fg px-4 py-2.5 text-sm text-bg">
+          <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-border bg-surface-2 px-4 py-2.5 text-sm text-fg">
             <span className="font-bold">{selected.size} selected</span>
             <div className="flex-1" />
             <Button size="sm" loading={bulk.isPending && bulk.variables?.action === 'call'} onClick={async () => {
@@ -219,12 +219,12 @@ export default function Leads() {
             }}><PhoneCall />Call now</Button>
             <Button size="sm" onClick={() => bulk.mutate({ action: 'queue', ids: [...selected] })}><ListPlus />Queue for auto-dial</Button>
             <select aria-label="Set stage" value="" onChange={(e) => e.target.value && bulkUpdate.mutate({ status: e.target.value })}
-              className="h-8 rounded-lg border border-bg/30 bg-bg/10 px-2 text-[13px] font-semibold text-bg">
-              <option value="" className="text-fg">Set stage…</option>{STAGES.map((x) => <option key={x} value={x} className="text-fg">{x}</option>)}
+              className="h-8 rounded-lg border border-border bg-surface px-2 text-[13px] font-semibold text-fg">
+              <option value="">Set stage…</option>{STAGES.map((x) => <option key={x} value={x}>{x}</option>)}
             </select>
             <select aria-label="Set temperature" value="" onChange={(e) => e.target.value && bulkUpdate.mutate({ qualification: e.target.value })}
-              className="h-8 rounded-lg border border-bg/30 bg-bg/10 px-2 text-[13px] font-semibold text-bg">
-              <option value="" className="text-fg">Temperature…</option>{QUALIFICATIONS.map((x) => <option key={x} value={x} className="text-fg">{x}</option>)}
+              className="h-8 rounded-lg border border-border bg-surface px-2 text-[13px] font-semibold text-fg">
+              <option value="">Temperature…</option>{QUALIFICATIONS.map((x) => <option key={x} value={x}>{x}</option>)}
             </select>
             <Button size="sm" onClick={async () => {
               if (await confirm({ title: `Mark ${selected.size} lead(s) Do Not Call?`, description: 'They are excluded from manual and automated calls.', confirmLabel: 'Mark Do Not Call', danger: true }))
@@ -234,7 +234,7 @@ export default function Leads() {
               if (await confirm({ title: `Delete ${selected.size} lead(s)?`, description: 'This cannot be undone.', confirmLabel: 'Delete', danger: true }))
                 bulk.mutate({ action: 'delete', ids: [...selected] })
             }}><Trash2 />Delete</Button>
-            <button type="button" className="px-2 text-sm font-semibold opacity-70 hover:opacity-100" onClick={() => setSelected(new Set())}>Cancel</button>
+            <button type="button" className="px-2 text-sm font-semibold text-muted hover:text-fg" onClick={() => setSelected(new Set())}>Cancel</button>
           </div>
         )}
 

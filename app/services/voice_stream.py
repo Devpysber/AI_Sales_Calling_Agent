@@ -123,6 +123,19 @@ def spoken_name(text: str) -> str | None:
     return None
 
 
+EMAIL = re.compile(r"[\w.+-]+\s*(?:@|\bat the rate\b|\bat\b)\s*[\w-]+\s*(?:\.|\bdot\b)\s*[a-z]{2,}(?:\s*(?:\.|\bdot\b)\s*[a-z]{2,})?", re.I)
+
+
+def spoken_email(text: str) -> str | None:
+    """An email said on a call ("neha at the rate gmail dot com" or typed-style), normalised; None when unsure."""
+    m = EMAIL.search(text)
+    if not m:
+        return None
+    email = re.sub(r"\s*(?:\bat the rate\b|\bat\b)\s*", "@", m.group(0), count=1, flags=re.I)
+    email = re.sub(r"\s*\bdot\b\s*", ".", email, flags=re.I).replace(" ", "").lower()
+    return email if re.fullmatch(r"[\w.+-]+@[\w-]+(\.[a-z]{2,})+", email) else None
+
+
 def split_sentences(text: str) -> list[str]:
     parts = [p.strip() for p in SENTENCE_SPLIT.split(text.strip()) if p.strip()]
     return parts or [text.strip()]
@@ -780,23 +793,27 @@ class CallStream:
                                         "lead.updated", f"Language switched to {tts.LANGUAGES[language]} on request")
 
     async def capture_caller_details(self, text: str):
-        """New caller says their name: save it on the lead right away and let the agent use it from the next reply."""
+        """Save details the caller states about themselves the moment they say them (any lead, new or known):
+        name and email fill empty fields right away and are used from the next reply; the summary adds the rest."""
         lead = self.session.get("lead") or {}
-        if lead.get("name") or not self.session.get("lead_id"):
+        if not self.session.get("lead_id"):
             return
-        name = spoken_name(text)
-        if not name:
+        updates = {}
+        if not lead.get("name") and (name := spoken_name(text)):
+            updates["name"] = name
+        if not lead.get("email") and (email := spoken_email(text)):
+            updates["email"] = email
+        if not updates:
             return
-        lead["name"] = name
-        collect = lead.get("collect")
-        if collect is not None:
+        lead.update(updates)
+        if lead.get("collect") is not None and lead.get("call_purpose") == "inbound":
             lead["call_goal"] = agent.call_goal(lead, "inbound_new")
         self.session["lead"] = lead
         self.save_session()
         with contextlib.suppress(Exception):
-            await asyncio.to_thread(CallService(self.agent_id).crm.update, self.session["lead_id"], {"name": name}, "ai",
-                                    "lead.updated", f"Caller introduced themselves as {name}")
-        self.publish({"type": "caller", "name": name})
+            await asyncio.to_thread(CallService(self.agent_id).crm.update, self.session["lead_id"], updates, "ai",
+                                    "lead.updated", "Caller shared " + ", ".join(f"{k}: {v}" for k, v in updates.items()))
+        self.publish({"type": "caller", **updates})
 
     async def commit_turn(self):
         await asyncio.sleep(settings.turn_end_grace_ms / 1000)

@@ -91,3 +91,10 @@ def test_spoken_name_and_collect_goal():
     goal = call_goal({"collect": ["name", "city"]}, "inbound_new")
     assert "their name, their city" in goal
     assert "complete" in call_goal({"collect": ["name"], "name": "Neha"}, "inbound_new")
+
+
+def test_spoken_email():
+    from app.services.voice_stream import spoken_email
+    assert spoken_email("my email is neha at the rate gmail dot com") == "neha@gmail.com"
+    assert spoken_email("mail neha.g@yahoo.co.in") == "neha.g@yahoo.co.in"
+    assert spoken_email("I will be at home") is None
