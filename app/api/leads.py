@@ -46,11 +46,34 @@ class LeadPatch(BaseModel):
     objections: str | None = None
     follow_up_date: str | None = None
     meeting_at: str | None = None
+    callback_at: str | None = None  # "YYYY-MM-DD HH:MM" IST: the agent calls at this time; "" clears it
     retry_count: int | None = None
 
 
 class Ids(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=1000)
+
+
+class QueueRequest(Ids):
+    at: str | None = None  # "YYYY-MM-DDTHH:MM" or "YYYY-MM-DD HH:MM" IST; empty = as soon as possible
+
+
+def scheduled_time(value: str | None) -> str | None:
+    """Validate a user-picked call time (IST): must be in the future and within 60 days."""
+    if not value:
+        return None
+    from datetime import datetime, timedelta
+    from app.services.call_service import IST
+    try:
+        dt = datetime.strptime(value.strip().replace("T", " ")[:16], "%Y-%m-%d %H:%M")
+    except ValueError:
+        raise HTTPException(400, "Pick a valid date and time.")
+    now = datetime.now(IST).replace(tzinfo=None)
+    if dt < now - timedelta(minutes=1):
+        raise HTTPException(400, "That time has already passed.")
+    if dt > now + timedelta(days=60):
+        raise HTTPException(400, "Schedule within the next 60 days.")
+    return dt.strftime("%Y-%m-%d %H:%M")
 
 
 BOARD_STATUSES = ["New", "Contacted", "Interested", "Follow Up", "Meeting Booked", "Closed Won", "Closed Lost",
@@ -164,12 +187,13 @@ def bulk_update(body: BulkUpdate, request: Request, agent_id: int = Depends(work
 
 
 @router.post("/bulk/queue")
-def bulk_queue(body: Ids, request: Request, agent_id: int = Depends(workspace)):
-    """Mark leads Pending so this agent's auto-dial picks them up within calling hours."""
+def bulk_queue(body: QueueRequest, request: Request, agent_id: int = Depends(workspace)):
+    """Queue leads: as soon as possible (queue order), or at a chosen time (scheduled call)."""
     crm, queued = CRMService(agent_id), 0
+    at = scheduled_time(body.at)
     for lead_id in body.ids:
         try:
-            crm.update(lead_id, {"call_status": "Pending"}, actor="system")
+            crm.update(lead_id, {"call_status": "Pending", "callback_at": at or ""}, actor="system")
             queued += 1
         except LookupError:
             continue
@@ -177,6 +201,10 @@ def bulk_queue(body: Ids, request: Request, agent_id: int = Depends(workspace)):
     from app.services.call_service import within_calling_hours
     cfg = agent_service.get_automation(agent_id)
     size = crm.queue_size()
+    if at:
+        eta = f"Scheduled: the agent calls at {at[11:16]} on {at[:10]}"
+        events.record("callback.scheduled", f"Call scheduled for {at}", f"{queued} lead(s)", agent_id=agent_id, actor=actor(request))
+        return {"queued": queued, "queue_size": size, "eta": eta, "at": at}
     if within_calling_hours(cfg):
         eta = "Calling starts within a minute" + (f" ({size} in queue, {cfg['max_concurrent_calls']} at a time)" if size > 1 else "")
     else:
@@ -252,8 +280,15 @@ def get(lead_id: int, agent_id: int = Depends(workspace)):
 
 @router.patch("/{lead_id}")
 def patch(lead_id: int, body: LeadPatch, request: Request, agent_id: int = Depends(workspace)):
+    data = body.model_dump(exclude_unset=True)
+    if "callback_at" in data:
+        at = scheduled_time(data["callback_at"])
+        data["callback_at"] = at or ""
+        if at:  # a scheduled call is dialled by the callback job and keeps the follow-up date in sync
+            data.setdefault("follow_up_date", at[:10])
+            data.setdefault("call_status", "Pending")
     try:
-        return CRMService(agent_id).update(lead_id, body.model_dump(exclude_unset=True), actor=actor(request))
+        return CRMService(agent_id).update(lead_id, data, actor=actor(request))
     except LookupError as e:
         raise HTTPException(404, str(e))
     except ValueError as e:

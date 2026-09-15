@@ -105,3 +105,21 @@ def test_call_queue_order_and_remove(client, base):
     assert mine == [ids[2], ids[0], ids[1]] and queue["items"][0]["position"] == 1
     client.post(f"{base}/leads/queue/remove", json={"ids": [ids[0]]})
     assert ids[0] not in [i["id"] for i in client.get(f"{base}/leads/queue").json()["items"]]
+
+
+def test_schedule_queue_and_follow_up_time(client, base):
+    from datetime import datetime, timedelta
+    from app.services.call_service import IST
+
+    lead = client.post(f"{base}/leads", json={"name": "Scheduled", "phone": "9876533333"}).json()
+    at = (datetime.now(IST) + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M")
+    r = client.post(f"{base}/leads/bulk/queue", json={"ids": [lead["id"]], "at": at}).json()
+    assert r["at"] == at.replace("T", " ") and "Scheduled" in r["eta"]
+    got = client.get(f"{base}/leads/{lead['id']}").json()
+    assert got["callback_at"] == at.replace("T", " ") and got["call_status"] == "Pending"
+
+    later = (datetime.now(IST) + timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
+    got = client.patch(f"{base}/leads/{lead['id']}", json={"callback_at": later}).json()
+    assert got["callback_at"] == later and got["follow_up_date"] == later[:10]
+    assert client.patch(f"{base}/leads/{lead['id']}", json={"callback_at": "2001-01-01 10:00"}).status_code == 400
+    assert client.patch(f"{base}/leads/{lead['id']}", json={"callback_at": ""}).json()["callback_at"] in ("", None)

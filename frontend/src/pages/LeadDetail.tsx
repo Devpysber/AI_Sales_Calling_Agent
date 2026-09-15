@@ -10,7 +10,7 @@ import ActivityFeed from '@/components/ActivityFeed'
 import CallSheet from '@/components/CallSheet'
 import { LeadFormSheet, useStartCall } from '@/components/LeadSheets'
 import { CallStatusBadge, QualificationBadge, SentimentDot } from '@/components/status'
-import { Avatar, Badge, Button, Card, CardHeader, EmptyState, Input, PageHeader, Ring, Select, ShowMore, Skeleton, Switch, Tabs, Textarea, useConfirm } from '@/components/ui'
+import { Avatar, Badge, Button, Card, CardHeader, Dialog, EmptyState, Input, PageHeader, Ring, Select, ShowMore, Skeleton, Switch, Tabs, Textarea, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
 import { useAgent } from '@/lib/agent'
 import type { ActivityEvent, Call, Lead, Page } from '@/lib/types'
@@ -92,7 +92,6 @@ export default function LeadDetail() {
   const [transcriptOf, setTranscriptOf] = useState<number | null>(null)
   const [editing, setEditing] = useState(false)
   const [notes, setNotes] = useState<string | null>(null)
-  const [followUp, setFollowUp] = useState('')
 
   const lead = useQuery({ queryKey: ['lead', leadId], queryFn: () => api<Lead>(`${base}/leads/${leadId}`), refetchInterval: 5000 })
   const calls = useQuery({ queryKey: ['calls', 'lead', leadId], queryFn: () => api<Page<Call>>(`${base}/calls`, { params: { lead_id: leadId, page_size: 100 } }), refetchInterval: (q) => (q.state.data?.items.some((c) => LIVE_STATUSES.includes(c.status)) ? 2000 : 5000) })
@@ -116,7 +115,6 @@ export default function LeadDetail() {
     },
   })
 
-  useEffect(() => { if (lead.data) setFollowUp(lead.data.follow_up_date ?? '') }, [lead.data?.follow_up_date]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const patch = useMutation({
     mutationFn: (body: Partial<Lead>) => api<Lead>(`${base}/leads/${leadId}`, { method: 'PATCH', json: body }),
@@ -124,7 +122,7 @@ export default function LeadDetail() {
     onError: (e) => toast.error(e.message),
   })
   const queue = useMutation({
-    mutationFn: () => api(`${base}/leads/bulk/queue`, { method: 'POST', json: { ids: [leadId] } }),
+    mutationFn: (at?: string) => api(`${base}/leads/bulk/queue`, { method: 'POST', json: { ids: [leadId], at: at || undefined } }),
     onSuccess: (r: unknown) => {
       const res = r as { eta?: string }
       toast.success('Added to the call queue', { description: res?.eta ?? 'It will be called within calling hours.' })
@@ -196,7 +194,7 @@ export default function LeadDetail() {
             if (await confirm({ title: `Delete ${l.name ?? 'this lead'}?`, description: 'The lead and its activity are removed permanently. Call records are kept.', confirmLabel: 'Delete', danger: true })) remove.mutate()
           }}><Trash2 /></Button>
           <Button onClick={() => setEditing(true)}><Pencil />Edit</Button>
-          <Button onClick={() => queue.mutate()} loading={queue.isPending} disabled={l.do_not_call}><ListPlus />Queue</Button>
+          <QueueButton disabled={l.do_not_call} loading={queue.isPending} onQueue={(at) => queue.mutate(at)} />
           <Button variant="primary" disabled={l.do_not_call} loading={startCall.isPending} onClick={() => startCall.mutate(l.id)}><PhoneCall />Call now</Button>
         </>}>
         {/* Journey */}
@@ -234,17 +232,17 @@ export default function LeadDetail() {
       <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
         <div className="min-w-0 space-y-6">
           {/* Next best action */}
-          <div className="flex flex-wrap items-center gap-4 rounded-[var(--radius-card)] bg-fg p-5 text-bg shadow-card">
-            <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-bg/10"><Target className="size-5" /></span>
+          <div className="flex flex-wrap items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface p-5 text-fg shadow-card">
+            <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand"><Target className="size-5" /></span>
             <div className="min-w-0 flex-1">
-              <div className="text-[11px] font-bold tracking-widest uppercase opacity-60">Next best action</div>
-              <div className="mt-0.5 text-lg font-extrabold">{action.title}</div>
-              <div className="text-sm opacity-70">{action.detail}</div>
+              <div className="text-[11px] font-bold tracking-widest text-muted uppercase">Next best action</div>
+              <div className="mt-0.5 text-lg font-extrabold text-fg">{action.title}</div>
+              <div className="text-sm text-fg-2">{action.detail}</div>
             </div>
             {action.kind !== 'stop' && (
               <button type="button" disabled={startCall.isPending}
                 onClick={() => startCall.mutate({ leadId: l.id, purpose: action.kind === 'meeting' ? 'confirm_meeting' : action.kind === 'followup' ? 'follow_up' : undefined })}
-                className="inline-flex h-10 items-center gap-2 rounded-xl bg-bg px-4 text-sm font-bold text-fg transition hover:opacity-90 disabled:opacity-60">
+                className="inline-flex h-10 items-center gap-2 rounded-xl bg-fg px-4 text-sm font-bold text-bg transition hover:opacity-90 disabled:opacity-60">
                 <PhoneCall className="size-4" />{action.kind === 'meeting' ? 'Call to confirm' : 'Call now'}
               </button>
             )}
@@ -394,11 +392,7 @@ export default function LeadDetail() {
           <Card>
             <CardHeader title="Follow-up & preferences" />
             <div className="space-y-4 px-5 pb-5">
-              <div className="flex items-end gap-2">
-                <label className="grid flex-1 gap-1.5"><span className="text-[13px] font-semibold text-fg-2">Follow-up date</span>
-                  <Input type="date" value={followUp} onChange={(e) => setFollowUp(e.target.value)} /></label>
-                <Button disabled={followUp === (l.follow_up_date ?? '')} loading={patch.isPending} onClick={() => patch.mutate({ follow_up_date: followUp || '' })}>Save</Button>
-              </div>
+              <FollowUpScheduler lead={l} saving={patch.isPending} onSave={(body) => patch.mutate(body)} />
               <label className="grid gap-1.5"><span className="text-[13px] font-semibold text-fg-2">Call language</span>
                 <Select value={l.language} onChange={(e) => patch.mutate({ language: e.target.value })}>
                   {Object.entries(LANGUAGES).map(([v, n]) => <option key={v} value={v}>{n}</option>)}
@@ -450,6 +444,69 @@ export default function LeadDetail() {
 
       <CallSheet callId={callId} onClose={() => setCallId(null)} />
       <LeadFormSheet key={editing ? l.id : 'closed'} open={editing} lead={editing ? l : null} onClose={() => setEditing(false)} />
+    </>
+  )
+}
+
+const toLocalInput = (v?: string | null) => (v ? v.replace(' ', 'T').slice(0, 16) : '')
+const inMinutes = (m: number) => {
+  const d = new Date(Date.now() + m * 60_000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** Pick when the agent should call back: saved as a scheduled call that dials itself at that time. */
+function FollowUpScheduler({ lead, saving, onSave }: { lead: Lead; saving: boolean; onSave: (body: Partial<Lead>) => void }) {
+  const [at, setAt] = useState(toLocalInput(lead.callback_at))
+  useEffect(() => { setAt(toLocalInput(lead.callback_at)) }, [lead.callback_at])
+  const changed = at !== toLocalInput(lead.callback_at)
+  return (
+    <div className="space-y-2">
+      <span className="text-[13px] font-semibold text-fg-2">Follow-up call</span>
+      {lead.callback_at
+        ? <div className="flex items-center gap-2 rounded-xl bg-brand-soft px-3 py-2 text-sm text-brand"><CalendarClock className="size-4" /><span className="flex-1 font-semibold">Agent calls at {lead.callback_at} IST</span>
+            <button type="button" className="text-xs font-semibold hover:underline" onClick={() => onSave({ callback_at: '' })}>Clear</button></div>
+        : <p className="text-xs text-muted">{lead.follow_up_date ? `Follow up due ${lead.follow_up_date}. Pick a time to have the agent call automatically.` : 'Nothing scheduled.'}</p>}
+      <div className="flex flex-wrap gap-1.5">
+        {[['In 1 hour', 60], ['Tomorrow 11 AM', -1], ['In 3 days', 3 * 24 * 60]].map(([label, m]) => (
+          <button key={label as string} type="button" onClick={() => {
+            if (m === -1) { const d = new Date(Date.now() + 86_400_000); d.setHours(11, 0, 0, 0); setAt(inMinutes(Math.round((d.getTime() - Date.now()) / 60_000))) } else setAt(inMinutes(m as number))
+          }} className="rounded-lg border border-border px-2 py-1 text-xs font-semibold text-fg-2 hover:border-border-strong hover:text-fg">{label}</button>
+        ))}
+      </div>
+      <div className="flex items-end gap-2">
+        <Input type="datetime-local" value={at} min={inMinutes(1)} onChange={(e) => setAt(e.target.value)} className="flex-1" />
+        <Button variant="primary" disabled={!at || !changed} loading={saving} onClick={() => onSave({ callback_at: at })}>Schedule</Button>
+      </div>
+    </div>
+  )
+}
+
+/** Queue now, or pick a date and time for the call. */
+function QueueButton({ disabled, loading, onQueue }: { disabled: boolean; loading: boolean; onQueue: (at?: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [at, setAt] = useState('')
+  return (
+    <>
+      <Button onClick={() => setOpen(true)} loading={loading} disabled={disabled}><ListPlus />Queue</Button>
+      <Dialog open={open} onClose={() => setOpen(false)} title="Add to the call queue" description="Call as soon as a slot is free, or pick when the agent should call."
+        footer={<>
+          <Button onClick={() => setOpen(false)}>Cancel</Button>
+          <Button onClick={() => { onQueue(); setOpen(false) }}><ListPlus />As soon as possible</Button>
+          <Button variant="primary" disabled={!at} onClick={() => { onQueue(at); setOpen(false); setAt('') }}><CalendarClock />Schedule</Button>
+        </>}>
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-1.5">
+            {[['In 30 min', 30], ['In 2 hours', 120], ['Tomorrow 11 AM', -1]].map(([label, m]) => (
+              <button key={label as string} type="button" onClick={() => {
+                if (m === -1) { const d = new Date(Date.now() + 86_400_000); d.setHours(11, 0, 0, 0); setAt(inMinutes(Math.round((d.getTime() - Date.now()) / 60_000))) } else setAt(inMinutes(m as number))
+              }} className="rounded-lg border border-border px-2 py-1 text-xs font-semibold text-fg-2 hover:border-border-strong hover:text-fg">{label}</button>
+            ))}
+          </div>
+          <Input type="datetime-local" value={at} min={inMinutes(1)} onChange={(e) => setAt(e.target.value)} />
+          <p className="text-xs text-muted">Times are IST. Scheduled calls ignore the queue order and ring at the chosen minute.</p>
+        </div>
+      </Dialog>
     </>
   )
 }
