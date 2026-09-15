@@ -23,7 +23,7 @@ function LeadCard({ lead, onOpen, onDragStart, onMove }: { lead: Lead; onOpen: (
   const fresh = !onCall && Date.now() - Date.parse(lead.updated_at) < RECENT_MS
   return (
     <div draggable onDragStart={onDragStart} role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => e.key === 'Enter' && onOpen()}
-      className={cn('group min-w-0 cursor-grab overflow-hidden rounded-2xl border bg-surface p-3.5 shadow-card transition hover:border-border-strong active:cursor-grabbing',
+      className={cn('group min-w-0 shrink-0 cursor-grab rounded-2xl border bg-surface p-3.5 shadow-card transition hover:border-border-strong active:cursor-grabbing',
         onCall ? 'border-success ring-2 ring-success/25' : fresh ? 'border-brand/50 animate-pop-in' : 'border-border')}>
       {(onCall || fresh) && (
         <div className={cn('mb-2 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10.5px] font-bold', onCall ? 'bg-success-soft text-success' : 'bg-surface-2 text-fg-2')}>
