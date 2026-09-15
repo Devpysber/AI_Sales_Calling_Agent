@@ -64,6 +64,7 @@ class Lead(Base):
             "follow_up_date": self.follow_up_date,
             "meeting_at": self.meeting_at,
             "callback_at": self.callback_at,
+            "phone_valid": not (self.phone or "").startswith("+91") or len(self.phone) == 13,
             "last_contacted_at": iso(self.last_contacted_at),
             "created_at": iso(self.created_at),
             "updated_at": iso(self.updated_at),

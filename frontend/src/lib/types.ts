@@ -28,6 +28,7 @@ export interface Lead {
   meeting_at: string | null
   /** "YYYY-MM-DD HH:MM" IST: the scheduler calls back at this time */
   callback_at?: string | null
+  phone_valid?: boolean
   last_contacted_at: string | null
   created_at: string
   updated_at: string

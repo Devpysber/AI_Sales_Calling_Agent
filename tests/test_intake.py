@@ -31,3 +31,16 @@ def test_nurture_and_automation_defaults(client, base):
     assert cfg["nurture_after_days"] == 3 and cfg["speed_to_lead_enabled"] is False
     from app.services import scheduler
     assert "nurture" in scheduler.JOBS
+
+
+def test_lead_views_and_phone_validation(client, base):
+    from app.services.crm_service import normalize_phone
+    assert normalize_phone("91627507903") is None           # Indian number missing a digit
+    assert normalize_phone("9876543210") == "+919876543210"
+    assert normalize_phone("+14155550100") == "+14155550100"  # other countries still accepted
+
+    counts = client.get(f"{base}/leads/views").json()
+    assert {"website", "never_called", "hot_uncalled", "callbacks", "meetings", "attention", "dnc"} <= set(counts)
+    web = client.get(f"{base}/leads", params={"view": "website"}).json()
+    assert web["total"] == counts["website"] and all(l["source"].startswith("website") for l in web["items"])
+    assert all(l["phone_valid"] for l in web["items"])

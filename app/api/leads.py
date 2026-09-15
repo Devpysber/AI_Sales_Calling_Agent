@@ -69,8 +69,15 @@ class BulkUpdate(Ids):
 @router.get("")
 def list_leads(search: str | None = None, status: str | None = None, call_status: str | None = None,
                qualification: str | None = None, sort: str = "id", order: str = "desc",
-               page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=500), agent_id: int = Depends(workspace)):
-    return CRMService(agent_id).list_leads(search, status, call_status, qualification, sort, order, page, page_size)
+               page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=500), view: str | None = None,
+               source: str | None = None, agent_id: int = Depends(workspace)):
+    return CRMService(agent_id).list_leads(search, status, call_status, qualification, sort, order, page, page_size, view, source)
+
+
+@router.get("/views")
+def lead_views(agent_id: int = Depends(workspace)):
+    """Counts for the saved views on the Leads page."""
+    return CRMService(agent_id).view_counts()
 
 
 @router.get("/stats")

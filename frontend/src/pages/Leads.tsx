@@ -1,6 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowDown, ArrowUp, ArrowUpRight, Ban, CalendarCheck, Clock, Download, Flame, ListPlus, PhoneCall, Plus, Search, Trash2, Upload, Users, X,
+  AlertTriangle, ArrowDown, ArrowUp, ArrowUpRight, Ban, CalendarCheck, Clock, Download, Flame, Globe, ListPlus, PhoneCall, PhoneOff, Plus,
+  Search, Sparkles, Trash2, Upload, Users, X,
 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -21,6 +22,38 @@ function useDebounced<T>(value: T, ms = 300) {
 
 const STAGES = ['New', 'Contacted', 'Interested', 'Follow Up', 'Meeting Booked', 'Closed Won', 'Not Interested']
 
+const VIEWS = [
+  { id: '', label: 'All', icon: Users },
+  { id: 'hot_uncalled', label: 'Hot, not called', icon: Flame },
+  { id: 'never_called', label: 'Never called', icon: Sparkles },
+  { id: 'website', label: 'Website leads', icon: Globe },
+  { id: 'callbacks', label: 'Callbacks', icon: Clock },
+  { id: 'meetings', label: 'Meetings', icon: CalendarCheck },
+  { id: 'attention', label: 'Needs attention', icon: AlertTriangle },
+  { id: 'dnc', label: 'Do not call', icon: PhoneOff },
+] as const
+const JOURNEY = ['New', 'Contacted', 'Interested', 'Follow Up', 'Meeting Booked', 'Closed Won']
+
+/** 0-100: temperature, pipeline stage and recency (same idea as the lead page score). */
+function score(l: Lead) {
+  if (l.do_not_call) return 0
+  const temp = { Hot: 45, Warm: 28, Cold: 8 }[l.qualification ?? ''] ?? 12
+  const stage = Math.max(0, JOURNEY.indexOf(l.status)) * 7
+  const recent = l.last_contacted_at && Date.now() - Date.parse(l.last_contacted_at) < 7 * 86_400_000 ? 12 : 0
+  return Math.min(100, temp + stage + recent)
+}
+
+function NextStep({ l }: { l: Lead }) {
+  if (l.do_not_call) return <span className="text-muted">—</span>
+  if (l.phone_valid === false) return <span className="inline-flex items-center gap-1 text-danger"><AlertTriangle className="size-3.5" />Fix number</span>
+  if (l.callback_at) return <span className="inline-flex items-center gap-1 text-fg"><Clock className="size-3.5" />Callback {l.callback_at.slice(5)}</span>
+  if (l.meeting_at) return <span className="inline-flex items-center gap-1 text-success"><CalendarCheck className="size-3.5" />Meeting {l.meeting_at.slice(5)}</span>
+  if (l.retry_count >= 3) return <span className="text-warning">Unreachable ×{l.retry_count}</span>
+  if (!l.last_contacted_at) return <span className="text-fg-2">First call</span>
+  if (['Interested', 'Follow Up'].includes(l.status)) return <span className="text-fg-2">Follow up</span>
+  return <span className="text-muted">—</span>
+}
+
 export default function Leads() {
   const { agent, base, path } = useAgent()
   const qc = useQueryClient()
@@ -28,7 +61,7 @@ export default function Leads() {
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const [search, setSearch] = useState('')
-  const [filters, setFilters] = useState({ status: '', call_status: '', qualification: params.get('qualification') ?? '' })
+  const [filters, setFilters] = useState({ status: '', call_status: '', qualification: params.get('qualification') ?? '', view: '' })
   const [sort, setSort] = useState({ key: 'id', order: 'desc' as 'asc' | 'desc' })
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -49,6 +82,12 @@ export default function Leads() {
     refetchInterval: 8000,
   })
   const stats = useQuery({ queryKey: ['leads', 'stats'], queryFn: () => api<LeadStats>(`${base}/leads/stats`), refetchInterval: 15000 })
+  const views = useQuery({ queryKey: ['leads', 'views'], queryFn: () => api<Record<string, number>>(`${base}/leads/views`), refetchInterval: 15000 })
+  const bulkUpdate = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api<{ updated: number }>(`${base}/leads/bulk/update`, { method: 'POST', json: { ids: [...selected], ...body } }),
+    onSuccess: (r) => { toast.success(`Updated ${r.updated} lead(s)`); setSelected(new Set()); qc.invalidateQueries({ queryKey: ['leads'] }) },
+    onError: (e) => toast.error('Update failed', { description: e.message }),
+  })
   const startCall = useStartCall()
 
   const bulk = useMutation({
@@ -74,7 +113,7 @@ export default function Leads() {
   const toggle = (id: number) => setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
   const sortBy = (key: string) => setSort((prev) => ({ key, order: prev.key === key && prev.order === 'desc' ? 'asc' : 'desc' }))
   const activeFilters = Object.values(filters).filter(Boolean).length
-  const clearFilters = () => { setFilters({ status: '', call_status: '', qualification: '' }); setParams({}, { replace: true }) }
+  const clearFilters = () => { setFilters({ status: '', call_status: '', qualification: '', view: '' }); setParams({}, { replace: true }) }
 
   const Th = ({ k, children, className }: { k?: string; children: ReactNode; className?: string }) => (
     <th className={cn('px-3 py-3 text-left text-[11px] font-bold tracking-wider whitespace-nowrap text-muted uppercase', className)}>
@@ -88,9 +127,9 @@ export default function Leads() {
 
   const summary: [typeof Users, string, number | undefined, () => void, boolean][] = [
     [Users, 'All leads', s?.total, clearFilters, activeFilters === 0],
-    [Clock, 'Waiting to call', s?.pending, () => setFilters({ status: 'New', call_status: '', qualification: '' }), filters.status === 'New'],
-    [Flame, 'Hot', s?.by_qualification.Hot ?? 0, () => setFilters({ status: '', call_status: '', qualification: 'Hot' }), filters.qualification === 'Hot'],
-    [CalendarCheck, 'Meetings', s?.meetings, () => setFilters({ status: 'Meeting Booked', call_status: '', qualification: '' }), filters.status === 'Meeting Booked'],
+    [Clock, 'Waiting to call', s?.pending, () => setFilters({ status: 'New', call_status: '', qualification: '', view: '' }), filters.status === 'New'],
+    [Flame, 'Hot', s?.by_qualification.Hot ?? 0, () => setFilters({ status: '', call_status: '', qualification: 'Hot', view: '' }), filters.qualification === 'Hot'],
+    [CalendarCheck, 'Meetings', s?.meetings, () => setFilters({ status: 'Meeting Booked', call_status: '', qualification: '', view: '' }), filters.status === 'Meeting Booked'],
   ]
 
   return (
@@ -118,6 +157,22 @@ export default function Leads() {
           ))}
         </div>
       </PageHeader>
+
+      <div className="mb-2 flex gap-1.5 overflow-x-auto pb-1">
+        {VIEWS.map(({ id, label, icon: Icon }) => {
+          const active = filters.view === id
+          const count = id ? views.data?.[id] : s?.total
+          if (id && !count && !active && ['attention', 'dnc', 'callbacks', 'website'].includes(id)) return null
+          return (
+            <button key={id || 'all-views'} type="button" onClick={() => setFilters({ ...filters, view: id })}
+              className={cn('flex shrink-0 items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[13px] font-semibold transition',
+                active ? 'border-brand bg-brand text-brand-fg' : 'border-border bg-surface text-fg-2 hover:border-border-strong',
+                id === 'attention' && !active && 'border-warning/40 text-warning')}>
+              <Icon className="size-3.5" />{label}<span className={cn('rounded-full px-1.5 text-[11px] tabular-nums', active ? 'bg-white/20' : 'bg-surface-2 text-muted')}>{count ?? 0}</span>
+            </button>
+          )
+        })}
+      </div>
 
       <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1">
         {['', ...STAGES].map((st) => {
@@ -162,6 +217,18 @@ export default function Leads() {
                 bulk.mutate({ action: 'call', ids: [...selected] })
             }}><PhoneCall />Call now</Button>
             <Button size="sm" onClick={() => bulk.mutate({ action: 'queue', ids: [...selected] })}><ListPlus />Queue for auto-dial</Button>
+            <select aria-label="Set stage" value="" onChange={(e) => e.target.value && bulkUpdate.mutate({ status: e.target.value })}
+              className="h-8 rounded-lg border border-bg/30 bg-bg/10 px-2 text-[13px] font-semibold text-bg">
+              <option value="" className="text-fg">Set stage…</option>{STAGES.map((x) => <option key={x} value={x} className="text-fg">{x}</option>)}
+            </select>
+            <select aria-label="Set temperature" value="" onChange={(e) => e.target.value && bulkUpdate.mutate({ qualification: e.target.value })}
+              className="h-8 rounded-lg border border-bg/30 bg-bg/10 px-2 text-[13px] font-semibold text-bg">
+              <option value="" className="text-fg">Temperature…</option>{QUALIFICATIONS.map((x) => <option key={x} value={x} className="text-fg">{x}</option>)}
+            </select>
+            <Button size="sm" onClick={async () => {
+              if (await confirm({ title: `Mark ${selected.size} lead(s) Do Not Call?`, description: 'They are excluded from manual and automated calls.', confirmLabel: 'Mark Do Not Call', danger: true }))
+                bulkUpdate.mutate({ do_not_call: true })
+            }}><PhoneOff />Do not call</Button>
             <Button size="sm" variant="danger" onClick={async () => {
               if (await confirm({ title: `Delete ${selected.size} lead(s)?`, description: 'This cannot be undone.', confirmLabel: 'Delete', danger: true }))
                 bulk.mutate({ action: 'delete', ids: [...selected] })
@@ -176,13 +243,13 @@ export default function Leads() {
               <tr>
                 <th className="w-11 px-4"><input type="checkbox" aria-label="Select all" checked={allSelected}
                   onChange={() => setSelected(allSelected ? new Set() : new Set(items.map((l) => l.id)))} className="size-4 accent-[var(--fg)]" /></th>
-                <Th k="name">Lead</Th><Th>Phone</Th><Th k="status">Stage</Th><Th>Last call</Th><Th k="qualification">Temp.</Th>
-                <Th k="meeting_at">Meeting</Th><Th k="last_contacted_at">Last contact</Th><Th className="text-right">&nbsp;</Th>
+                <Th k="name">Lead</Th><Th>Phone</Th><Th k="status">Stage</Th><Th>Score</Th><Th>Last call</Th><Th k="qualification">Temp.</Th>
+                <Th>Next step</Th><Th k="last_contacted_at">Last contact</Th><Th className="text-right">&nbsp;</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {isLoading ? Array.from({ length: 8 }, (_, i) => (
-                <tr key={i}><td colSpan={9} className="px-4 py-3"><Skeleton className="h-8" /></td></tr>
+                <tr key={i}><td colSpan={10} className="px-4 py-3"><Skeleton className="h-8" /></td></tr>
               )) : items.map((l) => (
                 <tr key={l.id} onClick={() => navigate(path(`/leads/${l.id}`))} className={cn('group cursor-pointer transition hover:bg-surface-2/70', selected.has(l.id) && 'bg-surface-2')}>
                   <td className="px-4" onClick={(e) => e.stopPropagation()}>
@@ -194,18 +261,30 @@ export default function Leads() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5 font-bold">{l.name ?? 'Unnamed'}{l.do_not_call && <Ban className="size-3.5 text-danger" />}
                           <ArrowUpRight className="size-3.5 text-muted opacity-0 transition group-hover:opacity-100" /></div>
-                        <div className="max-w-[240px] truncate text-xs text-muted">{[l.company, l.city, LANGUAGES[l.language]].filter(Boolean).join(' · ') || '—'}</div>
+                        <div className="flex max-w-[260px] items-center gap-1.5 truncate text-xs text-muted">
+                          {l.source?.startsWith('website') && <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-brand-soft px-1.5 py-px text-[10.5px] font-semibold text-brand" title={l.source}><Globe className="size-3" />{l.source.replace('website:', '') || 'web'}</span>}
+                          <span className="truncate">{[l.company, l.city, LANGUAGES[l.language]].filter(Boolean).join(' · ') || '—'}</span>
+                        </div>
                       </div>
                     </div>
                   </td>
-                  <td className="px-3 font-mono text-[12.5px] whitespace-nowrap text-fg-2">{l.phone}</td>
+                  <td className="px-3 font-mono text-[12.5px] whitespace-nowrap text-fg-2">
+                    <span className={cn(l.phone_valid === false && 'text-danger')} title={l.phone_valid === false ? 'This number looks incomplete: calls will fail' : undefined}>{l.phone}</span>
+                  </td>
                   <td className="px-3"><LeadStatusBadge status={l.status} /></td>
+                  <td className="px-3">
+                    {(() => { const v = score(l); return (
+                      <div className="flex items-center gap-2" title={`Lead score ${v}/100`}>
+                        <div className="h-1.5 w-12 overflow-hidden rounded-full bg-surface-2"><div className={cn('h-full rounded-full', v >= 60 ? 'bg-success' : v >= 35 ? 'bg-warning' : 'bg-muted')} style={{ width: `${v}%` }} /></div>
+                        <span className="text-xs font-semibold tabular-nums text-fg-2">{v}</span>
+                      </div>) })()}
+                  </td>
                   <td className="px-3"><div className="flex items-center gap-1.5 whitespace-nowrap"><CallStatusBadge status={l.call_status} />{l.retry_count > 0 && <span className="text-xs text-muted">×{l.retry_count}</span>}</div></td>
                   <td className="px-3"><QualificationBadge value={l.qualification} /></td>
-                  <td className="px-3 text-[13px] whitespace-nowrap text-fg-2">{l.meeting_at ?? <span className="text-muted">—</span>}</td>
+                  <td className="px-3 text-[13px] whitespace-nowrap"><NextStep l={l} /></td>
                   <td className="px-3 text-[13px] whitespace-nowrap text-muted" title={formatDate(l.last_contacted_at)}>{l.last_contacted_at ? timeAgo(l.last_contacted_at) : 'Never'}</td>
                   <td className="px-4 text-right" onClick={(e) => e.stopPropagation()}>
-                    <Button size="sm" variant="primary" disabled={l.do_not_call} loading={startCall.isPending && startCall.variables === l.id}
+                    <Button size="sm" variant="primary" disabled={l.do_not_call || l.phone_valid === false} loading={startCall.isPending && startCall.variables === l.id}
                       onClick={() => startCall.mutate(l.id)}><PhoneCall />Call</Button>
                   </td>
                 </tr>

@@ -65,6 +65,8 @@ def normalize_phone(phone) -> str | None:
         digits = digits[1:]
     if len(digits) == 10:
         return "+91" + digits
+    if digits.startswith("91") and len(digits) != 12 and len(digits) <= 13:
+        return None  # an Indian number with a digit missing or extra: calls would fail
     if 11 <= len(digits) <= 15:
         return "+" + digits
     return None
@@ -98,10 +100,38 @@ class CRMService:
 
     # ---------------- read ----------------
 
-    def list_leads(self, search=None, status=None, call_status=None, qualification=None, sort="id", order="desc",
-                   page=1, page_size=25) -> dict:
+    def _view(self, query, view: str | None):
+        """Saved views on the Leads page."""
+        active = ("Queued", "Ringing", "In Progress")
+        if view == "website":
+            return query.where(Lead.source.like("website%"))
+        if view == "never_called":
+            return query.where(Lead.last_contacted_at.is_(None), Lead.do_not_call.is_(False))
+        if view == "hot_uncalled":
+            return query.where(Lead.qualification == "Hot", Lead.do_not_call.is_(False),
+                               or_(Lead.last_contacted_at.is_(None), Lead.last_contacted_at < _now_utc() - timedelta(days=2)))
+        if view == "callbacks":
+            return query.where(Lead.callback_at.is_not(None), Lead.callback_at != "")
+        if view == "meetings":
+            return query.where(Lead.meeting_at.is_not(None), Lead.meeting_at != "")
+        if view == "attention":  # needs a person: failed repeatedly, or unreachable number
+            return query.where(or_(Lead.retry_count >= 3, (Lead.phone.like("+91%") & (func.length(Lead.phone) != 13))),
+                               Lead.call_status.notin_(active))
+        if view == "dnc":
+            return query.where(Lead.do_not_call.is_(True))
+        return query
+
+    def view_counts(self) -> dict:
         with get_db() as db:
-            query = self._scoped(select(Lead))
+            return {v: db.scalar(select(func.count()).select_from(self._view(self._scoped(select(Lead)), v).subquery())) or 0
+                    for v in ("website", "never_called", "hot_uncalled", "callbacks", "meetings", "attention", "dnc")}
+
+    def list_leads(self, search=None, status=None, call_status=None, qualification=None, sort="id", order="desc",
+                   page=1, page_size=25, view=None, source=None) -> dict:
+        with get_db() as db:
+            query = self._view(self._scoped(select(Lead)), view)
+            if source:
+                query = query.where(Lead.source == source)
             if search:
                 like = f"%{search.strip()}%"
                 query = query.where(or_(Lead.name.ilike(like), Lead.company.ilike(like), Lead.phone.ilike(like),
