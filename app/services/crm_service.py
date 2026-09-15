@@ -203,6 +203,8 @@ class CRMService:
             query = self._scoped(select(Lead)).where(
                 Lead.do_not_call.is_(False),
                 or_(Lead.call_status == "Pending", (Lead.status == "New") & Lead.call_status.is_(None)),
+                ~(Lead.phone.like("+91%") & (func.length(Lead.phone) != 13)),
+                or_(Lead.callback_at.is_(None), Lead.callback_at == ""),  # scheduled calls belong to the callback job
             ).order_by(Lead.id).limit(limit)
             return [l.to_dict() for l in db.scalars(query)]
 
@@ -213,6 +215,7 @@ class CRMService:
                 Lead.do_not_call.is_(False),
                 Lead.call_status.in_(("No Answer", "Busy", "Failed")),
                 Lead.retry_count < max_retries,
+                ~(Lead.phone.like("+91%") & (func.length(Lead.phone) != 13)),
                 or_(Lead.last_contacted_at.is_(None), Lead.last_contacted_at < cutoff),
             ).order_by(Lead.last_contacted_at).limit(limit)
             return [l.to_dict() for l in db.scalars(query)]

@@ -64,7 +64,9 @@ def job_callbacks(agent_id, cfg, force=False):
     placed, skipped = 0, []
     for lead in crm.due_callbacks(datetime.now(IST).strftime("%Y-%m-%d %H:%M"), cfg["max_calls_per_run"]):
         try:
-            calls.start(lead["id"], trigger="callback", actor="scheduler", purpose="follow_up")
+            first = not lead.get("last_contacted_at")
+            calls.start(lead["id"], trigger="website" if first and (lead.get("source") or "").startswith("website") else "callback",
+                        actor="scheduler", purpose=None if first else "follow_up")
             placed += 1
         except CallError as e:
             skipped.append(str(e))

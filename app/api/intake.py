@@ -9,7 +9,9 @@ and, with "speed to lead" on, the agent calls them within seconds.
 
 import asyncio
 import hmac
+import random
 import secrets
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -93,7 +95,7 @@ async def capture(agent_id: int, request: Request, token: str = ""):
 
 def ingest(agent_id: int, data: dict, site: str = "") -> tuple[dict, bool, bool]:
     """Create or update the lead, then call it right away when speed to lead is on and calling is allowed."""
-    from app.services.call_service import CallError, CallService, within_calling_hours
+    from app.services.call_service import IST, within_calling_hours
     from app.services.crm_service import CRMService
 
     crm = CRMService(agent_id)
@@ -114,13 +116,15 @@ def ingest(agent_id: int, data: dict, site: str = "") -> tuple[dict, bool, bool]
 
     cfg = agents.get_automation(agent_id)
     calling = False
-    if cfg.get("speed_to_lead_enabled") and not lead["do_not_call"] and within_calling_hours(cfg):
-        try:
-            CallService(agent_id).start(lead["id"], trigger="website", actor="website")
-            calling = True
-        except CallError as e:
-            log.info("Speed-to-lead call not placed for lead %s: %s", lead["id"], e)
-            crm.update(lead["id"], {"call_status": "Pending"}, actor="system")  # auto-dial / next run picks it up
+    if cfg.get("speed_to_lead_enabled") and not lead["do_not_call"] and lead.get("phone_valid") is not False and within_calling_hours(cfg):
+        # Schedule the call a random 1-2 minutes out (configurable); the callback job dials it.
+        low = max(0, int(cfg.get("speed_to_lead_min_seconds", 60)))
+        high = max(low, int(cfg.get("speed_to_lead_max_seconds", 120)))
+        due = datetime.now(IST) + timedelta(seconds=random.randint(low, high))
+        crm.update(lead["id"], {"callback_at": due.strftime("%Y-%m-%d %H:%M"), "call_status": "Pending"}, actor="system")
+        events.record("callback.scheduled", f"Website lead: call scheduled for {due:%H:%M}", agent_id=agent_id, lead_id=lead["id"],
+                      actor="website")
+        calling = True
     elif not lead.get("call_status"):
         crm.update(lead["id"], {"call_status": "Pending"}, actor="system")
     return lead, created, calling

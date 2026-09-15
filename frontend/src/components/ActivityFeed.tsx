@@ -32,18 +32,26 @@ function iconFor(type: string) {
 export default function ActivityFeed({ events, showLead, onLead, onCall, compact }: {
   events: ActivityEvent[]; showLead?: boolean; onLead?: (id: number) => void; onCall?: (id: number) => void; compact?: boolean
 }) {
+  // Collapse identical consecutive events (same title, lead and actor), e.g. repeated settings saves
+  const grouped: (ActivityEvent & { repeat: number })[] = []
+  for (const e of events) {
+    const last = grouped[grouped.length - 1]
+    if (last && !e.call_id && last.title === e.title && last.lead_id === e.lead_id && last.actor === e.actor && last.type === e.type) last.repeat++
+    else grouped.push({ ...e, repeat: 1 })
+  }
   return (
     <ol className="relative">
-      {events.map((e, i) => {
+      {grouped.map((e, i) => {
         const [, Icon, color] = iconFor(e.type)
         const data = e.data && e.type.startsWith('ai.') ? Object.entries(e.data).filter(([, v]) => v && typeof v !== 'object') : []
         return (
           <li key={e.id} className="relative flex gap-3 pb-5 last:pb-0">
-            {i < events.length - 1 && <span className="absolute top-8 bottom-0 left-[15px] w-px bg-border" />}
+            {i < grouped.length - 1 && <span className="absolute top-8 bottom-0 left-[15px] w-px bg-border" />}
             <span className={cn('relative grid size-8 shrink-0 place-items-center rounded-full', color)}><Icon className="size-3.5" /></span>
             <div className="min-w-0 flex-1 pt-1">
               <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
                 <span className="font-medium text-fg">{e.title}</span>
+                {e.repeat > 1 && <span className="rounded-full bg-surface-2 px-1.5 text-[11px] font-semibold text-muted tabular-nums">×{e.repeat}</span>}
                 {showLead && e.lead_name && e.lead_id && (
                   <button className="text-brand hover:underline" onClick={() => onLead?.(e.lead_id!)}>{e.lead_name}</button>
                 )}

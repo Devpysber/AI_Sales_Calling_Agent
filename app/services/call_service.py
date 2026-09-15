@@ -129,6 +129,8 @@ class CallService:
             raise CallError("Lead not found.")
         if lead["do_not_call"]:
             raise CallError("This lead is marked Do Not Call.")
+        if lead.get("phone_valid") is False:
+            raise CallError(f"{lead['phone']} is not a complete phone number. Edit the lead and fix it before calling.")
         workspace = agents.require(self.agent_id)
         if workspace["status"] != "active":
             raise CallError("This agent is paused. Resume it to place calls.")

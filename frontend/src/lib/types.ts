@@ -159,6 +159,8 @@ export interface AutomationSettings {
   daily_report_hour: number
   daily_report_email: string
   speed_to_lead_enabled: boolean
+  speed_to_lead_min_seconds: number
+  speed_to_lead_max_seconds: number
   nurture_enabled: boolean
   nurture_after_days: number
   nurture_max_attempts: number

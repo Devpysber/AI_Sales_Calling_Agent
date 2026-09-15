@@ -63,7 +63,7 @@ export default function Automation() {
             ['Retries', form.retry_enabled, form.retry_enabled ? `Up to ${form.max_retries} tries · ${form.retry_min_gap_minutes} min apart` : 'Off', 'retry_calls'],
             ['Reminders', form.meeting_reminder_enabled, form.meeting_reminder_enabled ? `Daily at ${hourLabel(form.meeting_reminder_hour)}` : 'Off', 'meeting_reminder'],
             ['Daily report', form.daily_report_enabled, form.daily_report_enabled ? `At ${hourLabel(form.daily_report_hour)}` : 'Off', 'daily_report'],
-            ['Speed to lead', form.speed_to_lead_enabled, form.speed_to_lead_enabled ? 'Website leads called instantly' : 'Off', 'auto_dial'],
+            ['Speed to lead', form.speed_to_lead_enabled, form.speed_to_lead_enabled ? `Calls ${Math.round(form.speed_to_lead_min_seconds / 60 * 10) / 10}–${Math.round(form.speed_to_lead_max_seconds / 60 * 10) / 10} min after the form` : 'Off', 'callbacks'],
             ['Follow-ups', form.nurture_enabled, form.nurture_enabled ? `After ${form.nurture_after_days} days · ${form.nurture_max_attempts}×` : 'Off', 'nurture'],
           ] as const).map(([label, on, detail, job]) => (
             <div key={label} className="rounded-2xl border border-border bg-surface p-4 shadow-card">
@@ -83,10 +83,11 @@ export default function Automation() {
           <Field label="Calls per run"><Input type="number" min={1} max={50} value={form.max_calls_per_run} onChange={(e) => set('max_calls_per_run', +e.target.value)} /></Field>
         </JobCard>
 
-        <JobCard icon={<Zap />} title="Speed to lead" description="Calls a website enquiry within seconds of the form being sent, while interest is highest."
+        <JobCard icon={<Zap />} title="Speed to lead" description="Calls a website enquiry shortly after the form is sent, while interest is highest."
           enabled={form.speed_to_lead_enabled} onToggle={(v) => toggleNow('speed_to_lead_enabled', v)}
-          footer={<span className="text-xs text-muted">Outside calling hours the lead is queued and auto-dial calls it later.</span>}>
-          <div className="text-sm text-fg-2 sm:col-span-2">Leads responding within 5 minutes are far more likely to connect. Connect your site with the form link below.</div>
+          footer={<span className="text-xs text-muted">A random delay in this range keeps it natural. Outside calling hours the lead waits for auto-dial.</span>}>
+          <Field label="Call after at least (seconds)"><Input type="number" min={0} max={3600} value={form.speed_to_lead_min_seconds} onChange={(e) => set('speed_to_lead_min_seconds', +e.target.value)} /></Field>
+          <Field label="and at most (seconds)"><Input type="number" min={0} max={3600} value={form.speed_to_lead_max_seconds} onChange={(e) => set('speed_to_lead_max_seconds', +e.target.value)} /></Field>
         </JobCard>
 
         <JobCard icon={<HeartHandshake />} title="Follow up warm leads" description="Calls Interested and Follow Up leads nobody has spoken to recently, continuing from the last conversation."
@@ -190,7 +191,7 @@ function WebsiteIntake() {
         <span className="grid size-10 place-items-center rounded-xl bg-brand-soft text-brand"><Globe className="size-5" /></span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2"><h3 className="font-bold">Website form → {agent?.name}</h3>
-            <Badge tone={data.speed_to_lead ? 'success' : 'neutral'} dot>{data.speed_to_lead ? 'Calls instantly' : 'Queued for auto-dial'}</Badge></div>
+            <Badge tone={data.speed_to_lead ? 'success' : 'neutral'} dot>{data.speed_to_lead ? 'Calls 1–2 min after the form' : 'Queued for auto-dial'}</Badge></div>
           <p className="text-sm text-muted">Send enquiries from any website, landing page, WordPress/Webflow form, Zapier or your backend straight into this agent's leads. Use a separate agent per website to keep each site's leads, script and reports apart.</p>
           <div className="mt-3 flex min-w-0 items-center gap-2 rounded-xl border border-border bg-surface-2 px-3 py-2">
             <code className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{data.url}</code>

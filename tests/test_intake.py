@@ -44,3 +44,29 @@ def test_lead_views_and_phone_validation(client, base):
     web = client.get(f"{base}/leads", params={"view": "website"}).json()
     assert web["total"] == counts["website"] and all(l["source"].startswith("website") for l in web["items"])
     assert all(l["phone_valid"] for l in web["items"])
+
+
+def test_speed_to_lead_schedules_call_and_invalid_numbers_never_dial(client, base, monkeypatch):
+    from app.services.call_service import CallError, CallService
+
+    agent_id = int(base.rsplit("/", 1)[1])
+    client.put(f"{base}/automation", json={"speed_to_lead_enabled": True, "speed_to_lead_min_seconds": 60, "speed_to_lead_max_seconds": 120})
+    monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
+    token = client.get(f"{base}/intake").json()["token"]
+    res = client.__class__(client.app).post(f"/api/public/agents/{agent_id}/leads", params={"token": token},
+                                            json={"name": "Speedy", "phone": "9876500099"}).json()
+    lead = client.get(f"{base}/leads/{res['lead_id']}").json()
+    assert res["calling"] and lead["callback_at"] and lead["call_status"] == "Pending"
+
+    from app.core.database import get_db
+    from app.models.lead import Lead
+    with get_db() as db:
+        broken = Lead(agent_id=agent_id, phone="+91627507903", status="New", language="en-IN", retry_count=0)
+        db.add(broken)
+        db.flush()
+        broken_id = broken.id
+    try:
+        CallService(agent_id).start(broken_id)
+        raise AssertionError("invalid number was dialled")
+    except CallError as e:
+        assert "not a complete phone number" in str(e)

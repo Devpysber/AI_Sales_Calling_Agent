@@ -62,7 +62,7 @@ export default function AgentSettings() {
           <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} maxLength={255} /></Field>
           <Field label="Description"><Textarea rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <Field label="Phone number" hint="Plivo number used as caller ID. Inbound calls to this number are answered by this agent. Leave blank for the default PLIVO_PHONE_NUMBER.">
-            <Input value={form.phone_number} onChange={(e) => setForm({ ...form, phone_number: e.target.value })} inputMode="tel" placeholder="+91 80 1234 5678" />
+            <Input value={form.phone_number} onChange={(e) => setForm({ ...form, phone_number: e.target.value })} inputMode="tel" placeholder="Using the default Plivo number (leave empty)" />
           </Field>
         </div>
         <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
