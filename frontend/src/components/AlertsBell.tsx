@@ -45,14 +45,15 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
     return () => document.removeEventListener('mousedown', close)
   }, [open])
 
-  const items = data?.items ?? []
+  // Tolerate an older API response while the server restarts
+  const items = Array.isArray(data?.items) ? data!.items : []
   const urgent = data?.attention ?? 0
   const link = (a: Alert) => (a.agent_id ? `/a/${a.agent_id}${a.to}` : a.to)
   const sections: [string, Alert[]][] = [
     ['Needs action', items.filter((i) => i.level === 'danger' || i.level === 'warning')],
     ['Today & upcoming', items.filter((i) => i.level === 'success' || i.level === 'info')],
   ]
-  const lowBalances = (data?.balances ?? []).filter((b) => b.level === 'low' || b.level === 'critical').length
+  const lowBalances = (Array.isArray(data?.balances) ? data.balances : []).filter((b) => b.level === 'low' || b.level === 'critical').length
 
   return (
     <div ref={ref} className="relative">
@@ -65,12 +66,13 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
       </button>
 
       {open && (
-        <div className={cn('absolute bottom-11 z-50 w-[360px] animate-pop-in overflow-hidden rounded-2xl border border-border bg-elevated text-fg shadow-pop', compact ? 'left-0' : '-left-2')}>
+        <div className="fixed bottom-4 left-4 z-50 w-[min(380px,calc(100vw-2rem))] animate-pop-in overflow-hidden rounded-2xl border border-border bg-elevated text-fg shadow-pop lg:left-[calc(var(--sidebar-w,272px)+12px)]"
+          style={{ ['--sidebar-w' as string]: compact ? '76px' : '272px' }}>
           <div className="flex items-center gap-2 border-b border-border px-4 py-3">
             <div className="min-w-0 flex-1">
               <div className="text-sm font-bold">Reminders & balances</div>
               <div className="truncate text-xs text-muted">
-                {data ? `Checked ${timeAgo(new Date(data.checked_at * 1000).toISOString())}` : 'Loading…'}{data?.snoozed ? ` · ${data.snoozed} snoozed` : ''}
+                {data?.checked_at ? `Checked ${timeAgo(new Date(data.checked_at * 1000).toISOString())}` : data ? 'Checked just now' : 'Loading…'}{data?.snoozed ? ` · ${data.snoozed} snoozed` : ''}
               </div>
             </div>
             <button type="button" onClick={() => refresh.mutate()} title="Fetch live balances now" className="grid size-7 place-items-center rounded-lg text-muted hover:bg-surface-2 hover:text-fg">
@@ -114,7 +116,7 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
               </div>
             )) : <p className="px-2 py-8 text-center text-sm text-muted">All clear. Nothing needs your attention.</p>)}
 
-            {tab === 'balances' && (data?.balances ?? []).map((b) => (
+            {tab === 'balances' && (Array.isArray(data?.balances) ? data.balances : []).map((b) => (
               <div key={b.provider} className="mb-2 rounded-xl border border-border p-3">
                 <div className="flex items-center gap-2">
                   <span className={cn('size-2 rounded-full', LEVEL_DOT[b.level])} />
@@ -123,7 +125,7 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
                   <span className={cn('ml-auto text-sm font-extrabold tabular-nums', b.level === 'critical' ? 'text-danger' : b.level === 'low' ? 'text-warning' : 'text-fg')}>{b.value}</span>
                 </div>
                 <p className="mt-1 text-xs text-fg-2">{b.detail}</p>
-                {b.facts.length > 0 && (
+                {b.facts?.length > 0 && (
                   <dl className="mt-2 space-y-0.5 text-[11.5px]">
                     {b.facts.map(([k, v]) => <div key={k} className="flex gap-2"><dt className="w-28 shrink-0 text-muted">{k}</dt><dd className="min-w-0 text-fg-2">{v}</dd></div>)}
                   </dl>
@@ -135,7 +137,7 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
         </div>
       )}
 
-      <LowCreditPopup popup={data?.popup ?? null} onSnooze={(hours) => data?.popup && snooze.mutate({ key: `popup:${data.popup.provider}`, hours })} />
+      <LowCreditPopup popup={data?.popup && Array.isArray(data.popup.facts) ? data.popup : null} onSnooze={(hours) => data?.popup && snooze.mutate({ key: `popup:${data.popup.provider}`, hours })} />
     </div>
   )
 }
