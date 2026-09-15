@@ -56,7 +56,11 @@ def xml(r: plivoxml.ResponseElement) -> Response:
 
 
 def lang_key(session: dict) -> str:
-    return "hi" if (session.get("language") or "").startswith("hi") else "en"
+    lang = session.get("language")
+    if not lang:
+        persona = agents.get_profile(session_agent(session)) if session_agent(session) else {}
+        lang = persona.get("default_language", "en-IN")
+    return "hi" if (lang or "").startswith("hi") else "en"
 
 
 def asr_language(session: dict) -> str:
@@ -174,13 +178,15 @@ async def answer(request: Request):
                                              record_session=True, redirect=False, max_length=3600, file_format="mp3"))
             return xml(dial_human(r, persona, p.get("To"), session))
         if route == "message":
-            key = "hi" if (session.get("language") or "").startswith("hi") else "en"
+            key = lang_key(session)
             text = persona.get("after_hours_message") or (
                 "We are closed right now. Please call again during business hours. Thank you." if key == "en"
-                else "अभी हमारा ऑफिस बंद है। कृपया ऑफिस समय में दोबारा कॉल करें। धन्यवाद।")
+                else "हम अभी बंद हैं। कृपया काम के घंटों के दौरान फिर से कॉल करें। धन्यवाद।")
             call_session.add_turn(session, "assistant", text)
             call_session.save(session)
-            hangup_with(r, session, text)
+            audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
+            speak(r, session, text, audio_id=audio_id)
+            r.add(plivoxml.HangupElement())
             return xml(r)
     if persona["record_calls"]:
         r.add(plivoxml.RecordElement(action=f"{settings.base_url}/api/plivo/recording?cid={session['call_id']}",
@@ -395,7 +401,7 @@ async def transfer_done(request: Request):
     if session:
         asyncio.get_running_loop().run_in_executor(None, _notify_missed, session, persona, status)
 
-    key = "hi" if (session.get("language") or "").startswith("hi") else "en"
+    key = lang_key(session)
     if session and persona.get("forward_fallback", "ai") == "ai" and settings.voice_mode == "stream":
         # The AI picks the caller back up on a fresh audio stream, with the conversation so far.
         line = FALLBACK_LINES[key]
@@ -407,9 +413,11 @@ async def transfer_done(request: Request):
         return xml(r)
 
     text = ("Sorry, our team is not available right now. We will call you back soon." if key == "en"
-            else "माफ़ कीजिए, हमारी टीम अभी उपलब्ध नहीं है। हम आपको जल्द ही कॉल करेंगे।")
+            else "हम क्षमा चाहते हैं, हमारी टीम अभी उपलब्ध नहीं है। हम आपको जल्द ही वापस कॉल करेंगे।")
     if session:
-        hangup_with(r, session, text)
+        audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
+        speak(r, session, text, audio_id=audio_id)
+        r.add(plivoxml.HangupElement())
     else:
         r.add(plivoxml.SpeakElement(text, voice="WOMAN", language="en-IN"))
         r.add(plivoxml.HangupElement())

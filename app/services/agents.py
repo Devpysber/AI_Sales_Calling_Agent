@@ -9,7 +9,7 @@ filtered by agent_id so workspaces never mix.
 import json
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import or_, func, select
 
 from app.core import store
 from app.core.config import settings
@@ -355,6 +355,19 @@ def overview(days: int = 14) -> dict:
         rows = db.execute(select(Call.agent_id, Call.created_at, Call.status, Call.duration, Call.outcome)
                           .where(Call.created_at >= start_utc)).all()
         stages = db.execute(select(Lead.agent_id, Lead.status, func.count(Lead.id)).group_by(Lead.agent_id, Lead.status)).all()
+        now_ist = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
+        today_str = now_ist[:10]
+        queue = dict(db.execute(select(Lead.agent_id, func.count()).where(Lead.call_status == "Pending", Lead.do_not_call.is_(False))
+                                .group_by(Lead.agent_id)).all())
+        callbacks = dict(db.execute(select(Lead.agent_id, func.count()).where(Lead.callback_at.like(f"{today_str}%"), Lead.callback_at >= now_ist)
+                                    .group_by(Lead.agent_id)).all())
+        next_meeting = dict(db.execute(select(Lead.agent_id, func.min(Lead.meeting_at)).where(Lead.meeting_at >= now_ist)
+                                       .group_by(Lead.agent_id)).all())
+        attention = dict(db.execute(select(Lead.agent_id, func.count()).where(Lead.do_not_call.is_(False), or_(
+            Lead.retry_count >= 3, Lead.phone.like("+91%") & (func.length(Lead.phone) != 13))).group_by(Lead.agent_id)).all())
+        today_utc = (today - timedelta(hours=5, minutes=30)).replace(tzinfo=None)
+        inbound_today = dict(db.execute(select(Call.agent_id, func.count()).where(Call.direction == "inbound", Call.created_at >= today_utc)
+                                        .group_by(Call.agent_id)).all())
         live = db.execute(select(Call, Lead.name).outerjoin(Lead, Lead.id == Call.lead_id)
                           .where(Call.status.in_(ACTIVE_CALL)).order_by(Call.id.desc()).limit(20)).all()
         live_calls = [{**c.to_dict(n, with_transcript=False)} for c, n in live]
@@ -388,6 +401,11 @@ def overview(days: int = 14) -> dict:
             "period": {"calls": calls, "connected": connected, "meetings": sum(p["meetings"] for p in points),
                        "connect_rate": round(100 * connected / calls, 1) if calls else None, "talk_seconds": talk[aid]},
             "pipeline": pipeline[aid],
+            "ops": {
+                "queue": queue.get(aid, 0), "callbacks_today": callbacks.get(aid, 0), "next_meeting": next_meeting.get(aid),
+                "needs_attention": attention.get(aid, 0), "inbound_today": inbound_today.get(aid, 0),
+                "caller_id": "+" + caller_id(aid), "number_is_default": not a.get("phone_number"),
+            },
         })
 
     names = {a["id"]: a["name"] for a in agents_list}

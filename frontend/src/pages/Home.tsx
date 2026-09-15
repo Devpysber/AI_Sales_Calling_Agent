@@ -1,8 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import {
-  AlertTriangle, ArrowUpRight, AudioWaveform, BookOpen, CalendarCheck, Flame, LayoutGrid, List, MessageSquareText, Pause, Phone,
-  PhoneCall, Plus, Radio, Search, Sparkles, Timer, TrendingUp, Upload, Users,
+  AlertTriangle, ArrowUpRight, AudioWaveform, BookOpen, CalendarCheck, CalendarClock, Flame, LayoutGrid, List, ListOrdered, MessageSquareText, Pause, Phone,
+  PhoneCall, PhoneIncoming, Play, Plus, Radio, Search, Sparkles, Timer, TrendingUp, Upload, Users,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
@@ -55,10 +56,18 @@ function setupScore(a: AgentOverviewItem) {
 function AgentCard({ agent }: { agent: AgentOverviewItem }) {
   const s = agent.stats
   const p = agent.period
+  const o = agent.ops
+  const qc = useQueryClient()
+  const paused = agent.status === 'paused'
+  const toggle = useMutation({
+    mutationFn: () => api(`/api/agents/${agent.id}`, { method: 'PATCH', json: { status: paused ? 'active' : 'paused' } }),
+    onSuccess: () => { toast.success(paused ? `${agent.name} resumed` : `${agent.name} paused`, { description: paused ? 'Calls, queue and automation run again.' : 'No calls go out until you resume.' }); qc.invalidateQueries({ queryKey: ['agents'] }) },
+    onError: (e) => toast.error('Could not update agent', { description: (e as Error).message }),
+  })
   const missing = Object.entries(agent.setup).filter(([, v]) => !v).map(([k]) => SETUP_LABELS[k])
   const base = `/a/${agent.id}`
   return (
-    <Card className="group relative flex flex-col overflow-hidden transition hover:-translate-y-0.5 hover:shadow-pop">
+    <Card className={cn('group relative flex min-w-0 flex-col overflow-hidden transition hover:-translate-y-0.5 hover:shadow-pop', paused && 'opacity-90')}>
       <Link to={base} className="absolute inset-0 z-0" aria-label={`Open ${agent.name}`} />
 
       <div className="relative p-5 pb-0">
@@ -73,9 +82,17 @@ function AgentCard({ agent }: { agent: AgentOverviewItem }) {
             </div>
             <p className="truncate text-xs text-muted">{agent.persona.agent_name} · {agent.persona.company_name} · {LANGUAGES[agent.persona.default_language] ?? agent.persona.default_language}</p>
           </div>
-          <Ring value={setupScore(agent)} size={40} stroke={4}>{Math.round(setupScore(agent) * 5)}/5</Ring>
+          <div className="relative z-10 flex shrink-0 flex-col items-end gap-1.5">
+            <Ring value={setupScore(agent)} size={40} stroke={4}>{Math.round(setupScore(agent) * 5)}/5</Ring>
+            <button type="button" onClick={() => toggle.mutate()} disabled={toggle.isPending}
+              className={cn('inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold transition disabled:opacity-60',
+                paused ? 'bg-success text-white hover:opacity-90' : 'border border-border text-fg-2 hover:border-border-strong hover:text-fg')}>
+              {paused ? <><Play className="size-3" />Resume</> : <><Pause className="size-3" />Pause</>}
+            </button>
+          </div>
         </div>
-        <p className="mt-3 line-clamp-2 min-h-10 text-[13px] text-fg-2">{agent.description || <span className="text-muted">No description yet.</span>}</p>
+        <p className="mt-3 line-clamp-2 min-h-10 text-[13px] break-words text-fg-2">{agent.description || <span className="text-muted">No description yet.</span>}</p>
+        {paused && <p className="mt-2 rounded-lg bg-warning-soft px-2.5 py-1.5 text-[11.5px] font-semibold text-warning">Paused: calls, queue, callbacks and automation are on hold.</p>}
       </div>
 
       <div className="relative mt-3 h-16 px-1">
@@ -100,8 +117,28 @@ function AgentCard({ agent }: { agent: AgentOverviewItem }) {
           </div>
           <PipelineBar pipeline={agent.pipeline} />
         </div>
-        <div className="flex items-center justify-between gap-2 text-[11.5px] text-muted">
-          <span className="flex min-w-0 items-center gap-1.5 truncate"><Phone className="size-3 shrink-0" />{agent.phone_number ?? 'Default number'}</span>
+        {o && (
+          <div className="grid grid-cols-2 gap-2 text-[11.5px]">
+            {([
+              [ListOrdered, 'In queue', o.queue, o.queue ? `${base}/calls?view=queue` : null],
+              [CalendarClock, 'Callbacks today', o.callbacks_today, o.callbacks_today ? `${base}/leads?view=callbacks` : null],
+              [PhoneIncoming, 'Inbound today', o.inbound_today, `${base}/inbound`],
+              [AlertTriangle, 'Need attention', o.needs_attention, o.needs_attention ? `${base}/leads?view=attention` : null],
+            ] as const).map(([Icon, label, value, to]) => {
+              const body = <><Icon className={cn('size-3.5 shrink-0', label === 'Need attention' && value ? 'text-warning' : 'text-muted')} /><span className="min-w-0 flex-1 truncate text-muted">{label}</span><b className="tabular-nums text-fg">{value}</b></>
+              return to
+                ? <Link key={label} to={to} className="relative z-10 flex min-w-0 items-center gap-1.5 rounded-lg bg-surface-2 px-2 py-1.5 hover:bg-surface-2/70">{body}</Link>
+                : <div key={label} className="flex min-w-0 items-center gap-1.5 rounded-lg bg-surface-2 px-2 py-1.5">{body}</div>
+            })}
+          </div>
+        )}
+        {o?.next_meeting && (
+          <div className="flex min-w-0 items-center gap-1.5 rounded-lg bg-success-soft px-2.5 py-1.5 text-[11.5px] font-semibold text-success">
+            <CalendarCheck className="size-3.5 shrink-0" /><span className="truncate">Next meeting {o.next_meeting}</span>
+          </div>
+        )}
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11.5px] text-muted">
+          <span className="flex min-w-0 items-center gap-1.5"><Phone className="size-3 shrink-0" /><span className="truncate font-mono">{o?.caller_id ?? agent.phone_number ?? '—'}</span>{o?.number_is_default && <span className="shrink-0 rounded bg-surface-2 px-1 text-[10px]">default</span>}</span>
           <span className="shrink-0">{s.last_call_at ? `Last call ${timeAgo(s.last_call_at)}` : 'Never called'}</span>
         </div>
         {missing.length > 0 && (

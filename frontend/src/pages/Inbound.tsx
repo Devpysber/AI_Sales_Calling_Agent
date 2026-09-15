@@ -13,6 +13,8 @@ import type { AgentProfile, AutomationSettings, Call, Page } from '@/lib/types'
 import { cn, formatDuration, timeAgo } from '@/lib/utils'
 
 type ProfileResponse = { profile: AgentProfile }
+const HOURS = Array.from({ length: 24 }, (_, h) => h)
+const hourLabel = (h: number) => `${((h + 11) % 12) + 1}:00 ${h < 12 ? 'AM' : 'PM'}`
 type Routing = Pick<AgentProfile, 'transfer_number' | 'inbound_mode' | 'transfer_on_request' | 'after_hours_mode' | 'after_hours_message' | 'forward_fallback' | 'notify_missed_calls' | 'inbound_collect'>
 const KEYS: (keyof Routing)[] = ['transfer_number', 'inbound_mode', 'transfer_on_request', 'after_hours_mode', 'after_hours_message', 'forward_fallback', 'notify_missed_calls', 'inbound_collect']
 
@@ -36,6 +38,15 @@ export default function Inbound() {
       qc.setQueryData<ProfileResponse>(['agent'], (old) => (old ? { ...old, profile } : old))
       setForm(Object.fromEntries(KEYS.map((k) => [k, profile[k]])) as Routing)
       toast.success('Call routing saved', { description: 'Applies to the next incoming call.' })
+    },
+    onError: (e) => toast.error('Not saved', { description: e.message }),
+  })
+
+  const saveHours = useMutation({
+    mutationFn: (values: { calling_hours_start: number, calling_hours_end: number }) => api(`${base}/automation`, { method: 'PUT', json: { ...automation.data!.settings, ...values } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['automation'] })
+      toast.success('Calling hours updated')
     },
     onError: (e) => toast.error('Not saved', { description: e.message }),
   })
@@ -152,10 +163,23 @@ export default function Inbound() {
           </Card>
 
           <Card>
-            <CardHeader title="4 · Who answers" description="Open hours come from the Automation page." />
+            <CardHeader title="4 · Who answers" description={<>Open hours come from the <Link to={`${base}/automation`} className="text-primary hover:underline">Automation page</Link>.</>} />
             <div className="grid gap-5 px-5 pb-5 md:grid-cols-2">
               <div className="space-y-2">
-                <div className="flex items-center gap-2 text-xs font-bold tracking-wide text-muted uppercase"><Clock className="size-3.5" />Open · {hours}</div>
+                <div className="flex items-center gap-2 text-xs font-bold tracking-wide text-muted uppercase">
+                  <Clock className="size-3.5" />Open
+                  {cfg && (
+                    <div className="ml-2 flex items-center gap-1 font-normal normal-case">
+                      <select value={cfg.calling_hours_start} onChange={(e) => saveHours.mutate({ calling_hours_start: +e.target.value, calling_hours_end: cfg.calling_hours_end })} className="rounded-md border border-border bg-bg px-1 py-0.5 text-xs text-fg">
+                        {HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
+                      </select>
+                      <span>to</span>
+                      <select value={cfg.calling_hours_end} onChange={(e) => saveHours.mutate({ calling_hours_start: cfg.calling_hours_start, calling_hours_end: +e.target.value })} className="rounded-md border border-border bg-bg px-1 py-0.5 text-xs text-fg">
+                        {HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
+                      </select>
+                    </div>
+                  )}
+                </div>
                 {option('inbound_mode', 'ai', <Bot />, 'AI agent', 'Answers, qualifies and logs to the CRM')}
                 {option('inbound_mode', 'forward', <PhoneForwarded />, 'Your team', teamDetail, !hasNumber)}
               </div>

@@ -251,6 +251,7 @@ export interface AgentOverviewItem extends AgentSummary {
   series: { date: string; calls: number; connected: number; meetings: number }[]
   period: { calls: number; connected: number; meetings: number; connect_rate: number | null; talk_seconds: number }
   pipeline: Record<string, number>
+  ops?: { queue: number; callbacks_today: number; next_meeting: string | null; needs_attention: number; inbound_today: number; caller_id: string; number_is_default: boolean }
 }
 
 export interface AgentsOverview {
