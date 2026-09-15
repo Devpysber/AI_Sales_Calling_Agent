@@ -47,6 +47,11 @@ class PlivoService:
         )
         return response.request_uuid
 
+    def transfer(self, call_uuid: str, session_id: str, call_id: int | None):
+        """Move a live call (A leg) to XML that dials the agent's human transfer number."""
+        self.client.calls.update(call_uuid, legs="aleg", aleg_url=self.webhook("transfer", sid=session_id, cid=call_id),
+                                 aleg_method="POST")
+
     def hangup(self, uuid: str):
         try:
             self.client.calls.delete(uuid)

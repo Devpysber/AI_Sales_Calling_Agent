@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import {
   Activity, AudioWaveform, BarChart3, BookOpen, Bot, CalendarClock, Check, ChevronsLeft, ChevronsRight, ChevronsUpDown, Columns3,
-  Download, Keyboard, LayoutDashboard, LayoutGrid, LogOut, Menu, MessageSquareText, Moon, Pause, PhoneCall, Plus, Search, Settings,
+  Download, Keyboard, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Menu, MessageSquareText, Moon, Pause, PhoneCall, Plus, Search, Settings,
   SlidersHorizontal, Sparkles, Sun, Upload, UserPlus, Users, X,
 } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -23,6 +23,7 @@ const AGENT_NAV: { section: string; items: NavItem[] }[] = [
       { to: '/leads', label: 'Leads', icon: Users, key: 'l', count: (a) => a.stats.leads || null },
       { to: '/pipeline', label: 'Pipeline', icon: Columns3, key: 'p', count: (a) => a.stats.hot ? <span className="text-danger">{a.stats.hot} hot</span> : null },
       { to: '/calls', label: 'Calls', icon: PhoneCall, key: 'c', count: (a) => a.stats.live ? <span className="rounded-full bg-success px-1.5 text-white">{a.stats.live} live</span> : a.stats.calls_today || null },
+      { to: '/inbound', label: 'Inbound & transfer', icon: PhoneIncoming, key: 'i' },
     ],
   },
   {

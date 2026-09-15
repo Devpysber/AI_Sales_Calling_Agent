@@ -130,6 +130,11 @@ export interface AgentProfile {
   max_call_minutes: number
   record_calls: boolean
   detect_voicemail: boolean
+  transfer_number: string
+  inbound_mode: 'ai' | 'forward'
+  transfer_on_request: boolean
+  after_hours_mode: 'ai' | 'forward' | 'message'
+  after_hours_message: string
 }
 
 export interface AutomationSettings {

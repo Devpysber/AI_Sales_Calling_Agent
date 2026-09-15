@@ -339,6 +339,7 @@ class ReplyFilter:
     def __init__(self):
         self.pending = ""
         self.end_call = False
+        self.transfer = False
         self.muted = False
 
     def feed(self, delta: str) -> str:
@@ -364,6 +365,8 @@ class ReplyFilter:
             self.pending = self.pending[gt + 1:]
             if tag == "<end>":
                 self.end_call = True
+            if tag == "<transfer>":
+                self.transfer = True
             if "tool" in tag:
                 self.muted = True
         return out
@@ -397,6 +400,8 @@ class CallStream:
         self.commit_task: asyncio.Task | None = None
         self.mark = 0
         self.hangup_on_mark: str | None = None
+        self.transfer_on_mark: str | None = None
+        self.transferred = False
         self.quiet_since = time.monotonic()
         self.silent_prompts = 0
         self.closed = False
@@ -494,6 +499,16 @@ class CallStream:
             self.turn("assistant", text, by=by)
             self.save_session()
             await self.checkpoint()
+        elif action == "transfer":
+            if not self.can_transfer():
+                raise ValueError("Set a transfer number for this agent first (Inbound & transfer page).")
+            from app.api.plivo import TRANSFER_LINES
+            await self.interrupt(force=True)
+            self.mode = "human"
+            line = TRANSFER_LINES[self.lang_key()]
+            self.turn("assistant", line, by=by)
+            await self.say_fixed(line)
+            self.transfer_on_mark = f"m{self.mark}"
         elif action == "stop_speaking":
             await self.interrupt(force=True)
         elif action == "end":
@@ -512,11 +527,13 @@ class CallStream:
             await self.send({"event": "playAudio", "media": {"contentType": "audio/x-mulaw", "sampleRate": 8000,
                                                              "payload": base64.b64encode(pcm16_to_mulaw(pcm)).decode()}})
 
-    async def checkpoint(self, hangup: bool = False) -> str:
+    async def checkpoint(self, hangup: bool = False, transfer: bool = False) -> str:
         self.mark += 1
         name = f"m{self.mark}"
         if hangup:
             self.hangup_on_mark = name
+        if transfer:
+            self.transfer_on_mark = name
         await self.send({"event": "checkpoint", "streamId": self.stream_id, "name": name})
         return name
 
@@ -529,6 +546,26 @@ class CallStream:
         pcm = await asyncio.to_thread(tts.cached_pcm, text, language, self.persona.get("voice_speaker"), self.usage)
         await self.play_pcm(pcm)
         await self.checkpoint(hangup=hangup)
+
+    def can_transfer(self) -> bool:
+        return bool("".join(c for c in self.persona.get("transfer_number", "") if c.isdigit()))
+
+    async def transfer_call(self):
+        """Hand the caller to the agent's human number. Plivo replaces the stream with a <Dial>, ending this socket."""
+        if self.transferred or not self.call_uuid or not self.can_transfer():
+            return
+        self.transferred = True
+        from app.services.plivo_service import PlivoService
+        try:
+            await asyncio.to_thread(PlivoService().transfer, self.call_uuid, self.session_id, self.session.get("call_id"))
+            self.save_session(transferred=True)
+            if self.session.get("call_id"):
+                await asyncio.to_thread(CallService(self.agent_id).mark_transferred, self.session["call_id"],
+                                        f"Transferred to {self.persona.get('transfer_number')}")
+            log.info("Transferred session %s to %s", self.session_id[:8], self.persona.get("transfer_number"))
+        except Exception as e:  # noqa: BLE001 - keep the AI on the line if Plivo refuses
+            self.transferred = False
+            log.error("Transfer failed for %s: %s", self.session_id[:8], e)
 
     async def hangup(self):
         if self.call_uuid:
@@ -599,6 +636,9 @@ class CallStream:
                         self.publish_state()
                     if msg.get("name") and msg.get("name") == self.hangup_on_mark:
                         await self.hangup()
+                        return
+                    if msg.get("name") and msg.get("name") == self.transfer_on_mark:
+                        await self.transfer_call()
                         return
                 elif event == "stop":
                     return
@@ -858,4 +898,7 @@ class CallStream:
             self.session["latencies"] = (self.session.get("latencies") or []) + [first_audio_ms]
         self.save_session(silent_prompts=0)
         log.info("Turn: first audio %sms after caller stopped, session=%s", first_audio_ms, self.session_id[:8])
-        await self.checkpoint(hangup=cleaner.end_call)
+        if cleaner.transfer and self.can_transfer():
+            await self.checkpoint(transfer=True)
+        else:
+            await self.checkpoint(hangup=cleaner.end_call)

@@ -21,6 +21,7 @@ const Automation = lazy(() => import('@/pages/Automation'))
 const AgentSettings = lazy(() => import('@/pages/AgentSettings'))
 const SettingsPage = lazy(() => import('@/pages/Settings'))
 const ProfilePage = lazy(() => import('@/pages/Profile'))
+const Inbound = lazy(() => import('@/pages/Inbound'))
 
 const Loading = () => <div className="grid h-64 place-items-center"><Spinner className="size-6" /></div>
 
@@ -75,6 +76,7 @@ export default function App() {
           <Route path="leads/:leadId" element={<LeadDetail />} />
           <Route path="import" element={<Import />} />
           <Route path="calls" element={<Calls />} />
+          <Route path="inbound" element={<Inbound />} />
           <Route path="activity" element={<ActivityPage />} />
           <Route path="agent" element={<Agent />} />
           <Route path="knowledge" element={<Knowledge />} />

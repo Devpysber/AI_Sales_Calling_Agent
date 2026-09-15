@@ -124,6 +124,31 @@ def hangup_with(r, session: dict, text: str):
     r.add(plivoxml.HangupElement())
 
 
+TRANSFER_LINES = {"en": "Please hold, I am connecting you to our team.", "hi": "कृपया लाइन पर बने रहिए, मैं आपको हमारी टीम से जोड़ रहा हूँ।"}
+
+
+def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = None):
+    """<Dial> the agent's transfer number; if nobody picks up the caller hears a short message instead of silence."""
+    number = "".join(c for c in persona.get("transfer_number", "") if c.isdigit())
+    dial = plivoxml.DialElement(caller_id=caller_id or None, timeout=30,
+                                action=f"{settings.base_url}/api/plivo/transfer-done" + (f"?cid={session['call_id']}" if session else ""),
+                                method="POST", redirect=True)
+    dial.add(plivoxml.NumberElement(number))
+    r.add(dial)
+    return r
+
+
+def inbound_route(persona: dict, agent_id: int) -> str:
+    """ai | forward | message for an incoming call right now."""
+    from app.services.call_service import within_calling_hours
+    has_number = bool("".join(c for c in persona.get("transfer_number", "") if c.isdigit()))
+    open_now = within_calling_hours(agents.get_automation(agent_id))
+    mode = persona.get("inbound_mode", "ai") if open_now else persona.get("after_hours_mode", "ai")
+    if mode == "forward" and not has_number:
+        return "ai"
+    return mode if mode in ("ai", "forward", "message") else "ai"
+
+
 @router.post("/answer")
 async def answer(request: Request):
     p = await verified(request)
@@ -140,6 +165,20 @@ async def answer(request: Request):
 
     agent_id = session_agent(session)
     persona = agents.get_profile(agent_id)
+    if not p.get("sid"):
+        route = inbound_route(persona, agent_id)
+        if route == "forward":
+            await asyncio.to_thread(calls.mark_transferred, session["call_id"], "Forwarded to " + persona["transfer_number"], "forward")
+            return xml(dial_human(r, persona, p.get("To"), session))
+        if route == "message":
+            key = "hi" if (session.get("language") or "").startswith("hi") else "en"
+            text = persona.get("after_hours_message") or (
+                "We are closed right now. Please call again during business hours. Thank you." if key == "en"
+                else "अभी हमारा ऑफिस बंद है। कृपया ऑफिस समय में दोबारा कॉल करें। धन्यवाद।")
+            call_session.add_turn(session, "assistant", text)
+            call_session.save(session)
+            hangup_with(r, session, text)
+            return xml(r)
     if persona["record_calls"]:
         r.add(plivoxml.RecordElement(action=f"{settings.base_url}/api/plivo/recording?cid={session['call_id']}",
                                      record_session=True, redirect=False, max_length=3600, file_format="mp3"))
@@ -295,3 +334,32 @@ async def recording(request: Request):
     if p.get("cid") and p.get("RecordUrl"):
         await asyncio.to_thread(CallService().on_recording, int(p["cid"]), p["RecordUrl"])
     return {"ok": True}
+
+
+@router.post("/transfer")
+async def transfer(request: Request):
+    """XML for a live call handed to a human (from the AI or a supervisor)."""
+    p = await verified(request)
+    session = call_session.get(p.get("sid")) or {}
+    agent_id = session_agent(session) if session else None
+    r = plivoxml.ResponseElement()
+    persona = agents.get_profile(agent_id) if agent_id else {}
+    if not "".join(c for c in persona.get("transfer_number", "") if c.isdigit()):
+        r.add(plivoxml.HangupElement())
+        return xml(r)
+    caller = agents.caller_id(agent_id)
+    return xml(dial_human(r, persona, caller, session if session.get("call_id") else None))
+
+
+@router.post("/transfer-done")
+async def transfer_done(request: Request):
+    """After the transferred leg ends: nothing more to say if it was answered, a short apology if not."""
+    p = await verified(request)
+    r = plivoxml.ResponseElement()
+    if (p.get("DialStatus") or "").lower() not in ("completed", "answer", "answered"):
+        cid = p.get("cid")
+        if cid:
+            await asyncio.to_thread(CallService().mark_transferred, int(cid), f"Transfer not answered ({p.get('DialStatus')})", None)
+        r.add(plivoxml.SpeakElement("Sorry, our team is not available right now. We will call you back soon.", voice="WOMAN", language="en-IN"))
+    r.add(plivoxml.HangupElement())
+    return xml(r)

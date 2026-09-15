@@ -1,12 +1,15 @@
 import asyncio
+import base64
+import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.api.deps import workspace
 from app.core.auth import actor
 from app.services import agents, events
 from app.services.call_service import CallError, CallService, within_calling_hours
+from app.services.voice_stream import LIVE
 
 router = APIRouter(prefix="/api/agents/{agent_id}/calls", tags=["calls"])
 
@@ -59,55 +62,59 @@ async def hangup(call_id: int, agent_id: int = Depends(workspace)):
 
 
 
-from fastapi import WebSocket, WebSocketDisconnect
-from app.services.voice_stream import LIVE
-import json
 
 @router.websocket("/{call_id}/monitor")
-async def monitor_call(websocket: WebSocket, call_id: int):
-    await websocket.accept()
-    # Find live stream matching this call_id (uuid)
-    # The LIVE dict keys are session_id. Call_id might not match session_id perfectly.
-    # Let's find it.
-    call_service = CallService(1) # We can ignore agent_id for finding live calls, but wait, we need agent_id.
-    # We can just iterate over LIVE streams to find the one with the right call_id.
-    stream = next((s for s in LIVE.values() if str(s.call_uuid) == str(call_id) or str(s.session.get('call_id')) == str(call_id)), None)
-    
-    if not stream:
-        await websocket.close(code=1008)
+async def monitor_call(websocket: WebSocket, call_id: int, agent_id: int):
+    """Live supervision of one call: state + both audio tracks out, supervisor commands and microphone audio in."""
+    from app.core.auth import COOKIE, auth_enabled, read_token
+
+    # HTTP auth middleware does not run for WebSockets: check the session cookie here.
+    if auth_enabled() and not read_token(websocket.cookies.get(COOKIE)):
+        await websocket.close(code=4401)
         return
-        
-    queue = asyncio.Queue()
+    stream = next((s for s in LIVE.values() if s.agent_id == agent_id and str(s.session.get("call_id")) == str(call_id)), None)
+    await websocket.accept()
+    if not stream:
+        await websocket.send_json({"type": "ended"})
+        await websocket.close(code=1000)
+        return
+
+    queue: asyncio.Queue = asyncio.Queue()
     stream.monitors[queue] = {"listen": True}
-    
+
     async def receive():
         try:
             while True:
-                data = await websocket.receive_text()
-                msg = json.loads(data)
+                msg = json.loads(await websocket.receive_text())
                 action = msg.get("action")
-                text = msg.get("text", "")
-                now = msg.get("now", False)
                 if action == "human_audio":
-                    import base64
-                    pcm = base64.b64decode(msg["audio"])
-                    await stream.human_audio(pcm)
+                    await stream.human_audio(base64.b64decode(msg.get("audio") or ""))
+                elif action == "listen":
+                    stream.monitors[queue]["listen"] = bool(msg.get("on"))
                 elif action:
-                    await stream.control(action, text=text, now=now)
-        except WebSocketDisconnect:
+                    try:
+                        await stream.control(action, text=msg.get("text", ""), now=bool(msg.get("now")))
+                    except ValueError as e:
+                        await websocket.send_json({"type": "error", "message": str(e)})
+        except (WebSocketDisconnect, RuntimeError):
             pass
-            
+
     async def send():
         try:
             while True:
                 event = await queue.get()
                 await websocket.send_json(event)
-        except Exception:
+                if event.get("type") == "ended":
+                    return
+        except Exception:  # noqa: BLE001 - socket closed
             pass
-            
+
     try:
-        # Publish initial state
-        await websocket.send_json(stream.state())
-        await asyncio.gather(receive(), send())
+        await websocket.send_json({**stream.state(), "can_transfer": stream.can_transfer(),
+                                   "transfer_number": stream.persona.get("transfer_number") or None})
+        done, pending = await asyncio.wait([asyncio.create_task(receive()), asyncio.create_task(send())],
+                                           return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
     finally:
         stream.monitors.pop(queue, None)

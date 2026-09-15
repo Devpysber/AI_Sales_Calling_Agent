@@ -232,6 +232,16 @@ class CallService:
                       agent_id=agent_id, lead_id=lead and lead["id"], call_id=call_id)
         return call_session.update(session["id"], call_id=call_id)
 
+    def mark_transferred(self, call_id: int, detail: str, trigger: str | None = "transfer"):
+        with get_db() as db:
+            call = db.get(Call, call_id)
+            if call is None:
+                return
+            if trigger == "forward":
+                call.trigger = "forwarded"
+            agent_id, lead_id = call.agent_id, call.lead_id
+        events.record("call.transferred", detail, agent_id=agent_id, lead_id=lead_id, call_id=call_id)
+
     def on_recording(self, call_id: int, url: str):
         self._set(call_id, recording_url=url)
 

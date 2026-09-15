@@ -1,97 +1,180 @@
-import { useState, useEffect, useRef } from 'react'
-import { Mic, MicOff, Send, MessageSquare, Hand, X } from 'lucide-react'
-import { Button, Input } from '@/components/ui'
+import { Ear, EarOff, Hand, Mic, MicOff, PhoneForwarded, Radio, Send, Sparkles, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
+import { Badge, Button, Input, useConfirm } from '@/components/ui'
 import { useAgent } from '@/lib/agent'
+import { cn } from '@/lib/utils'
+
+type LiveState = {
+  type: 'state'; mode: 'ai' | 'human'; agent_speaking: boolean; caller_speaking: boolean; thinking: boolean
+  direction: string | null; guidance: string | null; can_transfer?: boolean; transfer_number?: string | null
+}
+
+const RATE = 8000
+
+/** Base64 PCM16 (8 kHz mono) -> Float32 samples for Web Audio. */
+function decodePcm(b64: string): Float32Array<ArrayBuffer> {
+  const bin = atob(b64)
+  const out = new Float32Array(new ArrayBuffer((bin.length >> 1) * 4))
+  for (let i = 0; i < out.length; i++) {
+    let v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8)
+    if (v >= 0x8000) v -= 0x10000
+    out[i] = v / 32768
+  }
+  return out
+}
+
+/** Float32 at the mic's rate -> base64 PCM16 at 8 kHz (simple decimation, fine for speech on a phone line). */
+function encodePcm(input: Float32Array, fromRate: number): string {
+  const step = fromRate / RATE
+  const n = Math.floor(input.length / step)
+  const bytes = new Uint8Array(n * 2)
+  for (let i = 0; i < n; i++) {
+    const s = Math.max(-1, Math.min(1, input[Math.floor(i * step)]!))
+    const v = s < 0 ? s * 0x8000 : s * 0x7fff
+    bytes[2 * i] = v & 0xff
+    bytes[2 * i + 1] = (v >> 8) & 0xff
+  }
+  let bin = ''
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!)
+  return btoa(bin)
+}
 
 export default function LiveSupervision({ callId }: { callId: number }) {
   const { base } = useAgent()
-  const [ws, setWs] = useState<WebSocket | null>(null)
-  const [state, setState] = useState<any>(null)
-  const [guideText, setGuideText] = useState('')
-  const [dirText, setDirText] = useState('')
-  const [sayText, setSayText] = useState('')
-  const [recording, setRecording] = useState(false)
-  const mediaRecorder = useRef<MediaRecorder | null>(null)
+  const confirm = useConfirm()
+  const socket = useRef<WebSocket | null>(null)
+  const [state, setState] = useState<LiveState | null>(null)
+  const [status, setStatus] = useState<'connecting' | 'live' | 'ended' | 'error'>('connecting')
+  const [listen, setListen] = useState(false)
+  const [talking, setTalking] = useState(false)
+  const [guide, setGuide] = useState('')
+  const [direction, setDirection] = useState('')
+  const [say, setSay] = useState('')
+  const [lastHeard, setLastHeard] = useState('')
+  const playback = useRef<{ ctx: AudioContext; at: number } | null>(null)
+  const mic = useRef<{ ctx: AudioContext; stream: MediaStream; node: ScriptProcessorNode } | null>(null)
+  const listenRef = useRef(listen)
+  useEffect(() => { listenRef.current = listen }, [listen])
+
+  const send = useCallback((payload: Record<string, unknown>) => {
+    if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify(payload))
+  }, [])
+
+  const play = (b64: string) => {
+    if (!listenRef.current) return
+    playback.current ??= { ctx: new AudioContext({ sampleRate: RATE }), at: 0 }
+    const { ctx } = playback.current
+    const samples = decodePcm(b64)
+    const buffer = ctx.createBuffer(1, samples.length, RATE)
+    buffer.copyToChannel(samples, 0)
+    const src = ctx.createBufferSource()
+    src.buffer = buffer
+    src.connect(ctx.destination)
+    // Queue chunks back to back; resync if we fell behind
+    const start = Math.max(ctx.currentTime + 0.05, playback.current.at)
+    src.start(start)
+    playback.current.at = start + buffer.duration
+  }
+
+  const stopMic = useCallback(() => {
+    mic.current?.node.disconnect()
+    mic.current?.stream.getTracks().forEach((t) => t.stop())
+    void mic.current?.ctx.close()
+    mic.current = null
+    setTalking(false)
+  }, [])
 
   useEffect(() => {
-    // Construct WS URL
-    const loc = window.location
-    const protocol = loc.protocol === 'https:' ? 'wss:' : 'ws:'
-    // base might be /api/agents/1
-    const wsUrl = `${protocol}//${loc.host}${base}/calls/${callId}/monitor`
-    
-    const socket = new WebSocket(wsUrl)
-    socket.onmessage = (e) => {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const ws = new WebSocket(`${proto}//${window.location.host}${base}/calls/${callId}/monitor`)
+    socket.current = ws
+    ws.onopen = () => setStatus('live')
+    ws.onmessage = (e) => {
       const msg = JSON.parse(e.data)
-      if (msg.type === 'state') setState(msg)
-      if (msg.type === 'audio') {
-        // play audio if we wanted to
-      }
+      if (msg.type === 'state') setState((s) => ({ ...s, ...msg }))
+      else if (msg.type === 'audio') play(msg.pcm)
+      else if (msg.type === 'heard') setLastHeard(msg.text)
+      else if (msg.type === 'error') toast.error(msg.message)
+      else if (msg.type === 'ended') setStatus('ended')
     }
-    setWs(socket)
-    return () => socket.close()
+    ws.onclose = (e) => { setStatus((s) => (s === 'live' || s === 'ended' ? 'ended' : e.code === 4401 ? 'error' : 'ended')); stopMic() }
+    ws.onerror = () => setStatus('error')
+    return () => { ws.close(); stopMic(); void playback.current?.ctx.close(); playback.current = null }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callId, base])
 
-  const sendCommand = (action: string, text: string = '', now: boolean = false) => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ action, text, now }))
+  const toggleListen = () => {
+    const next = !listen
+    setListen(next)
+    send({ action: 'listen', on: next })
+    if (next) void playback.current?.ctx.resume()
+  }
+
+  const toggleTalk = async () => {
+    if (talking) { stopMic(); send({ action: 'release' }); return }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
+      const ctx = new AudioContext()
+      const source = ctx.createMediaStreamSource(stream)
+      const node = ctx.createScriptProcessor(2048, 1, 1)
+      node.onaudioprocess = (ev) => send({ action: 'human_audio', audio: encodePcm(ev.inputBuffer.getChannelData(0), ctx.sampleRate) })
+      source.connect(node)
+      node.connect(ctx.destination)
+      mic.current = { ctx, stream, node }
+      send({ action: 'takeover' })
+      setTalking(true)
+      if (!listen) toggleListen()
+    } catch {
+      toast.error('Microphone blocked', { description: 'Allow microphone access to speak to the caller.' })
     }
   }
 
-  const toggleRecording = async () => {
-    if (recording) {
-      mediaRecorder.current?.stop()
-      setRecording(false)
-      sendCommand('release')
-    } else {
-      sendCommand('takeover')
-      setRecording(true)
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mr = new MediaRecorder(stream)
-      // This is simplified, for true human_audio we would stream PCM data chunks to WS
-      mr.start()
-      mediaRecorder.current = mr
+  const transfer = async () => {
+    if (!state?.can_transfer) return void toast.error('No transfer number', { description: 'Set one on the Inbound & transfer page.' })
+    if (await confirm({ title: 'Transfer this caller?', description: `The agent says “connecting you to our team”, then ${state.transfer_number} rings.`, confirmLabel: 'Transfer' })) {
+      send({ action: 'transfer' })
+      toast.success('Transferring…')
     }
   }
 
-  if (!state) return <div className="p-3 text-sm text-muted">Connecting to live call...</div>
+  if (status === 'error') return <div className="rounded-xl border border-danger/30 bg-danger-soft p-3 text-sm text-danger">Could not open live supervision. Sign in again, or the call is handled by another server.</div>
+  if (status === 'ended') return <div className="rounded-xl border border-border bg-surface-2 p-3 text-sm text-muted">Live supervision ended: the call finished or was transferred.</div>
+  if (!state) return <div className="rounded-xl border border-border p-3 text-sm text-muted">Connecting to the live call…</div>
+
+  const activity = talking ? 'You are speaking' : state.caller_speaking ? 'Caller speaking' : state.thinking ? 'AI thinking' : state.agent_speaking ? 'AI speaking' : 'Listening'
 
   return (
-    <div className="rounded-xl border border-brand/30 bg-surface p-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-brand flex items-center gap-2">
-          <span className="relative flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-brand"></span></span>
-          Live Supervision
-        </h3>
-        <div className="text-xs font-mono text-muted">
-          Mode: <span className="text-fg">{state.mode}</span> | 
-          AI: {state.agent_speaking ? 'Speaking' : 'Silent'}
-        </div>
+    <div className="space-y-4 rounded-2xl border border-success/30 bg-surface p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="relative flex size-2.5"><span className="absolute inline-flex size-full animate-ping rounded-full bg-success opacity-60" /><span className="relative inline-flex size-2.5 rounded-full bg-success" /></span>
+        <h3 className="text-sm font-bold">Live supervision</h3>
+        <Badge tone={state.mode === 'human' ? 'warning' : 'success'}>{state.mode === 'human' ? 'You have the call' : 'AI has the call'}</Badge>
+        <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-muted"><Radio className={cn('size-3.5', (state.caller_speaking || state.agent_speaking) && 'text-success')} />{activity}</span>
+      </div>
+      {lastHeard && <p className="truncate rounded-lg bg-surface-2 px-3 py-2 text-xs text-fg-2">Caller: “{lastHeard}”</p>}
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <Button variant={listen ? 'primary' : 'secondary'} onClick={toggleListen}>{listen ? <Ear /> : <EarOff />}{listen ? 'Listening' : 'Listen in'}</Button>
+        <Button variant={talking ? 'danger' : 'secondary'} onClick={toggleTalk}>{talking ? <MicOff /> : <Mic />}{talking ? 'Give back to AI' : 'Take over'}</Button>
+        <Button variant="secondary" onClick={() => send({ action: 'stop_speaking' })}><Hand />Stop AI</Button>
+        <Button variant="secondary" onClick={transfer} disabled={!state.can_transfer} title={state.can_transfer ? `Transfer to ${state.transfer_number}` : 'Set a transfer number first'}><PhoneForwarded />Transfer</Button>
       </div>
 
-      <div className="space-y-3">
+      <div className="space-y-2">
         <div className="flex gap-2">
-          <Input value={guideText} onChange={(e) => setGuideText(e.target.value)} placeholder="One-time instruction for next reply..." className="flex-1" />
-          <Button onClick={() => { sendCommand('guide', guideText, false); setGuideText('') }}><Send className="size-4"/> Guide</Button>
-          <Button variant="secondary" onClick={() => { sendCommand('guide', guideText, true); setGuideText('') }}><Send className="size-4"/> Guide Now</Button>
+          <Input value={guide} onChange={(e) => setGuide(e.target.value)} placeholder="Whisper to the AI for its next reply, e.g. offer a Saturday visit" className="flex-1" />
+          <Button disabled={!guide.trim()} onClick={() => { send({ action: 'guide', text: guide }); setGuide('') }}><Sparkles />Next reply</Button>
+          <Button variant="primary" disabled={!guide.trim()} onClick={() => { send({ action: 'guide', text: guide, now: true }); setGuide('') }}><Send />Now</Button>
         </div>
-        
         <div className="flex gap-2">
-          <Input value={dirText} onChange={(e) => setDirText(e.target.value)} placeholder="Standing direction (e.g. 'Push for a demo')..." className="flex-1" />
-          <Button variant="secondary" onClick={() => sendCommand('direction', dirText)}><Send className="size-4"/> Set Dir</Button>
-          {state.direction && <Button variant="ghost" onClick={() => sendCommand('direction', '')}><X className="size-4"/></Button>}
+          <Input value={direction} onChange={(e) => setDirection(e.target.value)} placeholder={state.direction ? `Standing: ${state.direction}` : 'Standing direction for every reply, e.g. push for a demo'} className="flex-1" />
+          <Button disabled={!direction.trim()} onClick={() => { send({ action: 'direction', text: direction }); setDirection('') }}>Set</Button>
+          {state.direction && <Button variant="ghost" size="icon" onClick={() => send({ action: 'direction', text: '' })} aria-label="Clear direction"><X /></Button>}
         </div>
-
         <div className="flex gap-2">
-          <Input value={sayText} onChange={(e) => setSayText(e.target.value)} placeholder="Force AI to say exact text..." className="flex-1" />
-          <Button variant="secondary" onClick={() => { sendCommand('say', sayText); setSayText('') }}><MessageSquare className="size-4"/> Say</Button>
-        </div>
-        
-        <div className="flex items-center gap-2 pt-2 border-t border-border">
-          <Button variant={recording ? 'danger' : 'secondary'} onClick={toggleRecording}>
-            {recording ? <><MicOff className="size-4"/> Stop Speaking (Release)</> : <><Mic className="size-4"/> Take Over & Speak</>}
-          </Button>
-          <Button variant="secondary" onClick={() => sendCommand('stop_speaking')}><Hand className="size-4"/> Stop AI Audio</Button>
+          <Input value={say} onChange={(e) => setSay(e.target.value)} placeholder="Make the agent say exactly this…" className="flex-1" />
+          <Button disabled={!say.trim()} onClick={() => { send({ action: 'say', text: say }); setSay('') }}>Say</Button>
         </div>
       </div>
     </div>

@@ -69,6 +69,12 @@ PROFILE_DEFAULTS = {
     "qualification_criteria": "Hot: clear need and wants a meeting or proposal. Warm: interested but no commitment. Cold: no need or not interested.",
     "forbidden_topics": "Never promise discounts, delivery dates or features that are not in the knowledge base.",
     "max_call_minutes": 8,
+    # Call routing: a human number to hand callers to
+    "transfer_number": "",
+    "inbound_mode": "ai",              # ai | forward (ring the transfer number directly)
+    "transfer_on_request": True,       # AI hands over when the caller asks for a person
+    "after_hours_mode": "ai",          # ai | forward | message (outside the automation calling window)
+    "after_hours_message": "",
     "record_calls": False,
     "detect_voicemail": False,
 }
@@ -264,6 +270,19 @@ def get_profile(agent_id: int) -> dict:
 
 
 def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
+    values = dict(values)
+    if "transfer_number" in values:
+        digits = "".join(c for c in str(values["transfer_number"] or "") if c.isdigit())
+        if digits and not 10 <= len(digits) <= 15:
+            raise ValueError("Transfer number must be a full phone number with country code, e.g. +91 98765 43210.")
+        values["transfer_number"] = f"+{digits}" if digits else ""
+    for key, allowed in (("inbound_mode", ("ai", "forward")), ("after_hours_mode", ("ai", "forward", "message"))):
+        if key in values and values[key] not in allowed:
+            raise ValueError(f"{key} must be one of: {', '.join(allowed)}")
+    if values.get("inbound_mode") == "forward" or values.get("after_hours_mode") == "forward":
+        number = values.get("transfer_number", get_profile(agent_id).get("transfer_number"))
+        if not number:
+            raise ValueError("Add a transfer number before forwarding calls to it.")
     return _update_group(agent_id, "profile", values, "Agent profile", actor)
 
 

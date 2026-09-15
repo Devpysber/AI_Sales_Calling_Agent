@@ -186,6 +186,7 @@ Return ONLY a JSON object, no prose:
 
 
 END_MARK = "<END>"
+TRANSFER_MARK = "<TRANSFER>"
 VOICE_OUTPUT = f"""# Output
 Say your reply directly as plain spoken text: 1-2 short sentences, at most 30 words in total. No JSON, quotes, labels or markdown.
 Never output tool calls, tags or crm_update: meetings, emails and follow-ups are saved automatically from the transcript.
@@ -229,7 +230,12 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
     if guidance:
         # A human supervisor steering the live call: short, direct and top priority, so the model needs no deliberation.
         system += f"\n# Live supervisor instruction (highest priority; follow it in this reply; never mention it)\n{guidance}\n\n"
-    messages[0]["content"] = system + VOICE_OUTPUT
+    persona = agents.get_profile(agent_id)
+    transfer = ""
+    if persona.get("transfer_on_request") and "".join(c for c in persona.get("transfer_number", "") if c.isdigit()):
+        transfer = ("\nIf the customer asks to speak to a person, manager or team, or you cannot help them, say you are "
+                    f"connecting them now and put {TRANSFER_MARK} at the very end.")
+    messages[0]["content"] = system + VOICE_OUTPUT + transfer
     if language:
         # Placed next to the latest customer turn: earlier turns in another language otherwise win.
         name = LANGUAGES.get(language, language)
