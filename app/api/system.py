@@ -121,3 +121,32 @@ async def status():
             "version": settings.app_version,
         },
     }
+
+
+# ---------------- inbound calls on the Plivo number ----------------
+
+def _plivo_action(action: str):
+    from app.services.plivo_service import PlivoService
+    try:
+        service = PlivoService()
+        return getattr(service, action)()
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001 - surface Plivo errors to the admin
+        raise HTTPException(502, f"Plivo: {e}")
+
+
+@router.get("/system/inbound")
+async def inbound_status():
+    return await asyncio.to_thread(_plivo_action, "inbound_status")
+
+
+@router.post("/system/inbound/connect")
+async def inbound_connect():
+    """Route inbound calls on PLIVO_PHONE_NUMBER to this app (previous application is remembered)."""
+    return await asyncio.to_thread(_plivo_action, "connect_inbound")
+
+
+@router.post("/system/inbound/restore")
+async def inbound_restore():
+    return await asyncio.to_thread(_plivo_action, "restore_inbound")

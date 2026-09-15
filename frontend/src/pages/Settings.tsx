@@ -1,8 +1,8 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, CircleAlert, Copy, PlugZap, RefreshCw, Server } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { toast } from 'sonner'
-import { Badge, Button, Card, CardHeader, PageHeader, Skeleton } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, PageHeader, Skeleton, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
 
 type Check = { ok: boolean; detail?: string | null; [k: string]: unknown }
@@ -64,9 +64,10 @@ export default function Settings() {
             </Card>
 
             <Card>
-              <CardHeader title="Inbound calls" description="Let customers call your Plivo number and talk to the agent." />
+              <CardHeader title="Inbound calls" description="Customers who call your Plivo number talk to the agent that owns that number (set under Agent settings); other numbers go to the first active agent." />
               <div className="space-y-3 p-5 text-sm">
-                <p className="text-muted">Create an Application in the Plivo console (Voice → Applications), set these URLs, then attach it to your numbers. Each inbound call is answered by the agent that owns the dialled number (set under Agent settings); unknown numbers go to the first active agent.</p>
+                <InboundSetup />
+                <p className="pt-2 text-xs text-muted">Manual setup: in Plivo (Voice → Applications) use these URLs and attach the application to your number.</p>
                 {[['Answer URL', `${base}/api/plivo/answer`], ['Hangup URL', `${base}/api/plivo/hangup`]].map(([k, v]) => (
                   <div key={k} className="flex min-w-0 items-center gap-3 rounded-xl border border-border bg-surface-2 px-3 py-2">
                     <span className="hidden w-24 shrink-0 text-muted sm:block">{k}</span><code className="min-w-0 flex-1 truncate font-mono text-[13px]">{v}</code><span className="text-xs text-muted">POST</span>
@@ -90,5 +91,53 @@ export default function Settings() {
         </div>
       )}
     </>
+  )
+}
+
+type Inbound = { number: string; voice_enabled: boolean | null; app_id: string | null; app_name: string | null; answer_url: string
+  connected: boolean; expected_answer_url: string; previous_app: { app_id: string; app_name: string | null } | null }
+
+function InboundSetup() {
+  const qc = useQueryClient()
+  const confirm = useConfirm()
+  const { data: s, isLoading, error } = useQuery({ queryKey: ['system', 'inbound'], queryFn: () => api<Inbound>('/api/system/inbound'), staleTime: 15_000, retry: false })
+  const act = useMutation({
+    mutationFn: (action: 'connect' | 'restore') => api<Inbound>(`/api/system/inbound/${action}`, { method: 'POST' }),
+    onSuccess: (data, action) => {
+      qc.setQueryData(['system', 'inbound'], data)
+      toast.success(action === 'connect' ? `Inbound calls on ${data.number} now reach your agent` : `Restored ${data.app_name ?? 'the previous application'}`)
+    },
+    onError: (e) => toast.error('Plivo update failed', { description: e.message }),
+  })
+  const connect = async () => {
+    if (!s) return
+    const ok = await confirm({
+      title: `Route inbound calls on ${s.number} to your agent?`,
+      description: s.app_name ? `Calls to this number are handled by “${s.app_name}” today. It is saved and can be restored with one click.` : 'Plivo will send incoming calls on this number to this app.',
+      confirmLabel: 'Connect inbound',
+    })
+    if (ok) act.mutate('connect')
+  }
+  if (isLoading) return <Skeleton className="h-16" />
+  if (error || !s) return <p className="rounded-xl bg-warning-soft px-3 py-2 text-warning">Could not read the Plivo number: {(error as Error)?.message}</p>
+  const stale = !s.connected && s.app_name === 'psyber-voice-inbound'
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        {s.connected ? <CheckCircle2 className="size-5 text-success" /> : <CircleAlert className="size-5 text-warning" />}
+        <div className="min-w-0 flex-1">
+          <div className="font-bold">{s.number} · {s.connected ? 'inbound and outbound on this app' : 'outbound only'}</div>
+          <div className="truncate text-xs text-muted">
+            {s.connected ? 'Incoming calls are answered by your agent in real time.'
+              : stale ? 'Connected earlier, but the public URL changed (ngrok restart). Reconnect to update it.'
+              : `Incoming calls go to “${s.app_name ?? 'no application'}”.`}
+          </div>
+        </div>
+        {!s.connected && <Button variant="primary" loading={act.isPending && act.variables === 'connect'} onClick={connect}><PlugZap />{stale ? 'Reconnect' : 'Connect inbound'}</Button>}
+        {s.connected && <Badge tone="success" dot>Live</Badge>}
+        {s.previous_app && <Button loading={act.isPending && act.variables === 'restore'} onClick={() => act.mutate('restore')}>Restore “{s.previous_app.app_name ?? s.previous_app.app_id}”</Button>}
+      </div>
+      {s.voice_enabled === false && <p className="mt-2 text-xs text-danger">Voice is disabled on this number in Plivo.</p>}
+    </div>
   )
 }

@@ -93,7 +93,6 @@ def update_profile(values: dict, request: Request, agent_id: int = Depends(works
 
 class Preview(BaseModel):
     text: str = Field(min_length=1, max_length=600)
-    language: str | None = None
     speaker: str | None = None
 
 
@@ -117,12 +116,16 @@ class PlaygroundMessage(BaseModel):
     history: list[Turn] = []
     lead_id: int | None = None
     speak: bool = True
+    purpose: str | None = None  # "inbound" rehearses a customer calling in
 
 
 @router.post("/{agent_id}/playground")
 async def playground(body: PlaygroundMessage, agent_id: int = Depends(workspace)):
     """Talk to this agent in the browser exactly as it behaves on calls (same prompt, knowledge and voice)."""
     lead = (CRMService(agent_id).get(body.lead_id) if body.lead_id else None) or {"name": "Test Prospect"}
+    goal = agent.call_goal(lead, body.purpose)
+    if goal:
+        lead = {**lead, "call_purpose": body.purpose, "call_goal": goal}
     history = [t.model_dump() for t in body.history]
     try:
         result = await asyncio.to_thread(agent.respond, agent_id, history, body.message, lead)
@@ -140,8 +143,11 @@ async def playground(body: PlaygroundMessage, agent_id: int = Depends(workspace)
 
 
 @router.get("/{agent_id}/greeting")
-def greeting_preview(lead_id: int | None = None, language: str = "en-IN", agent_id: int = Depends(workspace)):
-    lead = (CRMService(agent_id).get(lead_id) if lead_id else None) or {"name": "Rahul"}
+def greeting_preview(lead_id: int | None = None, language: str = "en-IN", purpose: str | None = None,
+                     agent_id: int = Depends(workspace)):
+    lead = (CRMService(agent_id).get(lead_id) if lead_id else None) or ({} if purpose == "inbound" else {"name": "Rahul"})
+    if purpose in ("inbound", "confirm_meeting", "follow_up"):
+        lead = {**lead, "call_purpose": purpose}
     return {"text": agent.greeting(agent_id, lead, language)}
 
 

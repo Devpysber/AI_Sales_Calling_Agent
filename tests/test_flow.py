@@ -149,6 +149,16 @@ def test_inbound_routes_by_dialled_number(client):
     assert "<GetInput" in xml
     calls = client.get(f"/api/agents/{agent['id']}/calls").json()["items"]
     assert calls and calls[0]["direction"] == "inbound"
+    # Inbound callers hear a "thanks for calling" greeting, not the outbound pitch
+    from app.core.database import get_db
+    from app.models.call import Call
+    from app.services import call_session
+    with get_db() as db:
+        session_id = db.get(Call, calls[0]["id"]).session_id
+    first = call_session.get(session_id)["history"][0]["text"]
+    assert "thank" in first.lower() or "धन्यवाद" in first
+    preview = client.get(f"/api/agents/{agent['id']}/greeting", params={"language": "en-IN", "purpose": "inbound"}).json()["text"]
+    assert preview.lower().startswith("thank you for calling")
 
 
 def test_signature_enforced(client, monkeypatch):

@@ -54,6 +54,61 @@ class PlivoService:
             # Not answered yet: cancel the outbound request instead
             self.client.calls.cancel(uuid)
 
+    # ---------------- inbound routing ----------------
+
+    INBOUND_APP = "psyber-voice-inbound"
+
+    @staticmethod
+    def _app_id(ref: str | None) -> str | None:
+        """'/v1/Account/X/Application/123/' -> '123'."""
+        parts = [p for p in (ref or "").split("/") if p]
+        return parts[-1] if parts else None
+
+    def inbound_status(self, number: str | None = None) -> dict:
+        number = "".join(c for c in (number or settings.plivo_phone_number) if c.isdigit())
+        num = self.client.numbers.get(number)
+        app_id = self._app_id(getattr(num, "application", None))
+        app = self.client.applications.get(app_id) if app_id else None
+        answer_url = getattr(app, "answer_url", "") if app else ""
+        expected = self.webhook("answer")
+        from app.services.settings_service import SettingsService
+        previous = SettingsService().get_state(f"plivo_previous_app.{number}")
+        return {
+            "number": "+" + number, "voice_enabled": getattr(num, "voice_enabled", None),
+            "app_id": app_id, "app_name": getattr(app, "app_name", None) if app else None, "answer_url": answer_url,
+            "connected": answer_url == expected, "expected_answer_url": expected,
+            "previous_app": previous,
+        }
+
+    def connect_inbound(self, number: str | None = None) -> dict:
+        """Point the number at this app's webhooks. The app it used before is remembered so it can be restored."""
+        from app.services.settings_service import SettingsService
+        number = "".join(c for c in (number or settings.plivo_phone_number) if c.isdigit())
+        status = self.inbound_status(number)
+        urls = dict(answer_url=self.webhook("answer"), answer_method="POST",
+                    hangup_url=self.webhook("hangup"), hangup_method="POST")
+        ours = next((a for a in self.client.applications.list(limit=50) if getattr(a, "app_name", "") == self.INBOUND_APP), None)
+        if ours:
+            self.client.applications.update(ours.app_id, **urls)
+            app_id = ours.app_id
+        else:
+            app_id = self.client.applications.create(app_name=self.INBOUND_APP, **urls).app_id
+        if status["app_id"] and status["app_id"] != app_id and not status["previous_app"]:
+            SettingsService().set_state(f"plivo_previous_app.{number}", {"app_id": status["app_id"], "app_name": status["app_name"]})
+        self.client.numbers.update(number, app_id=app_id)
+        return self.inbound_status(number)
+
+    def restore_inbound(self, number: str | None = None) -> dict:
+        from app.services.settings_service import SettingsService
+        number = "".join(c for c in (number or settings.plivo_phone_number) if c.isdigit())
+        state = SettingsService()
+        previous = state.get_state(f"plivo_previous_app.{number}")
+        if not previous:
+            raise ValueError("No previous Plivo application was saved for this number.")
+        self.client.numbers.update(number, app_id=previous["app_id"])
+        state.set_state(f"plivo_previous_app.{number}", None)
+        return self.inbound_status(number)
+
     def health(self) -> dict:
         account = self.client.account.get()
         number = self.client.numbers.get(self.caller_id())

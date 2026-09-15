@@ -41,6 +41,9 @@ def call_goal(lead: dict, purpose: str | None) -> str | None:
     if purpose == "confirm_meeting" and lead.get("meeting_at"):
         return (f"Confirm the booked meeting on {lead['meeting_at']} (IST). Ask if that time still works; "
                 "if not, agree a new day and time and repeat it back. Do not pitch again. Keep the call under a minute.")
+    if purpose == "inbound":
+        return ("The customer called us. Thank them, find out what they need, answer from the knowledge base, "
+                "and move them to the call to action. Ask their name if you do not know it.")
     if purpose == "follow_up":
         return "This is the follow-up the customer asked for. Refer to the previous call summary and continue from there."
     return None
@@ -60,6 +63,11 @@ def spoken_datetime(value: str, hindi: bool) -> str:
     return f"{day} at {dt.strftime('%I:%M %p').lstrip('0')}"
 
 
+INBOUND_GREETING = {"en": "Thank you for calling {company}, this is {agent}. How can I help you today?",
+                    "hi": "{company} में call करने के लिए धन्यवाद, मैं {agent} बोल रहा हूँ। मैं आपकी क्या मदद कर सकता हूँ?"}
+INBOUND_GREETING_NAMED = {"en": "Hi {name}, thank you for calling {company}, this is {agent}. How can I help you today?",
+                          "hi": "नमस्ते {name}, {company} में call करने के लिए धन्यवाद, मैं {agent} बोल रहा हूँ। बताइए, मैं आपकी क्या मदद कर सकता हूँ?"}
+
 GREETING_SUFFIX = {
     "confirm_meeting": {"hi": "आपकी {meeting} की meeting confirm करने के लिए call किया है।",
                         "en": "I'm calling to confirm your meeting on {meeting}."},
@@ -74,6 +82,8 @@ def greeting(agent_id: int, lead: dict, language: str) -> str:
         name = ""
     english = language.startswith("en")
     template = persona["greeting_en"] if english else persona["greeting_hi"]
+    if lead.get("call_purpose") == "inbound":
+        template = INBOUND_GREETING["en" if english else "hi"] if not name else INBOUND_GREETING_NAMED["en" if english else "hi"]
     values = {"name": name, "agent": persona["agent_name"], "company": persona["company_name"]}
     # Unknown or malformed placeholders are left as typed instead of crashing the call.
     text = re.sub(r"\{(\w+)\}", lambda m: values.get(m.group(1), m.group(0)), template)

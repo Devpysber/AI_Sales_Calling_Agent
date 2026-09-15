@@ -10,7 +10,7 @@ import { QualificationBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, Field, Input, PageHeader, Select, Skeleton, Switch, Tabs, Textarea } from '@/components/ui'
 import { api } from '@/lib/api'
 import type { AgentProfile, AgentTurnResult, KnowledgeDoc, Lead, Page, Turn } from '@/lib/types'
-import { cn, titleCase } from '@/lib/utils'
+import { cn, LANGUAGES, titleCase } from '@/lib/utils'
 import { useAgent } from '@/lib/agent'
 
 type ProfileResponse = { profile: AgentProfile; voices: string[]; languages: Record<string, string> }
@@ -18,15 +18,30 @@ type KnowledgeResponse = { documents: KnowledgeDoc[]; stats: { chunks: number; d
 type Section = 'playground' | 'persona' | 'playbook'
 
 const PLACEHOLDERS = ['name', 'agent', 'company']
-const QUICK_REPLIES = [
-  'Yes, go ahead.',
-  'What exactly do you offer?',
-  'How much does it cost?',
-  'Send me details on email.',
-  'I am busy, call me later.',
-  'Not interested.',
-  'हाँ बताइए, क्या सर्विस है?',
-]
+type CoverageTopics = Record<string, { summary: string }>
+
+/** Prospect lines to rehearse, built from this agent's knowledge, objections and call to action. */
+function quickReplies(profile: AgentProfile, topics: CoverageTopics, hindi: boolean, inbound: boolean): string[] {
+  const has = (k: string) => Boolean(topics[k]?.summary)
+  const c = profile.company_name || 'your company'
+  const out: string[] = hindi
+    ? [inbound ? `हाँ, मुझे ${c} के बारे में जानना था।` : 'हाँ बोलिए, क्या बात है?', `${c} क्या करती है?`]
+    : [inbound ? `Hi, I wanted to know more about ${c}.` : 'Yes, go ahead.', `What does ${c} do exactly?`]
+  if (has('services')) out.push(hindi ? 'आपकी सर्विसेज़ में क्या-क्या आता है?' : 'Which services do you offer?')
+  if (has('pricing')) out.push(hindi ? 'इसका खर्चा कितना है?' : 'How much does it cost?')
+  if (has('proof')) out.push(hindi ? 'किसी क्लाइंट का उदाहरण बताइए।' : 'Can you share a client example?')
+  if (has('faq')) out.push(hindi ? 'इसमें कितना समय लगता है?' : 'How long does it take?')
+  // Rehearse the objections this agent's playbook prepares for
+  for (const line of (profile.objection_handling || '').split('\n').slice(0, 3)) {
+    const topic = line.split(':')[0]?.trim().toLowerCase() ?? ''
+    if (/price|cost|expensive|budget/.test(topic)) out.push(hindi ? 'यह बहुत महंगा है।' : 'That sounds expensive.')
+    else if (/vendor|already|competitor/.test(topic)) out.push(hindi ? 'हमारे पास पहले से एक वेंडर है।' : 'We already have a vendor.')
+    else if (/email|details|send/.test(topic)) out.push(hindi ? 'मुझे ईमेल पर डिटेल्स भेज दीजिए।' : 'Just send me details on email.')
+  }
+  if (profile.call_to_action) out.push(hindi ? 'ठीक है, कल सुबह 11 बजे बात कर लेते हैं।' : 'Okay, let us do it tomorrow at 11 am.')
+  out.push(hindi ? 'अभी बिज़ी हूँ, बाद में कॉल कीजिए।' : 'I am busy, call me later.', hindi ? 'मुझे इंटरेस्ट नहीं है।' : 'Not interested.')
+  return [...new Set(out)]
+}
 
 const unknownPlaceholders = (t: string) =>
   [...t.matchAll(/\{(\w*)\}/g)].map((m) => m[1]!).filter((p) => !PLACEHOLDERS.includes(p))
@@ -330,7 +345,11 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
   const { base } = useAgent()
   const [history, setHistory] = useState<ChatTurn[]>([])
   const [text, setText] = useState('')
-  const [lang, setLang] = useState('en-IN')
+  const [lang, setLang] = useState(profile.default_language || 'en-IN')
+  const [direction, setDirection] = useState<'outbound' | 'inbound'>('outbound')
+  const inbound = direction === 'inbound'
+  const coverage = useQuery({ queryKey: ['knowledge'], queryFn: () => api<{ coverage?: { topics: CoverageTopics } }>(`${base}/knowledge`), staleTime: 60_000 })
+  const suggestions = quickReplies(profile, coverage.data?.coverage?.topics ?? {}, lang !== 'en-IN', direction === 'inbound')
   const [leadId, setLeadId] = useState<number | ''>('')
   const [speak, setSpeak] = useState(true)
   const [listening, setListening] = useState(false)
@@ -346,8 +365,8 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
   const lead = leads.data?.items.find((l) => l.id === leadId)
 
   const greeting = useQuery({
-    queryKey: ['agent', 'greeting', lang, leadId, profile],
-    queryFn: () => api<{ text: string }>(`${base}/greeting`, { params: { language: lang, lead_id: leadId || undefined } }),
+    queryKey: ['agent', 'greeting', lang, leadId, direction, profile],
+    queryFn: () => api<{ text: string }>(`${base}/greeting`, { params: { language: lang, lead_id: leadId || undefined, purpose: inbound ? 'inbound' : undefined } }),
   })
   useEffect(() => { if (greeting.data && history.length === 0) setHistory([{ role: 'assistant', text: greeting.data.text }]) }, [greeting.data, history.length])
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }) }, [history])
@@ -357,7 +376,7 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
 
   const send = useMutation({
     mutationFn: ({ message, prior }: { message: string; prior: ChatTurn[] }) => api<AgentTurnResult>(`${base}/playground`, {
-      method: 'POST', json: { message, speak, lead_id: leadId || undefined, history: prior.map(({ role, text }) => ({ role, text })) },
+      method: 'POST', json: { message, speak, lead_id: leadId || undefined, purpose: inbound ? 'inbound' : undefined, history: prior.map(({ role, text }) => ({ role, text })) },
     }),
     onSuccess: (res) => {
       setHistory((h) => { setSelected(h.length); return [...h, { role: 'assistant', text: res.reply, meta: res }] })
@@ -412,16 +431,24 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
       <Card className="flex h-[calc(100vh-290px)] min-h-[540px] flex-col overflow-hidden">
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-          <div className="mr-auto min-w-0">
-            <div className="text-sm font-semibold">Rehearsal call</div>
-            <div className="text-xs text-muted">Same prompt, knowledge and voice as a live call · nothing is saved to the CRM</div>
+          <div className="mr-auto flex min-w-0 items-center gap-2.5">
+            <span className="relative grid size-9 shrink-0 place-items-center rounded-xl bg-brand text-sm font-bold text-brand-fg">
+              {(profile.agent_name || 'A').slice(0, 1)}
+              <span className={cn('absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-surface', send.isPending ? 'animate-pulse bg-warning' : 'bg-success')} />
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">{profile.agent_name} · {profile.company_name}</div>
+              <div className="truncate text-xs text-muted">{inbound ? 'Rehearsing an inbound call' : 'Rehearsing an outbound call'} · voice {titleCase(profile.voice_speaker)} · nothing is saved to the CRM</div>
+            </div>
           </div>
+          <Tabs value={direction} onChange={(v) => { setDirection(v); setHistory([]); setSelected(null); setEnded(false) }}
+            items={[{ value: 'outbound', label: 'Outbound' }, { value: 'inbound', label: 'Inbound' }]} />
           <Select value={leadId} onChange={(e) => { setLeadId(e.target.value ? Number(e.target.value) : ''); reset() }} className="h-8 w-auto max-w-44 text-[13px]" aria-label="Prospect">
             <option value="">Sample prospect</option>
             {leads.data?.items.map((l) => <option key={l.id} value={l.id}>{l.name || l.phone}</option>)}
           </Select>
           <Select value={lang} onChange={(e) => { setLang(e.target.value); setHistory([]); setSelected(null); setEnded(false) }} className="h-8 w-auto text-[13px]" aria-label="Greeting language">
-            <option value="en-IN">English</option><option value="hi-IN">Hindi</option>
+            {Object.entries(LANGUAGES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </Select>
           <label className="flex h-8 items-center gap-2 rounded-lg border border-border px-2 text-[13px] text-muted"><Volume2 className="size-3.5" />Voice<Switch checked={speak} onChange={setSpeak} label="Speak replies" /></label>
           <Button size="sm" variant="ghost" onClick={copyTranscript} disabled={history.length < 2} aria-label="Copy transcript"><Copy /></Button>
@@ -478,9 +505,9 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
         </div>
 
         <div className="border-t border-border">
-          {!ended && history.length <= 2 && (
+          {!ended && history.length <= 6 && (
             <div className="flex gap-1.5 overflow-x-auto px-3 pt-3">
-              {QUICK_REPLIES.map((q) => <button key={q} type="button" disabled={send.isPending} onClick={() => submit(q)} className="shrink-0 rounded-full border border-border px-3 py-1 text-[13px] text-fg-2 transition hover:border-brand hover:text-brand disabled:opacity-50">{q}</button>)}
+              {suggestions.map((q) => <button key={q} type="button" disabled={send.isPending} onClick={() => submit(q)} className="shrink-0 rounded-full border border-border px-3 py-1 text-[13px] text-fg-2 transition hover:border-brand hover:text-brand disabled:opacity-50">{q}</button>)}
             </div>
           )}
           <form onSubmit={(e) => { e.preventDefault(); submit(text) }} className="flex items-center gap-2 p-3">

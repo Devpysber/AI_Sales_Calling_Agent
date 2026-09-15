@@ -218,8 +218,9 @@ class CallService:
         lead = CRMService(agent_id).find_by_phone(from_number)
         persona = agents.get_profile(agent_id)
         language = (lead or {}).get("language") or persona["default_language"]
-        session = call_session.create(agent_id=agent_id, lead_id=lead and lead["id"], lead=lead or {"phone": from_number},
-                                      language=language)
+        context = {**(lead or {"phone": from_number}), "call_purpose": "inbound"}
+        context["call_goal"] = agent.call_goal(context, "inbound")
+        session = call_session.create(agent_id=agent_id, lead_id=lead and lead["id"], lead=context, language=language)
         with get_db() as db:
             call = Call(agent_id=agent_id, lead_id=lead and lead["id"], session_id=session["id"], direction="inbound",
                         trigger="inbound", from_number="+" + from_number.lstrip("+"), to_number="+" + to_number.lstrip("+"),
