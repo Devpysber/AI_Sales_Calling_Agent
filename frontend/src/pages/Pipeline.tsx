@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Ban, Building2, CalendarClock, Columns3, Flame, GripVertical, PhoneCall, Search } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { Ban, Building2, CalendarClock, ChevronLeft, ChevronRight, Columns3, Flame, GripVertical, PhoneCall, Search } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useStartCall } from '@/components/LeadSheets'
@@ -78,6 +78,40 @@ export default function Pipeline() {
   const [scope, setScope] = useState<'open' | 'all'>('open')
   const [dragging, setDragging] = useState<{ id: number; from: string } | null>(null)
   const [over, setOver] = useState<string | null>(null)
+  const boardRef = useRef<HTMLDivElement>(null)
+  const pointer = useRef<{ x: number; y: number; column: HTMLElement | null } | null>(null)
+
+  // While dragging, scroll the board near its left/right edge and a column near its top/bottom (faster closer to the edge)
+  useEffect(() => {
+    if (!dragging) return
+    let frame = 0
+    const EDGE = 90, MAX = 22
+    const tick = () => {
+      const board = boardRef.current, p = pointer.current
+      if (board && p) {
+        const r = board.getBoundingClientRect()
+        const left = p.x - r.left, right = r.right - p.x
+        if (left < EDGE) board.scrollLeft -= Math.ceil(MAX * (1 - Math.max(left, 0) / EDGE))
+        else if (right < EDGE) board.scrollLeft += Math.ceil(MAX * (1 - Math.max(right, 0) / EDGE))
+        const col = p.column
+        if (col) {
+          const c = col.getBoundingClientRect()
+          const top = p.y - c.top, bottom = c.bottom - p.y
+          if (top < 60) col.scrollTop -= Math.ceil(14 * (1 - Math.max(top, 0) / 60))
+          else if (bottom < 60) col.scrollTop += Math.ceil(14 * (1 - Math.max(bottom, 0) / 60))
+        }
+      }
+      frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    const track = (e: DragEvent) => {
+      const el = (e.target as HTMLElement | null)?.closest?.('[data-column-scroll]') as HTMLElement | null
+      pointer.current = { x: e.clientX, y: e.clientY, column: el }
+    }
+    window.addEventListener('dragover', track)
+    return () => { cancelAnimationFrame(frame); window.removeEventListener('dragover', track); pointer.current = null }
+  }, [dragging])
+  const scrollBoard = (dir: 1 | -1) => boardRef.current?.scrollBy({ left: dir * 340, behavior: 'smooth' })
 
   const board = useQuery({
     queryKey: ['leads', 'board', search, qualification],
@@ -148,7 +182,13 @@ export default function Pipeline() {
       </PageHeader>
 
       {/* Stacked on phones; from tablets up one row of full-detail columns with an outer horizontal scrollbar */}
-      <div className="-mx-4 overflow-x-auto px-4 pb-4 [scrollbar-width:thin] sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+      <div className="mb-2 hidden items-center justify-end gap-1 sm:flex">
+        <span className="mr-2 text-xs text-muted">Drag a card to a board edge to scroll</span>
+        <button type="button" onClick={() => scrollBoard(-1)} aria-label="Scroll left" className="grid size-8 place-items-center rounded-lg border border-border bg-surface text-fg-2 hover:text-fg"><ChevronLeft className="size-4" /></button>
+        <button type="button" onClick={() => scrollBoard(1)} aria-label="Scroll right" className="grid size-8 place-items-center rounded-lg border border-border bg-surface text-fg-2 hover:text-fg"><ChevronRight className="size-4" /></button>
+      </div>
+      <div ref={boardRef} onDragEnd={() => { setDragging(null); setOver(null) }}
+        className="-mx-4 overflow-x-auto px-4 pb-4 [scrollbar-width:thin] sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
         <div className="flex flex-col gap-4 sm:w-max sm:flex-row">
           {columns.map((stage) => {
             const col = data?.[stage]
@@ -170,7 +210,7 @@ export default function Pipeline() {
                   {hot > 0 && <span className="flex items-center gap-0.5 text-[11px] font-bold text-danger"><Flame className="size-3" />{hot}</span>}
                   <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] font-bold tabular-nums ring-1 ring-border">{col?.total ?? '…'}</span>
                 </div>
-                <div className="flex max-h-[70vh] min-h-24 flex-col gap-2.5 overflow-y-auto px-2.5 pb-3 [scrollbar-width:thin] sm:min-h-40 sm:max-h-[calc(100vh-300px)]">
+                <div data-column-scroll className="flex max-h-[70vh] min-h-24 flex-col gap-2.5 overflow-y-auto px-2.5 pb-3 [scrollbar-width:thin] sm:min-h-40 sm:max-h-[calc(100vh-300px)]">
                   {board.isLoading ? [0, 1].map((i) => <Skeleton key={i} className="h-28" />)
                     : col?.items.length ? col.items.map((lead) => (
                       <LeadCard key={lead.id} lead={lead} onOpen={() => navigate(path(`/leads/${lead.id}`))}
