@@ -11,7 +11,7 @@ type Inbound = { number: string; voice_enabled: boolean | null; app_id: string |
 export default function InboundSetup() {
   const qc = useQueryClient()
   const confirm = useConfirm()
-  const { data: s, isLoading, error } = useQuery({ queryKey: ['system', 'inbound'], queryFn: () => api<Inbound>('/api/system/inbound'), staleTime: 15_000, retry: false })
+  const { data: s, isLoading, error } = useQuery({ queryKey: ['system', 'inbound'], queryFn: () => api<Inbound>('/api/system/inbound'), staleTime: 0, refetchOnMount: 'always', refetchInterval: 30_000, retry: false })
   const act = useMutation({
     mutationFn: (action: 'connect' | 'restore') => api<Inbound>(`/api/system/inbound/${action}`, { method: 'POST' }),
     onSuccess: (data, action) => {
