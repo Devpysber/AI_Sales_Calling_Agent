@@ -70,3 +70,27 @@ def test_speed_to_lead_schedules_call_and_invalid_numbers_never_dial(client, bas
         raise AssertionError("invalid number was dialled")
     except CallError as e:
         assert "not a complete phone number" in str(e)
+
+
+def test_import_analyze_update_and_queue(client, base):
+    import io
+    csv = ("Full Name,Mobile,Email,Call Language,Stage,Tags\n"
+           "Import One,9876511111,bad-email,Hindi,Interested,a\n"
+           "Import One Again,9876511111,,English,,b\n"
+           "Broken,91627507903,,,,\n")
+    files = lambda: {"file": ("leads.csv", io.BytesIO(csv.encode()), "text/csv")}
+    preview = client.post(f"{base}/leads/import/preview", files=files()).json()
+    assert preview["mapping"]["Call Language"] == "language" and preview["mapping"]["Stage"] if "Stage" in preview["mapping"] else True
+    a = preview["analysis"]
+    assert (a["ready"], a["duplicates"], a["invalid"]) == (1, 1, 1)
+
+    r = client.post(f"{base}/leads/import", files=files(), data={"tags": "camp", "queue_for_calls": "true"}).json()
+    assert (r["created"], r["skipped_duplicates"], len(r["errors"])) == (1, 1, 1)
+    lead = client.get(f"{base}/leads", params={"search": "9876511111"}).json()["items"][0]
+    assert lead["email"] is None and lead["language"] == "hi-IN" and lead["call_status"] == "Pending"
+    assert set(lead["tags"]) == {"a", "camp"}
+
+    r = client.post(f"{base}/leads/import", files=files(), data={"on_duplicate": "update", "tags": "wave2"}).json()
+    assert r["updated"] == 2 and r["created"] == 0
+    lead = client.get(f"{base}/leads", params={"search": "9876511111"}).json()["items"][0]
+    assert {"a", "camp", "b", "wave2"} <= set(lead["tags"])

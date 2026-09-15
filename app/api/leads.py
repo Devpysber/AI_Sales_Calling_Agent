@@ -110,20 +110,33 @@ def create(body: LeadIn, request: Request, agent_id: int = Depends(workspace)):
 async def import_preview(file: UploadFile = File(...), agent_id: int = Depends(workspace)):
     crm = CRMService(agent_id)
     df = _read(file, await file.read(), crm)
-    return {"rows": len(df), "columns": [str(c) for c in df.columns], "mapping": crm.map_columns(df.columns),
-            "sample": df.head(8).fillna("").to_dict("records")}
+    mapping = crm.map_columns(df.columns)
+    return {"rows": len(df), "columns": [str(c) for c in df.columns], "mapping": mapping,
+            "sample": df.head(8).fillna("").to_dict("records"), "analysis": crm.analyze_rows(df, mapping)}
+
+
+@router.post("/import/analyze")
+async def import_analyze(file: UploadFile = File(...), mapping: str = Form("{}"), agent_id: int = Depends(workspace)):
+    """Re-check rows after the user changes the column mapping."""
+    crm = CRMService(agent_id)
+    df = _read(file, await file.read(), crm)
+    column_map = {k: v for k, v in json.loads(mapping or "{}").items() if v}
+    return crm.analyze_rows(df, column_map or None)
 
 
 @router.post("/import")
 async def import_leads(request: Request, file: UploadFile = File(...), mapping: str = Form("{}"),
                        skip_duplicates: bool = Form(True), default_language: str = Form("en-IN"),
-                       source: str = Form("import"), tags: str = Form(""), agent_id: int = Depends(workspace)):
+                       source: str = Form("import"), tags: str = Form(""), on_duplicate: str = Form("skip"),
+                       queue_for_calls: bool = Form(False), agent_id: int = Depends(workspace)):
     crm = CRMService(agent_id)
     df = _read(file, await file.read(), crm)
     try:
         column_map = {k: v for k, v in json.loads(mapping or "{}").items() if v} or None
         return crm.import_rows(df, column_map, skip_duplicates,
-                               {"language": default_language, "source": source, "tags": tags or None}, actor(request))
+                               {"language": default_language, "source": source, "tags": tags or None}, actor(request),
+                               on_duplicate=on_duplicate if on_duplicate in ("skip", "update") else "skip",
+                               queue_for_calls=queue_for_calls)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

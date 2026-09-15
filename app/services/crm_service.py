@@ -4,6 +4,7 @@ Every instance is bound to one agent so leads never mix between agents.
 """
 
 import io
+import re
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -35,7 +36,7 @@ IMPORT_ALIASES = {
     "source": "source", "leadsource": "source",
     "tags": "tags", "tag": "tags",
     "notes": "notes", "note": "notes", "remarks": "notes", "comments": "notes",
-    "status": "status",
+    "status": "status", "stage": "status", "leadstage": "status", "leadstatus": "status",
 }
 
 LANGUAGE_NAMES = {"english": "en-IN", "hindi": "hi-IN", "bengali": "bn-IN", "tamil": "ta-IN", "telugu": "te-IN",
@@ -352,43 +353,96 @@ class CRMService:
                 mapping[str(col)] = IMPORT_ALIASES[key]
         return mapping
 
+    IMPORT_STATUSES = ("New", "Contacted", "Interested", "Follow Up", "Meeting Booked", "Closed Won", "Closed Lost", "Not Interested")
+
+    def _row_values(self, row: dict, mapping: dict, defaults: dict) -> tuple[dict | None, str | None]:
+        """Cleaned lead fields for one spreadsheet row, or an error explaining why it can't be imported."""
+        values = {field: _clean(row.get(col)) for col, field in mapping.items() if field}
+        phone = normalize_phone(values.get("phone"))
+        if not phone:
+            return None, f"Invalid phone: {values.get('phone') or '(empty)'}"
+        email = values.get("email")
+        if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            email = None  # keep the lead, drop the bad address
+        status = next((s for s in self.IMPORT_STATUSES if s.lower() == (values.get("status") or "").strip().lower()), "New")
+        tags = [t.strip() for t in f"{values.get('tags') or ''},{defaults.get('tags') or ''}".split(",") if t.strip()]
+        return {
+            "name": values.get("name"), "company": values.get("company"), "phone": phone, "email": email,
+            "city": values.get("city"), "language": normalize_language(values.get("language") or defaults.get("language")),
+            "source": values.get("source") or defaults.get("source") or "import",
+            "tags": ",".join(dict.fromkeys(tags)) or None, "notes": values.get("notes"), "status": status,
+        }, None
+
+    def analyze_rows(self, df: pd.DataFrame, mapping: dict | None = None) -> dict:
+        """Dry run for the preview: how many rows are new, duplicates (in the CRM or repeated in the file) or invalid."""
+        mapping = mapping or self.map_columns(df.columns)
+        if "phone" not in mapping.values():
+            return {"ready": 0, "duplicates": 0, "invalid": len(df), "row_status": []}
+        with get_db() as db:
+            existing = set(db.scalars(self._scoped(select(Lead.phone))))
+        seen, ready, duplicates, invalid, row_status = set(), 0, 0, 0, []
+        for i, row in enumerate(df.to_dict("records")):
+            values, error = self._row_values(row, mapping, {})
+            if error:
+                invalid += 1
+                state = {"state": "invalid", "detail": error}
+            elif values["phone"] in existing or values["phone"] in seen:
+                duplicates += 1
+                state = {"state": "duplicate", "detail": "Already in this agent's leads" if values["phone"] in existing else "Repeated in this file"}
+            else:
+                ready += 1
+                state = {"state": "ready", "detail": values["phone"]}
+            if values:
+                seen.add(values["phone"])
+            if i < 8:
+                row_status.append(state)
+        return {"ready": ready, "duplicates": duplicates, "invalid": invalid, "row_status": row_status}
+
     def import_rows(self, df: pd.DataFrame, mapping: dict | None = None, skip_duplicates: bool = True,
-                    defaults: dict | None = None, actor: str = "admin") -> dict:
+                    defaults: dict | None = None, actor: str = "admin", on_duplicate: str | None = None,
+                    queue_for_calls: bool = False) -> dict:
+        """on_duplicate: skip (default) or update (fill in the existing lead's empty fields, add tags and notes)."""
         if self.agent_id is None:
             raise ValueError("Leads must be imported into an agent.")
         mapping = mapping or self.map_columns(df.columns)
         if "phone" not in mapping.values():
             raise ValueError("Map one column to Phone.")
         defaults = defaults or {}
-        created, skipped, errors = 0, 0, []
+        on_duplicate = on_duplicate or ("skip" if skip_duplicates else "update")
+        created, updated, skipped, errors = 0, 0, 0, []
 
         with get_db() as db:
-            existing = set(db.scalars(self._scoped(select(Lead.phone))))  # duplicates are per agent
+            leads_by_phone = {l.phone: l for l in db.scalars(self._scoped(select(Lead)))}  # duplicates are per agent
             for i, row in enumerate(df.to_dict("records"), start=2):
-                values = {field: _clean(row.get(col)) for col, field in mapping.items() if field}
-                phone = normalize_phone(values.get("phone"))
-                if not phone:
-                    errors.append({"row": i, "error": f"Invalid phone: {values.get('phone') or '(empty)'}"})
+                values, error = self._row_values(row, mapping, defaults)
+                if error:
+                    errors.append({"row": i, "error": error})
                     continue
-                if skip_duplicates and phone in existing:
-                    skipped += 1
+                current = leads_by_phone.get(values["phone"])
+                if current is not None:
+                    if on_duplicate != "update":
+                        skipped += 1
+                        continue
+                    for field in ("name", "company", "email", "city", "source"):
+                        if values.get(field) and not getattr(current, field):
+                            setattr(current, field, values[field])
+                    if values.get("tags"):
+                        merged = [t for t in f"{current.tags or ''},{values['tags']}".split(",") if t.strip()]
+                        current.tags = ",".join(dict.fromkeys(merged))
+                    if values.get("notes") and values["notes"] not in (current.notes or ""):
+                        current.notes = "\n".join(x for x in (current.notes, values["notes"]) if x)
+                    updated += 1
                     continue
-                lead = Lead(
-                    agent_id=self.agent_id,
-                    name=values.get("name"), company=values.get("company"), phone=phone, email=values.get("email"),
-                    city=values.get("city"), language=normalize_language(values.get("language") or defaults.get("language")),
-                    source=values.get("source") or defaults.get("source") or "import",
-                    tags=values.get("tags") or defaults.get("tags"), notes=values.get("notes"),
-                    status=values.get("status") or "New", retry_count=0,
-                )
+                lead = Lead(agent_id=self.agent_id, retry_count=0, **values,
+                            call_status="Pending" if queue_for_calls else None)
                 db.add(lead)
-                existing.add(phone)
+                leads_by_phone[values["phone"]] = lead
                 created += 1
 
         events.record("lead.imported", f"Imported {created} lead(s)",
-                      f"{skipped} duplicates skipped · {len(errors)} invalid rows", agent_id=self.agent_id, actor=actor,
-                      data={"created": created, "skipped": skipped, "errors": len(errors)})
-        return {"created": created, "skipped_duplicates": skipped, "errors": errors[:500], "mapping": mapping}
+                      f"{updated} updated · {skipped} duplicates skipped · {len(errors)} invalid rows", agent_id=self.agent_id,
+                      actor=actor, data={"created": created, "updated": updated, "skipped": skipped, "errors": len(errors)})
+        return {"created": created, "updated": updated, "skipped_duplicates": skipped, "errors": errors[:500], "mapping": mapping}
 
     def export_csv(self) -> str:
         with get_db() as db:
