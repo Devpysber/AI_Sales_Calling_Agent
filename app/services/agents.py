@@ -88,6 +88,7 @@ PROFILE_DEFAULTS = {
     "after_hours_message": "",
     "forward_fallback": "ai",          # ai (agent takes the call) | message, when the team does not pick up
     "notify_missed_calls": True,       # email the admin when a forwarded call is missed
+    "inbound_collect": ["name", "requirement", "city"],  # details the agent asks new callers for, in order
     "record_calls": False,
     "detect_voicemail": False,
 }

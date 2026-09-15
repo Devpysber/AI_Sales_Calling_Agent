@@ -139,6 +139,7 @@ export interface AgentProfile {
   after_hours_message: string
   forward_fallback: 'ai' | 'message'
   notify_missed_calls: boolean
+  inbound_collect: string[]
 }
 
 export interface AutomationSettings {

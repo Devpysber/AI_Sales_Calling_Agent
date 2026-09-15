@@ -221,14 +221,17 @@ class CallService:
         crm = CRMService(agent_id)
         lead = crm.find_by_phone(from_number)
         if lead is None:
-            # Unknown caller: save them now so the conversation, summary and follow-ups attach to a real lead
+            # Unknown to this agent: reuse what another agent already knows about the number, then save the caller
+            known_elsewhere = CRMService(None).find_by_phone(from_number) or {}
+            seed = {k: known_elsewhere[k] for k in ("name", "company", "city", "email", "language") if known_elsewhere.get(k)}
             with contextlib.suppress(ValueError):
-                lead = crm.create({"phone": from_number, "source": "inbound call", "status": "New"}, actor="system")
+                lead = crm.create({**seed, "phone": from_number, "source": "inbound call", "status": "New"}, actor="system")
         persona = agents.get_profile(agent_id)
         language = (lead or {}).get("language") or persona["default_language"]
-        known = bool(lead and lead.get("name"))
-        context = {**(lead or {"phone": from_number}), "call_purpose": "inbound"}
-        context["call_goal"] = agent.call_goal(context, "inbound" if known else "inbound_new")
+        collect = persona.get("inbound_collect") or ["name", "requirement"]
+        missing = [f for f in collect if not (lead or {}).get(agent.COLLECT_FIELDS.get(f, f))]
+        context = {**(lead or {"phone": from_number}), "call_purpose": "inbound", "collect": collect}
+        context["call_goal"] = agent.call_goal(context, "inbound_new" if missing else "inbound")
         session = call_session.create(agent_id=agent_id, lead_id=lead and lead["id"], lead=context, language=language)
         with get_db() as db:
             call = Call(agent_id=agent_id, lead_id=lead and lead["id"], session_id=session["id"], direction="inbound",
@@ -313,6 +316,9 @@ class CallService:
                 value = str(s.get(key) or "").strip()
                 if value and not current.get(key) and len(value) <= 120:
                     updates[key] = value
+            extra = [f"{label}: {s[key]}" for key, label in (("budget", "Budget"), ("timeline", "Timeline")) if str(s.get(key) or "").strip()]
+            if extra and not all(e in (current.get("notes") or "") for e in extra):
+                updates["notes"] = "\n".join(x for x in (current.get("notes"), " · ".join(extra)) if x)
             callback_at = _valid_callback(s.get("callback_at"))
             if callback_at:
                 updates["callback_at"] = callback_at

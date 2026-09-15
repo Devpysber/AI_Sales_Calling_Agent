@@ -13,8 +13,8 @@ import type { AgentProfile, AutomationSettings, Call, Page } from '@/lib/types'
 import { cn, formatDuration, timeAgo } from '@/lib/utils'
 
 type ProfileResponse = { profile: AgentProfile }
-type Routing = Pick<AgentProfile, 'transfer_number' | 'inbound_mode' | 'transfer_on_request' | 'after_hours_mode' | 'after_hours_message' | 'forward_fallback' | 'notify_missed_calls'>
-const KEYS: (keyof Routing)[] = ['transfer_number', 'inbound_mode', 'transfer_on_request', 'after_hours_mode', 'after_hours_message', 'forward_fallback', 'notify_missed_calls']
+type Routing = Pick<AgentProfile, 'transfer_number' | 'inbound_mode' | 'transfer_on_request' | 'after_hours_mode' | 'after_hours_message' | 'forward_fallback' | 'notify_missed_calls' | 'inbound_collect'>
+const KEYS: (keyof Routing)[] = ['transfer_number', 'inbound_mode', 'transfer_on_request', 'after_hours_mode', 'after_hours_message', 'forward_fallback', 'notify_missed_calls', 'inbound_collect']
 
 export default function Inbound() {
   const { agent, base, path } = useAgent()
@@ -51,7 +51,7 @@ export default function Inbound() {
 
   const set = <K extends keyof Routing>(k: K, v: Routing[K]) => setForm((f) => (f ? { ...f, [k]: v } : f))
   const hasNumber = form.transfer_number.replace(/\D/g, '').length >= 10
-  const dirty = KEYS.some((k) => form[k] !== data.profile[k])
+  const dirty = KEYS.some((k) => JSON.stringify(form[k]) !== JSON.stringify(data.profile[k]))
   const cfg = automation.data?.settings
   const hours = cfg ? `${cfg.calling_hours_start}:00 – ${cfg.calling_hours_end}:00 IST` : '…'
 
@@ -132,7 +132,27 @@ export default function Inbound() {
           </Card>
 
           <Card>
-            <CardHeader title="3 · Who answers" description="Open hours come from the Automation page." />
+            <CardHeader title="3 · New callers" description="When an unknown number calls, the agent saves them as a lead, asks for these details one at a time (in this order), then helps. Names are saved the moment they're said." />
+            <div className="space-y-3 px-5 pb-5">
+              <div className="flex flex-wrap gap-2">
+                {([['name', 'Name'], ['requirement', 'What they need'], ['city', 'City'], ['company', 'Company'], ['email', 'Email'], ['budget', 'Budget'], ['timeline', 'Timeline']] as const).map(([k, l]) => {
+                  const list = form.inbound_collect ?? []
+                  const idx = list.indexOf(k)
+                  return (
+                    <button key={k} type="button" onClick={() => set('inbound_collect', idx >= 0 ? list.filter((x) => x !== k) : [...list, k])}
+                      className={cn('inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[13px] font-semibold transition',
+                        idx >= 0 ? 'border-fg bg-fg text-bg' : 'border-border text-fg-2 hover:border-border-strong')}>
+                      {idx >= 0 && <span className="grid size-4 place-items-center rounded-full bg-bg/20 text-[10px]">{idx + 1}</span>}{l}
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="text-xs text-muted">Keep it to 2–3 details: every question adds time to the call. Known callers skip details they already gave, and callers known to another agent are recognised.</p>
+            </div>
+          </Card>
+
+          <Card>
+            <CardHeader title="4 · Who answers" description="Open hours come from the Automation page." />
             <div className="grid gap-5 px-5 pb-5 md:grid-cols-2">
               <div className="space-y-2">
                 <div className="flex items-center gap-2 text-xs font-bold tracking-wide text-muted uppercase"><Clock className="size-3.5" />Open · {hours}</div>

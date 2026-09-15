@@ -173,6 +173,9 @@ def reminders() -> list[dict]:
                                          or_(Lead.call_status.is_(None), Lead.call_status.notin_(("Queued", "Ringing", "In Progress")))):
             add(agent_id, "unreachable", "warning", n, f"{n} lead{'s' if n > 1 else ''} unreachable after 3+ tries: try WhatsApp or email",
                 "/leads?view=attention", "Review")
+        for agent_id, n, _, _ in grouped(Lead.source == "inbound call", or_(Lead.name.is_(None), Lead.name == ""), Lead.do_not_call.is_(False)):
+            add(agent_id, "caller_unknown", "warning", n, f"{n} inbound caller{'s' if n > 1 else ''} still without a name: call back to complete",
+                "/leads?view=new_callers", "Complete details")
         for agent_id, n, _, _ in grouped(Lead.status.in_(("Interested", "Follow Up")), Lead.do_not_call.is_(False),
                                          or_(Lead.last_contacted_at.is_(None), Lead.last_contacted_at < datetime.utcnow() - timedelta(days=3)),
                                          or_(Lead.meeting_at.is_(None), Lead.meeting_at == "")):

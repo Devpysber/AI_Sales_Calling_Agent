@@ -127,3 +127,16 @@ def test_unknown_inbound_caller_becomes_lead_and_queue_dials(client, base, monke
 
 def test_voice_preview_accepts_language(client, base):
     assert client.post(f"{base}/voice-preview", json={"text": "नमस्ते", "language": "hi-IN"}).status_code == 200
+
+
+def test_inbound_collect_setting_and_cross_agent_recognition(client, base, monkeypatch):
+    agent_id = int(base.rsplit("/", 1)[1])
+    saved = client.put(f"{base}/profile", json={"inbound_collect": ["name", "email", "budget"]}).json()
+    assert saved["inbound_collect"] == ["name", "email", "budget"]
+
+    other = client.post("/api/agents", json={"name": "Second site"}).json()
+    client.post(f"/api/agents/{other['id']}/leads", json={"name": "Known Elsewhere", "phone": "9812300088", "city": "Delhi"})
+    monkeypatch.setattr("app.services.agents.for_inbound", lambda to, lead_agent_id=None: agent_id)
+    client.post("/api/plivo/answer", data={"From": "919812300088", "To": "918000000000", "CallUUID": "cross-1"})
+    lead = client.get(f"{base}/leads", params={"search": "9812300088"}).json()["items"][0]
+    assert lead["name"] == "Known Elsewhere" and lead["city"] == "Delhi" and lead["source"] == "inbound call"

@@ -78,3 +78,16 @@ def test_usage_cost_estimate(monkeypatch):
     u = usage(rows)
     assert u["cost"] == {"telephony": 2.0, "tts": 10.0, "stt": 15.0, "llm": 0.1}
     assert u["total_cost"] == 27.1 and u["cost_per_connected_call"] == 27.1 and u["rates_configured"]
+
+
+def test_spoken_name_and_collect_goal():
+    from app.services.agent import call_goal
+    from app.services.voice_stream import spoken_name
+
+    assert spoken_name("Hi, my name is Neha Gupta") == "Neha Gupta"
+    assert spoken_name("मेरा नाम नेहा है") == "नेहा"
+    assert spoken_name("मैं राहुल बोल रहा हूँ") == "राहुल"
+    assert spoken_name("I am interested") is None
+    goal = call_goal({"collect": ["name", "city"]}, "inbound_new")
+    assert "their name, their city" in goal
+    assert "complete" in call_goal({"collect": ["name"], "name": "Neha"}, "inbound_new")

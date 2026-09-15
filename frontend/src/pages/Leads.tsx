@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlertTriangle, ArrowDown, ArrowUp, ArrowUpRight, Ban, CalendarCheck, Clock, Download, Flame, Globe, ListPlus, PhoneCall, PhoneOff, Plus,
+  AlertTriangle, PhoneIncoming, ArrowDown, ArrowUp, ArrowUpRight, Ban, CalendarCheck, Clock, Download, Flame, Globe, ListPlus, PhoneCall, PhoneOff, Plus,
   Search, Sparkles, Trash2, Upload, Users, X,
 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
@@ -27,6 +27,7 @@ const VIEWS = [
   { id: 'hot_uncalled', label: 'Hot, not called', icon: Flame },
   { id: 'never_called', label: 'Never called', icon: Sparkles },
   { id: 'website', label: 'Website leads', icon: Globe },
+  { id: 'new_callers', label: 'New callers', icon: PhoneIncoming },
   { id: 'callbacks', label: 'Callbacks', icon: Clock },
   { id: 'meetings', label: 'Meetings', icon: CalendarCheck },
   { id: 'attention', label: 'Needs attention', icon: AlertTriangle },
@@ -162,7 +163,7 @@ export default function Leads() {
         {VIEWS.map(({ id, label, icon: Icon }) => {
           const active = filters.view === id
           const count = id ? views.data?.[id] : s?.total
-          if (id && !count && !active && ['attention', 'dnc', 'callbacks', 'website'].includes(id)) return null
+          if (id && !count && !active && ['attention', 'dnc', 'callbacks', 'website', 'new_callers'].includes(id)) return null
           return (
             <button key={id || 'all-views'} type="button" onClick={() => setFilters({ ...filters, view: id })}
               className={cn('flex shrink-0 items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[13px] font-semibold transition',

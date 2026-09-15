@@ -119,6 +119,8 @@ class CRMService:
         if view == "attention":  # needs a person: failed repeatedly, or unreachable number
             return query.where(or_(Lead.retry_count >= 3, (Lead.phone.like("+91%") & (func.length(Lead.phone) != 13))),
                                Lead.call_status.notin_(active))
+        if view == "new_callers":
+            return query.where(Lead.source == "inbound call")
         if view == "dnc":
             return query.where(Lead.do_not_call.is_(True))
         return query
@@ -126,7 +128,7 @@ class CRMService:
     def view_counts(self) -> dict:
         with get_db() as db:
             return {v: db.scalar(select(func.count()).select_from(self._view(self._scoped(select(Lead)), v).subquery())) or 0
-                    for v in ("website", "never_called", "hot_uncalled", "callbacks", "meetings", "attention", "dnc")}
+                    for v in ("website", "new_callers", "never_called", "hot_uncalled", "callbacks", "meetings", "attention", "dnc")}
 
     def list_leads(self, search=None, status=None, call_status=None, qualification=None, sort="id", order="desc",
                    page=1, page_size=25, view=None, source=None) -> dict:

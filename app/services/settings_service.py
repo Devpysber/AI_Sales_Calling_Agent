@@ -23,7 +23,8 @@ def coerce(defaults: dict, values: dict) -> dict:
         elif expected is int:
             value = int(value)
         elif expected is list:
-            value = [int(v) for v in value]
+            # lists of numbers (calling days) or of strings (fields to collect)
+            value = [int(v) for v in value] if all(isinstance(v, int) for v in defaults[key]) and defaults[key] else [str(v) for v in value]
         else:
             value = str(value)
         clean[key] = value

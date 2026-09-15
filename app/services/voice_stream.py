@@ -104,6 +104,25 @@ def requested_language(text: str) -> str | None:
     return hits[-1][1] if hits else None
 
 
+NAME_PATTERNS = [
+    re.compile(r"(?:my name is|i am|i'm|this is|name's)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)"),
+    re.compile(r"(?:मेरा नाम|मेरा नाम है)\s+([\u0900-\u097F]+(?:\s+[\u0900-\u097F]+)?)"),
+    re.compile(r"(?:मैं)\s+([\u0900-\u097F]{2,}(?:\s+[\u0900-\u097F]{2,})?)\s+(?:बोल रहा|बोल रही)"),
+]
+NOT_NAMES = {"है", "हूँ", "हूं", "interested", "busy", "fine", "good", "calling", "looking"}
+
+
+def spoken_name(text: str) -> str | None:
+    """A name the caller states about themselves ("my name is Neha", "मेरा नाम नेहा है"); None when unsure."""
+    for pattern in NAME_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            name = " ".join(w for w in m.group(1).split() if w.lower() not in NOT_NAMES and w not in NOT_NAMES).strip()
+            if 2 <= len(name) <= 40:
+                return name
+    return None
+
+
 def split_sentences(text: str) -> list[str]:
     parts = [p.strip() for p in SENTENCE_SPLIT.split(text.strip()) if p.strip()]
     return parts or [text.strip()]
@@ -760,12 +779,32 @@ class CallStream:
                 await asyncio.to_thread(CallService(self.agent_id).crm.update, self.session["lead_id"], {"language": language}, "ai",
                                         "lead.updated", f"Language switched to {tts.LANGUAGES[language]} on request")
 
+    async def capture_caller_details(self, text: str):
+        """New caller says their name: save it on the lead right away and let the agent use it from the next reply."""
+        lead = self.session.get("lead") or {}
+        if lead.get("name") or not self.session.get("lead_id"):
+            return
+        name = spoken_name(text)
+        if not name:
+            return
+        lead["name"] = name
+        collect = lead.get("collect")
+        if collect is not None:
+            lead["call_goal"] = agent.call_goal(lead, "inbound_new")
+        self.session["lead"] = lead
+        self.save_session()
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(CallService(self.agent_id).crm.update, self.session["lead_id"], {"name": name}, "ai",
+                                    "lead.updated", f"Caller introduced themselves as {name}")
+        self.publish({"type": "caller", "name": name})
+
     async def commit_turn(self):
         await asyncio.sleep(settings.turn_end_grace_ms / 1000)
         if self.caller_speaking or not self.heard:
             return
         text = " ".join(self.heard)
         self.heard = []
+        await self.capture_caller_details(text)
         wanted = requested_language(text)
         if wanted:
             await self.switch_language(wanted)

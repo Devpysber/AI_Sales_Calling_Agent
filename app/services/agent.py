@@ -36,15 +36,26 @@ TURN_SCHEMA = """{
 }""" % " | ".join(INTENTS)
 
 
+COLLECT_LABELS = {"name": "their name", "requirement": "what they are looking for", "city": "their city",
+                  "company": "their company or business", "email": "their email address", "budget": "their budget",
+                  "timeline": "when they need it"}
+COLLECT_FIELDS = {"requirement": "requirements"}
+
+
 def call_goal(lead: dict, purpose: str | None) -> str | None:
     """Instruction for a purpose-specific call (from the lead page's next best action)."""
     if purpose == "confirm_meeting" and lead.get("meeting_at"):
         return (f"Confirm the booked meeting on {lead['meeting_at']} (IST). Ask if that time still works; "
                 "if not, agree a new day and time and repeat it back. Do not pitch again. Keep the call under a minute.")
     if purpose == "inbound_new":
-        return ("A new caller not yet in our CRM. After greeting, politely ask their name, then what they are looking for "
-                "(and their city or company if it matters), one question at a time. Once you have their name and need, "
-                "help them from the knowledge base and move to the call to action. Use their name from then on.")
+        wanted = [COLLECT_LABELS[f] for f in (lead.get("collect") or ["name", "requirement"]) if f in COLLECT_LABELS
+                  and not lead.get(COLLECT_FIELDS.get(f, f))]
+        if not wanted:
+            return "The caller's details are complete. Help them from the knowledge base and move to the call to action."
+        return ("A new caller not yet in our CRM. Before going deep, collect these details naturally, ONE question per turn, "
+                f"in this order: {', '.join(wanted)}. Acknowledge each answer briefly. If they ask something first, answer it "
+                "in one sentence, then ask the next detail. Once collected, help them and move to the call to action. "
+                "Use their name once you know it. Never ask again for a detail they already gave.")
     if purpose == "inbound":
         return ("The customer called us. Thank them, find out what they need, answer from the knowledge base, "
                 "and move them to the call to action. Ask their name if you do not know it.")
@@ -360,6 +371,8 @@ Return ONLY JSON:
   "name": "customer's own name if they said it, else empty",
   "company": "customer's company or business if they said it, else empty",
   "city": "customer's city if they said it, else empty",
+  "budget": "customer's budget if they said it, else empty",
+  "timeline": "when the customer needs it if they said it, else empty",
   "qualification": "Hot | Warm | Cold",
   "outcome": "meeting_booked | interested | callback_requested | not_interested | do_not_call | wrong_person | no_conversation | other",
   "sentiment": "positive | neutral | negative",

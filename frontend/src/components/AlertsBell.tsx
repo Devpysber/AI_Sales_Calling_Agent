@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlertTriangle, BellRing, Bell, CalendarCheck, Clock, CreditCard, ExternalLink, Flame, PhoneOff, PlugZap, RefreshCw, Timer, X,
+  AlertTriangle, BellRing, Bell, UserRoundSearch as UserQuestion, CalendarCheck, Clock, CreditCard, ExternalLink, Flame, PhoneOff, PlugZap, RefreshCw, Timer, X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -16,7 +16,7 @@ type Summary = { items: Alert[]; snoozed: number; balances: Balance[]; checked_a
 
 const ICONS: Record<string, typeof Bell> = {
   callback_soon: Timer, callback: Clock, meeting_today: CalendarCheck, meeting_tomorrow: CalendarCheck, invalid_phone: PhoneOff,
-  unreachable: AlertTriangle, warm_idle: Flame, credit: CreditCard, inbound: PlugZap,
+  unreachable: AlertTriangle, warm_idle: Flame, credit: CreditCard, inbound: PlugZap, caller_unknown: UserQuestion,
 }
 const TONE: Record<Level, string> = { danger: 'text-danger bg-danger-soft', warning: 'text-warning bg-warning-soft', success: 'text-success bg-success-soft', info: 'text-fg-2 bg-surface-2' }
 const LEVEL_DOT = { ok: 'bg-success', low: 'bg-warning', critical: 'bg-danger', unknown: 'bg-muted' }
