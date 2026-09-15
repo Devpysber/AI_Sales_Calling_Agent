@@ -91,13 +91,15 @@ def _sarvam_synthesize_pcm(text: str, language: str | None = None, speaker: str 
     return pcm[44:] if pcm[:4] == b"RIFF" else pcm
 
 
-def cached_pcm(text: str, language: str, speaker: str) -> bytes:
-    """Content-addressed cache of phone-stream audio for fixed lines (greetings, prompts)."""
+def cached_pcm(text: str, language: str, speaker: str, usage: dict | None = None) -> bytes:
+    """Content-addressed cache of phone-stream audio for fixed lines (greetings, prompts). usage: billed chars on a miss."""
     key = "pcm:" + hashlib.sha256(f"{settings.tts_engine}|{settings.sarvam_tts_model}|{speaker}|{language}|{text}".encode()).hexdigest()[:40]
     audio = store.get_bytes(key)
     if audio is None:
         audio = synthesize_pcm(text, language, speaker)
         store.set_bytes(key, audio, ttl=CACHE_TTL)
+        if usage is not None:
+            usage["tts_chars"] = usage.get("tts_chars", 0) + len(text)
     return audio
 
 

@@ -2,8 +2,10 @@
 Email notifications via Resend (preferred) or SMTP; every attempt is logged to the activity feed.
 """
 
+import contextlib
 import smtplib
 from email.message import EmailMessage
+from email.utils import formataddr, parseaddr
 
 import httpx
 
@@ -32,8 +34,15 @@ def email_detail() -> str:
     return "Not configured: set RESEND_API_KEY and EMAIL_FROM (or SMTP_*). Reminders and reports are logged to Activity only."
 
 
-def _send_resend(to: str, subject: str, body: str):
-    payload = {"from": settings.email_from or settings.smtp_from, "to": [to], "subject": subject, "text": body}
+def sender(display_name: str | None = None) -> str:
+    """EMAIL_FROM with the display name replaced by the sending agent's company, e.g. "Skyline Realty <noreply@…>"."""
+    configured_name, address = parseaddr(settings.email_from or settings.smtp_from)
+    name = " ".join((display_name or "").replace("<", "").replace(">", "").split()) or configured_name
+    return formataddr((name, address)) if name else address
+
+
+def _send_resend(to: str, subject: str, body: str, from_: str):
+    payload = {"from": from_, "to": [to], "subject": subject, "text": body}
     if settings.email_reply_to:
         payload["reply_to"] = settings.email_reply_to
     res = httpx.post("https://api.resend.com/emails", json=payload, timeout=20,
@@ -42,9 +51,9 @@ def _send_resend(to: str, subject: str, body: str):
         raise RuntimeError(f"Resend {res.status_code}: {res.text[:200]}")
 
 
-def _send_smtp(to: str, subject: str, body: str):
+def _send_smtp(to: str, subject: str, body: str, from_: str):
     message = EmailMessage()
-    message["From"], message["To"], message["Subject"] = settings.smtp_from, to, subject
+    message["From"], message["To"], message["Subject"] = from_, to, subject
     if settings.email_reply_to:
         message["Reply-To"] = settings.email_reply_to
     message.set_content(body)
@@ -55,15 +64,23 @@ def _send_smtp(to: str, subject: str, body: str):
         smtp.send_message(message)
 
 
-def send_email(to: str, subject: str, body: str, lead_id: int | None = None) -> str:
+def send_email(to: str, subject: str, body: str, lead_id: int | None = None, agent_id: int | None = None) -> str:
+    """agent_id: the email is sent in that agent's name (its company, else the agent name)."""
     provider = email_provider()
+    display = None
+    if agent_id:
+        from app.services import agents
+        with contextlib.suppress(Exception):
+            display = agents.get_profile(agent_id).get("company_name") or (agents.get(agent_id) or {}).get("name")
+    from_ = sender(display)
     if provider is None:
         status = "logged only (email not configured)"
     else:
         try:
-            (_send_resend if provider == "resend" else _send_smtp)(to, subject, body)
+            (_send_resend if provider == "resend" else _send_smtp)(to, subject, body, from_)
             status = f"sent via {provider}"
         except Exception as e:
             status = f"failed: {e}"
-    events.record("email", f"Email to {to}: {subject}", status, lead_id=lead_id, data={"body": body[:2000]})
+    events.record("email", f"Email to {to}: {subject}", f"{status} · from {from_}", agent_id=agent_id, lead_id=lead_id,
+                  data={"body": body[:2000], "from": from_})
     return status

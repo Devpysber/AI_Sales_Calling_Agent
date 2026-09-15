@@ -8,7 +8,7 @@ import { api } from '@/lib/api'
 import { formatDate } from '@/lib/utils'
 
 type Profile = {
-  username: string; display_name: string; email: string; phone: string; role: string; company: string; timezone: string
+  username: string; login_email: string; display_name: string; email: string; phone: string; role: string; company: string; timezone: string
   password_source: 'dashboard' | 'environment'; password_changed_at: number | null
   last_login_at: number | null; last_login_ip: string | null; session_hours: number; api_token_enabled: boolean
 }
@@ -33,11 +33,15 @@ export default function ProfilePage() {
   const { data: p, isLoading } = useQuery({ queryKey: ['auth', 'profile'], queryFn: () => api<Profile>('/api/auth/profile') })
   const [form, setForm] = useState<Partial<Profile>>({})
   const [pw, setPw] = useState({ current: '', next: '', confirm: '' })
+  const [emailPw, setEmailPw] = useState('')
   useEffect(() => { if (p) setForm(p) }, [p])
 
   const save = useMutation({
     mutationFn: (body: Partial<Profile>) => api<Profile>('/api/auth/profile', { method: 'PUT', json: body }),
-    onSuccess: (data) => { qc.setQueryData(['auth', 'profile'], data); qc.invalidateQueries({ queryKey: ['me'] }); toast.success('Profile saved') },
+    onSuccess: (data) => {
+      qc.setQueryData(['auth', 'profile'], data); qc.invalidateQueries({ queryKey: ['me'] }); setEmailPw('')
+      toast.success('Profile saved', { description: data.login_email ? `Sign in with ${data.login_email}` : undefined })
+    },
     onError: (e) => toast.error('Could not save profile', { description: e.message }),
   })
   const changePw = useMutation({
@@ -56,8 +60,9 @@ export default function ProfilePage() {
   const submitProfile = (e: FormEvent) => {
     e.preventDefault()
     const { display_name, email, phone, role, company, timezone } = form
-    save.mutate({ display_name, email, phone, role, company, timezone })
+    save.mutate({ display_name, email, phone, role, company, timezone, ...(emailChanged ? { current_password: emailPw } : {}) } as Partial<Profile>)
   }
+  const emailChanged = Boolean(p) && (form.email ?? '').trim().toLowerCase() !== (p?.login_email ?? '')
   const score = strength(pw.next)
   const pwError = pw.confirm && pw.next !== pw.confirm ? 'Passwords do not match' : undefined
   const name = form.display_name || p?.username || 'Admin'
@@ -79,7 +84,7 @@ export default function ProfilePage() {
                   <div className="truncate text-sm text-muted">{form.role || 'Administrator'}{form.company ? ` · ${form.company}` : ''}</div>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     <Badge tone="success" dot>Full access</Badge>
-                    <Badge>@{p.username}</Badge>
+                    {p.login_email && <Badge>{p.login_email}</Badge>}
                   </div>
                 </div>
               </div>
@@ -87,9 +92,14 @@ export default function ProfilePage() {
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Display name"><Input value={form.display_name ?? ''} onChange={set('display_name')} placeholder="Ashish Sharma" maxLength={80} /></Field>
                   <Field label="Role / title"><Input value={form.role ?? ''} onChange={set('role')} placeholder="Sales operations lead" maxLength={60} /></Field>
-                  <Field label="Work email" hint="Used for daily reports if no other recipient is set.">
-                    <div className="relative"><Mail className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" /><Input type="email" className="pl-9" value={form.email ?? ''} onChange={set('email')} placeholder="you@company.com" maxLength={160} /></div>
+                  <Field label="Sign-in email *" hint={p.login_email ? 'You sign in with this email and your password.' : 'Set this now: you will sign in with email instead of a username.'}>
+                    <div className="relative"><Mail className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" /><Input type="email" required className="pl-9" value={form.email ?? ''} onChange={set('email')} placeholder="you@company.com" maxLength={160} /></div>
                   </Field>
+                  {emailChanged && (
+                    <Field label="Current password" hint="Required to set or change the sign-in email.">
+                      <Input type="password" autoComplete="current-password" required value={emailPw} onChange={(e) => setEmailPw(e.target.value)} />
+                    </Field>
+                  )}
                   <Field label="Phone">
                     <div className="relative"><Phone className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" /><Input type="tel" className="pl-9" value={form.phone ?? ''} onChange={set('phone')} placeholder="+91 98765 43210" maxLength={32} /></div>
                   </Field>
@@ -126,7 +136,7 @@ export default function ProfilePage() {
               <CardHeader title="Security" />
               <dl className="divide-y divide-border text-sm">
                 {[
-                  [<ShieldCheck key="i" className="size-4 text-success" />, 'Sign-in', 'Password · HttpOnly signed session cookie'],
+                  [<ShieldCheck key="i" className="size-4 text-success" />, 'Sign-in', `${p.login_email || 'Email not set yet'} · password`],
                   [<KeyRound key="i" className="size-4 text-muted" />, 'Password source', p.password_source === 'dashboard' ? 'Set in dashboard (hashed)' : 'Server environment'],
                   [<Clock key="i" className="size-4 text-muted" />, 'Session length', `${p.session_hours} hours, then sign in again`],
                   [<Clock key="i" className="size-4 text-muted" />, 'Last sign-in', `${fromEpoch(p.last_login_at)}${p.last_login_ip ? ` · ${p.last_login_ip}` : ''}`],
@@ -140,7 +150,7 @@ export default function ProfilePage() {
               </dl>
             </Card>
             <Card className="p-5 text-sm text-muted">
-              Signed in as <b className="text-fg">@{p.username}</b>. The username is set by <code>ADMIN_USERNAME</code> on the server.
+              Sign in with <b className="text-fg">{p.login_email || 'your email'}</b> and your password. Sessions use an HttpOnly signed cookie; the server can also preset the email with <code>ADMIN_EMAIL</code>.
             </Card>
           </div>
         </div>

@@ -163,9 +163,16 @@ export interface AnalyticsKpis {
   avg_latency_ms: number | null
 }
 
+export interface AnalyticsUsage {
+  metered_calls: number; tts_chars: number; stt_seconds: number; llm_requests: number; call_minutes: number
+  cost: { telephony: number; tts: number; stt: number; llm: number }; total_cost: number
+  cost_per_connected_call: number | null; rates_configured: boolean; currency: string
+}
+
 export interface AnalyticsReport {
   days: number
   kpis: AnalyticsKpis
+  usage?: AnalyticsUsage
   previous: AnalyticsKpis
   new_leads: number
   series: { date: string; calls: number; connected: number; meetings: number; talk_seconds: number }[]

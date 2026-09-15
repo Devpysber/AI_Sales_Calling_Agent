@@ -36,6 +36,10 @@ class Call(Base):
     outcome: Mapped[str | None] = mapped_column(String(64))  # meeting_booked | interested | not_interested | callback | ...
     recording_url: Mapped[str | None] = mapped_column(String(512))
     avg_latency_ms: Mapped[float | None] = mapped_column(Float)
+    # Billable usage (cost tracking): characters sent to TTS, audio seconds sent to STT, LLM requests
+    tts_chars: Mapped[int | None] = mapped_column(Integer)
+    stt_seconds: Mapped[float | None] = mapped_column(Float)
+    llm_requests: Mapped[int | None] = mapped_column(Integer)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
     answered_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -62,6 +66,7 @@ class Call(Base):
             "outcome": self.outcome,
             "recording_url": self.recording_url,
             "avg_latency_ms": self.avg_latency_ms,
+            "tts_chars": self.tts_chars, "stt_seconds": self.stt_seconds, "llm_requests": self.llm_requests,
             "created_at": iso(self.created_at),
             "answered_at": iso(self.answered_at),
             "ended_at": iso(self.ended_at),

@@ -58,3 +58,23 @@ def test_ai_stage_moves_forward_only():
     assert not _ai_may_move("Closed Won", "Not Interested")
     assert not _ai_may_move("Not Interested", "Contacted")
     assert _ai_may_move(None, "Contacted")
+
+
+def test_usage_cost_estimate(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.core.config import settings
+    from app.services.analytics import usage
+    from app.services.call_service import _usage_fields
+
+    assert _usage_fields({"tts_chars": 120.0, "stt_seconds": 33.333, "llm_requests": 4}) == {"tts_chars": 120, "stt_seconds": 33.3, "llm_requests": 4}
+    assert _usage_fields(None) == {}
+    monkeypatch.setattr(settings, "cost_per_call_minute", 1.0)
+    monkeypatch.setattr(settings, "cost_per_10k_tts_chars", 10.0)
+    monkeypatch.setattr(settings, "cost_per_stt_hour", 30.0)
+    monkeypatch.setattr(settings, "cost_per_llm_request", 0.01)
+    rows = [SimpleNamespace(status="Completed", duration=120, tts_chars=10_000, stt_seconds=1800, llm_requests=10),
+            SimpleNamespace(status="No Answer", duration=0, tts_chars=0, stt_seconds=0, llm_requests=0)]
+    u = usage(rows)
+    assert u["cost"] == {"telephony": 2.0, "tts": 10.0, "stt": 15.0, "llm": 0.1}
+    assert u["total_cost"] == 27.1 and u["cost_per_connected_call"] == 27.1 and u["rates_configured"]

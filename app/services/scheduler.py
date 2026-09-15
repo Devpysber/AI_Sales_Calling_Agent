@@ -86,7 +86,7 @@ def job_meeting_reminder(agent_id, cfg, force=False):
             send_email(lead["email"], f"Reminder: your meeting with {persona['company_name']} tomorrow",
                        f"Hi {lead['name'] or 'there'},\n\nThis is a reminder of your meeting with {persona['company_name']} "
                        f"on {lead['meeting_at']} IST.\n\nRegards,\n{persona['agent_name']}\n{persona['company_name']}",
-                       lead_id=lead["id"])
+                       lead_id=lead["id"], agent_id=agent_id)
             sent += 1
     return f"{sent} reminder(s) sent for {tomorrow}"
 
@@ -102,7 +102,7 @@ def job_daily_report(agent_id, cfg, force=False):
             f"Talk time: {calls['today']['talk_seconds'] // 60} min\n"
             f"Leads: {crm['total']} · Pending: {crm['pending']} · Meetings: {crm['meetings']}\n"
             f"Hot {q.get('Hot', 0)} · Warm {q.get('Warm', 0)} · Cold {q.get('Cold', 0)}\n")
-    return send_email(cfg["daily_report_email"], f"{name}: voice agent daily report", body)
+    return send_email(cfg["daily_report_email"], f"{name}: voice agent daily report", body, agent_id=agent_id)
 
 
 JOBS = {"auto_dial": job_auto_dial, "retry_calls": job_retry_calls, "callbacks": job_callbacks,

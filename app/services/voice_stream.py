@@ -400,6 +400,7 @@ class CallStream:
         self.quiet_since = time.monotonic()
         self.silent_prompts = 0
         self.closed = False
+        self.usage = {"tts_chars": 0, "stt_seconds": 0.0, "llm_requests": 0, **((self.session or {}).get("usage") or {})}
         self.speech_ended_at: float | None = None
 
         # Live supervision
@@ -409,6 +410,10 @@ class CallStream:
         self.monitors: dict[asyncio.Queue, dict] = {}
 
     # ----- plumbing -----
+
+    def meter(self, key: str, amount: float = 1):
+        """Billable usage for cost tracking; saved on the call record when it ends."""
+        self.usage[key] = self.usage.get(key, 0) + amount
 
     def lang_key(self) -> str:
         return "hi" if (self.session.get("language") or "").startswith("hi") else "en"
@@ -484,6 +489,7 @@ class CallStream:
             await self.interrupt(force=True)
             language = tts.detect_language(text, self.session.get("language") or "en-IN")
             pcm = await asyncio.to_thread(tts.synthesize_pcm, text, language, self.persona.get("voice_speaker"))
+            self.meter("tts_chars", len(text))
             await self.play_pcm(pcm)
             self.turn("assistant", text, by=by)
             self.save_session()
@@ -520,7 +526,7 @@ class CallStream:
 
     async def say_fixed(self, text: str, hangup: bool = False):
         language = tts.detect_language(text, self.session.get("language") or "en-IN")
-        pcm = await asyncio.to_thread(tts.cached_pcm, text, language, self.persona.get("voice_speaker"))
+        pcm = await asyncio.to_thread(tts.cached_pcm, text, language, self.persona.get("voice_speaker"), self.usage)
         await self.play_pcm(pcm)
         await self.checkpoint(hangup=hangup)
 
@@ -536,6 +542,7 @@ class CallStream:
         fresh["history"] = self.session["history"]
         fresh["latencies"] = self.session.get("latencies", [])
         fresh["language"] = self.session.get("language")
+        fresh["usage"] = self.usage
         call_session.save(fresh)
         self.session = fresh
 
@@ -578,6 +585,7 @@ class CallStream:
                         self.publish_audio("caller", pcm)
                         for frame in (self.gate.process(pcm) if self.gate else [pcm]):
                             await self.stt.send_pcm(frame)
+                            self.usage["stt_seconds"] += len(frame) / 16000  # 8 kHz, 16-bit
                 elif event == "start":
                     start = msg.get("start") or {}
                     self.stream_id = start.get("streamId") or msg.get("streamId")
@@ -624,7 +632,8 @@ class CallStream:
                 continue
             self.silent_prompts += 1
             from app.api.plivo import PROMPTS
-            if self.silent_prompts > MAX_SILENT_PROMPTS:
+            caller_spoke = any(t["role"] != "assistant" for t in self.session.get("history", []))
+            if self.silent_prompts > (MAX_SILENT_PROMPTS if caller_spoke else 1):
                 await self.say_fixed(PROMPTS["goodbye"][self.lang_key()], hangup=True)
                 return
             await self.say_fixed(PROMPTS["repeat"][self.lang_key()])
@@ -750,6 +759,7 @@ class CallStream:
                 loop.call_soon_threadsafe(deltas.put_nowait, e)
 
         threading.Thread(target=pump, daemon=True, name="llm-stream").start()
+        self.meter("llm_requests")
         cleaner = ReplyFilter()
         spoken: list[str] = []
         first_audio_ms = None
@@ -768,6 +778,7 @@ class CallStream:
                     ready = unsent[:cut]
                     if ready.strip() and re.search(r"[^\W\d_]|[ऀ-෿]", ready):
                         spoken.append(ready)
+                        self.meter("tts_chars", len(ready))
                         await tts_ws.send(json.dumps({"type": "text", "data": {"text": ready}}))
                         unsent = unsent[cut:]
 
@@ -827,12 +838,14 @@ class CallStream:
             with contextlib.suppress(Exception):
                 retry = ReplyFilter()
                 spoken_only = ((guidance + " ") if guidance else "") + SPOKEN_ONLY
+                self.meter("llm_requests")
                 raw = await asyncio.to_thread(lambda: "".join(agent.respond_stream(self.agent_id, history, prompt_text, lead, spoken_only, language)))
                 reply = " ".join((retry.feed(raw) + retry.flush()).split())
                 cleaner.end_call = retry.end_call
                 if reply:
                     language = tts.detect_language(reply, self.session.get("language") or "en-IN")
                     await self.play_pcm(await asyncio.to_thread(tts.synthesize_pcm, reply, language, self.persona.get("voice_speaker")))
+                    self.meter("tts_chars", len(reply))
         if not reply:
             # Still nothing to say: goodbye if the model ended the call, otherwise ask the caller to repeat (never hang up).
             from app.api.plivo import PROMPTS

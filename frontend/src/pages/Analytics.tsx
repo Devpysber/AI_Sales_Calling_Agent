@@ -1,11 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowDownRight, ArrowUpRight, BarChart3, CalendarCheck, Clock, Flame, Gauge, PhoneCall, Printer, TrendingUp, UserPlus } from 'lucide-react'
+import { ArrowDownRight, ArrowUpRight, BarChart3, CalendarCheck, Clock, Flame, Gauge, IndianRupee, PhoneCall, Printer, TrendingUp, UserPlus } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button, Card, CardHeader, EmptyState, Meter, PageHeader, Skeleton, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
 import { useAgent } from '@/lib/agent'
-import type { AnalyticsKpis, AnalyticsReport } from '@/lib/types'
+import type { AnalyticsKpis, AnalyticsReport, AnalyticsUsage } from '@/lib/types'
 import { cn, DAYS, formatDuration, titleCase } from '@/lib/utils'
 
 const tooltipStyle = { background: 'var(--elevated)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12, boxShadow: 'var(--shadow-pop)' }
@@ -115,6 +115,8 @@ export default function Analytics() {
             <Kpi icon={<Gauge />} label="AI response time" value={k.avg_latency_ms != null ? `${(k.avg_latency_ms / 1000).toFixed(1)}s` : '—'} curr={k.avg_latency_ms} prev={p?.avg_latency_ms} invert />
             <Kpi icon={<UserPlus />} label="New leads" value={data.new_leads} sub={`Added in the last ${days} days`} />
           </div>
+
+          {data.usage && <UsageCard usage={data.usage} />}
 
           <Card>
             <CardHeader title="Daily activity" description="Calls placed, calls connected and meetings booked per day (IST)" />
@@ -242,5 +244,42 @@ export default function Analytics() {
         </div>
       )}
     </>
+  )
+}
+
+function UsageCard({ usage: u }: { usage: AnalyticsUsage }) {
+  const money = (v: number) => `${u.currency}${v.toLocaleString('en-IN', { maximumFractionDigits: v < 10 ? 2 : 0 })}`
+  const rows: [string, string, number][] = [
+    ['Telephony', `${u.call_minutes} connected min`, u.cost.telephony],
+    ['Voice (TTS)', `${u.tts_chars.toLocaleString('en-IN')} characters`, u.cost.tts],
+    ['Speech recognition', `${Math.round(u.stt_seconds / 60)} min of caller audio`, u.cost.stt],
+    ['Conversation AI', `${u.llm_requests.toLocaleString('en-IN')} replies`, u.cost.llm],
+  ]
+  const max = Math.max(...rows.map((r) => r[2]), 0.0001)
+  return (
+    <Card>
+      <CardHeader title={<span className="inline-flex items-center gap-2"><IndianRupee className="size-4" />Usage & cost</span>}
+        description={u.metered_calls ? `Billable usage measured on ${u.metered_calls} call${u.metered_calls === 1 ? '' : 's'} in this period`
+          : 'Usage is measured on calls placed from now on.'}
+        action={u.rates_configured && <div className="text-right"><div className="text-xl font-extrabold tabular-nums">{money(u.total_cost)}</div>
+          <div className="text-xs text-muted">{u.cost_per_connected_call != null ? `${money(u.cost_per_connected_call)} per connected call` : 'estimated'}</div></div>} />
+      <div className="grid gap-3 px-5 pb-5 sm:grid-cols-2 lg:grid-cols-4">
+        {rows.map(([label, amount, cost]) => (
+          <div key={label} className="rounded-xl border border-border p-3">
+            <div className="text-xs text-muted">{label}</div>
+            <div className="mt-1 font-bold tabular-nums">{amount}</div>
+            {u.rates_configured && <>
+              <div className="mt-2 h-1.5 rounded-full bg-surface-2"><div className="h-full rounded-full bg-fg" style={{ width: `${(100 * cost) / max}%` }} /></div>
+              <div className="mt-1 text-xs text-muted tabular-nums">{money(cost)}</div>
+            </>}
+          </div>
+        ))}
+      </div>
+      {!u.rates_configured && (
+        <p className="border-t border-border px-5 py-3 text-xs text-muted">
+          Add your provider rates on the server (COST_PER_CALL_MINUTE, COST_PER_10K_TTS_CHARS, COST_PER_STT_HOUR, COST_PER_LLM_REQUEST) to see rupee estimates.
+        </p>
+      )}
+    </Card>
   )
 }

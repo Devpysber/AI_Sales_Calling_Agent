@@ -38,6 +38,34 @@ def _kpis(rows) -> dict:
     }
 
 
+def usage(rows) -> dict:
+    """Billable usage and an estimate from the rates in settings (0 = not set)."""
+    from app.core.config import settings
+
+    metered = [r for r in rows if r.tts_chars is not None]
+    tts = sum(r.tts_chars or 0 for r in metered)
+    stt = sum(r.stt_seconds or 0 for r in metered)
+    llm = sum(r.llm_requests or 0 for r in metered)
+    connected_minutes = sum((r.duration or 0) for r in rows if r.status == ANSWERED) / 60
+    cost = {
+        "telephony": connected_minutes * settings.cost_per_call_minute,
+        "tts": tts / 10_000 * settings.cost_per_10k_tts_chars,
+        "stt": stt / 3600 * settings.cost_per_stt_hour,
+        "llm": llm * settings.cost_per_llm_request,
+    }
+    answered = sum(r.status == ANSWERED for r in metered) or 0
+    total = sum(cost.values())
+    return {
+        "metered_calls": len(metered), "tts_chars": tts, "stt_seconds": round(stt), "llm_requests": llm,
+        "call_minutes": round(connected_minutes, 1),
+        "cost": {k: round(v, 2) for k, v in cost.items()}, "total_cost": round(total, 2),
+        "cost_per_connected_call": round(total / answered, 2) if answered else None,
+        "rates_configured": any((settings.cost_per_call_minute, settings.cost_per_10k_tts_chars,
+                                 settings.cost_per_stt_hour, settings.cost_per_llm_request)),
+        "currency": settings.cost_currency,
+    }
+
+
 def report(agent_id: int, days: int = 30) -> dict:
     today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
     start = (today - timedelta(days=days - 1) - OFFSET).replace(tzinfo=None)
@@ -47,7 +75,8 @@ def report(agent_id: int, days: int = 30) -> dict:
     with get_db() as db:
         rows = db.execute(
             select(Call.created_at, Call.status, Call.duration, Call.outcome, Call.qualification, Call.sentiment,
-                   Call.trigger, Call.hangup_cause, Call.error, Call.avg_latency_ms)
+                   Call.trigger, Call.hangup_cause, Call.error, Call.avg_latency_ms,
+                   Call.tts_chars, Call.stt_seconds, Call.llm_requests)
             .where(Call.agent_id == agent_id, Call.created_at >= prev_start)
         ).all()
         by_status = dict(db.execute(select(Lead.status, func.count()).where(mine).group_by(Lead.status)).all())
@@ -101,6 +130,7 @@ def report(agent_id: int, days: int = 30) -> dict:
     return {
         "days": days,
         "kpis": _kpis(current),
+        "usage": usage(current),
         "previous": _kpis(previous),
         "new_leads": new_leads,
         "series": list(series.values()),

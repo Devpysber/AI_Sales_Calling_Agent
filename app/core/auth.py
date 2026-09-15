@@ -112,8 +112,13 @@ async def auth_middleware(request: Request, call_next):
 
 
 class Login(BaseModel):
-    username: str
+    email: str = ""
+    username: str = ""  # accepted only until a sign-in email is configured
     password: str
+
+
+def login_email() -> str:
+    return (_profile().get("email") or settings.admin_email or "").strip().lower()
 
 
 @router.post("/login")
@@ -123,15 +128,19 @@ def login(body: Login, request: Request, response: Response):
         raise HTTPException(429, "Too many attempts. Try again in 15 minutes.")
     if not auth_enabled():
         raise HTTPException(400, "Login is disabled: set ADMIN_PASSWORD on the server.")
-    if not (hmac.compare_digest(body.username, settings.admin_username) and _password_ok(body.password)):
-        raise HTTPException(401, "Invalid username or password.")
+    identifier = (body.email or body.username).strip().lower()
+    expected = login_email()
+    # Before any email is configured, the ADMIN_USERNAME still works so nobody is locked out.
+    known = hmac.compare_digest(identifier, expected) if expected else hmac.compare_digest(identifier, settings.admin_username.lower())
+    if not (known and _password_ok(body.password)):
+        raise HTTPException(401, "Invalid email or password.")
     profile = _profile()
     profile["last_login_at"], profile["last_login_ip"] = int(time.time()), ip
     _save_profile(profile)
     https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
-    response.set_cookie(COOKIE, make_token(body.username), max_age=TTL, httponly=True, samesite="lax",
+    response.set_cookie(COOKIE, make_token(settings.admin_username), max_age=TTL, httponly=True, samesite="lax",
                         secure=https, path="/")
-    return {"user": body.username}
+    return {"user": settings.admin_username}
 
 
 @router.post("/logout")
@@ -148,6 +157,7 @@ def me(request: Request):
 
 
 class ProfileUpdate(BaseModel):
+    current_password: str = ""  # required when the sign-in email changes
     display_name: str = Field("", max_length=80)
     email: str = Field("", max_length=160)
     phone: str = Field("", max_length=32)
@@ -164,6 +174,7 @@ class PasswordChange(BaseModel):
 def _public_profile(profile: dict) -> dict:
     return {
         "username": settings.admin_username,
+        "login_email": login_email(),
         **{k: profile.get(k, "") for k in ("display_name", "email", "phone", "role", "company")},
         "timezone": profile.get("timezone") or "Asia/Kolkata",
         "password_source": "dashboard" if profile.get("password_hash") else "environment",
@@ -183,7 +194,15 @@ def update_profile(body: ProfileUpdate):
     email = body.email.strip()
     if email and ("@" not in email or "." not in email.split("@")[-1]):
         raise HTTPException(400, "Enter a valid email address.")
-    profile = {**_profile(), **{k: v.strip() for k, v in body.model_dump().items()}}
+    current = _profile()
+    if email.lower() != login_email() and auth_enabled():
+        if not email:
+            raise HTTPException(400, "The sign-in email can't be empty.")
+        if not _password_ok(body.current_password):
+            raise HTTPException(400, "Enter your current password to change the sign-in email.")
+    fields = body.model_dump(exclude={"current_password"})
+    fields["email"] = email.lower()
+    profile = {**current, **{k: v.strip() for k, v in fields.items()}}
     _save_profile(profile)
     return _public_profile(profile)
 

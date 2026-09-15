@@ -51,6 +51,13 @@ def _ai_may_move(current: str | None, proposed: str) -> bool:
     return JOURNEY.index(proposed) >= JOURNEY.index(current)
 
 
+def _usage_fields(usage: dict | None) -> dict:
+    if not usage:
+        return {}
+    return {"tts_chars": int(usage.get("tts_chars") or 0), "stt_seconds": round(float(usage.get("stt_seconds") or 0), 1),
+            "llm_requests": int(usage.get("llm_requests") or 0)}
+
+
 def _valid_callback(value) -> str | None:
     """Normalise an LLM-extracted callback time; drop anything unparsable or more than 30 days out."""
     try:
@@ -152,7 +159,7 @@ class CallService:
             db.flush()
             call_id = call.id
         call_session.update(session["id"], call_id=call_id)
-        # Synthesize the greeting and fixed prompts while the phone rings, so /answer only reads the cache.
+        # Cache the shared prompts while the phone rings (the per-lead greeting is made on answer: no TTS for unanswered calls).
         _turn_pool.submit(self._prewarm_audio, lead, language, persona)
 
         try:
@@ -245,7 +252,8 @@ class CallService:
 
         self._set(call_id, status=status, duration=duration, hangup_cause=cause, call_uuid=call_uuid,
                   ended_at=_utcnow(), transcript=json.dumps(history, ensure_ascii=False),
-                  avg_latency_ms=round(sum(latencies) / len(latencies)) if latencies else None)
+                  avg_latency_ms=round(sum(latencies) / len(latencies)) if latencies else None,
+                  **_usage_fields((session or {}).get("usage")))
         if session:
             call_session.update(session_id, ended=True)
 
@@ -301,7 +309,9 @@ class CallService:
     def _prewarm_audio(self, lead: dict, language: str, persona: dict):
         from app.api.plivo import PROMPTS  # local import: api layer imports this module
         key = "hi" if language.startswith("hi") else "en"
-        texts = [agent.greeting(self.agent_id, lead, language), PROMPTS["repeat"][key], PROMPTS["goodbye"][key]]
+        # Only shared lines: they are cached once for every call. The per-lead greeting is synthesized on answer,
+        # so unanswered calls (often half of all dials) cost no TTS at all.
+        texts = [PROMPTS["repeat"][key], PROMPTS["goodbye"][key]]
         for text in texts:
             try:
                 if settings.voice_mode == "stream":

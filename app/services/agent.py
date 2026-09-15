@@ -177,7 +177,7 @@ Return ONLY a JSON object, no prose:
 
 END_MARK = "<END>"
 VOICE_OUTPUT = f"""# Output
-Say your reply directly as plain spoken text: 1-2 short sentences. No JSON, quotes, labels or markdown.
+Say your reply directly as plain spoken text: 1-2 short sentences, at most 30 words in total. No JSON, quotes, labels or markdown.
 Never output tool calls, tags or crm_update: meetings, emails and follow-ups are saved automatically from the transcript.
 When a meeting is agreed, just confirm the day and time back to the customer out loud.
 If the call should end now (you said goodbye, they asked not to be called, wrong person, or not interested), put {END_MARK} at the very end."""
@@ -225,7 +225,7 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
         name = LANGUAGES.get(language, language)
         script = " in Devanagari script (English business words are fine)" if language == "hi-IN" else ""
         messages[-1]["content"] += f"\n\n(Reply in {name}{script}, whatever language earlier turns used.)"
-    yield from llm.stream(messages, max_tokens=110, temperature=0.4)  # short spoken replies also cut TTS characters
+    yield from llm.stream(messages, max_tokens=90, temperature=0.4)  # short spoken replies also cut TTS characters
 
 
 def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True) -> dict:

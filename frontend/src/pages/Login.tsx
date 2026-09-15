@@ -54,7 +54,9 @@ export default function Login() {
             <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
             <p className="mt-1 text-sm text-muted">Access your voice agent dashboard.</p>
           </div>
-          <Field label="Username"><Input name="username" autoComplete="username" required autoFocus defaultValue="admin" /></Field>
+          <Field label="Email" hint="Sign-in email from your Admin profile. First sign-in before an email is set: your admin username.">
+            <Input name="email" type="text" inputMode="email" autoComplete="email" required autoFocus placeholder="you@company.com" />
+          </Field>
           <Field label="Password"><Input name="password" type="password" autoComplete="current-password" required /></Field>
           {error && <p role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">{error}</p>}
           <Button type="submit" variant="primary" size="lg" className="w-full" loading={loading}><Lock />Sign in</Button>

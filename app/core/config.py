@@ -39,6 +39,8 @@ class Settings(BaseSettings):
 
     # ---------------- Auth ----------------
     admin_username: str = Field("admin", alias="ADMIN_USERNAME")
+    # Sign-in email. The email saved on the Admin profile page takes precedence.
+    admin_email: str = Field("", alias="ADMIN_EMAIL")
     admin_password: str = Field("", alias="ADMIN_PASSWORD")
     secret_key: str = Field("", alias="SECRET_KEY")
     api_token: str = Field("", alias="API_TOKEN")
@@ -71,6 +73,12 @@ class Settings(BaseSettings):
     # gather: legacy Plivo <GetInput> speech recognition + webhook polling.
     voice_mode: str = Field("stream", alias="VOICE_MODE")
     # Pause after the caller's last words before the agent answers
+    # Cost estimates on the Analytics page: fill in the rates from your provider invoices (0 = not shown)
+    cost_currency: str = Field("₹", alias="COST_CURRENCY")
+    cost_per_call_minute: float = Field(0, alias="COST_PER_CALL_MINUTE")
+    cost_per_10k_tts_chars: float = Field(0, alias="COST_PER_10K_TTS_CHARS")
+    cost_per_stt_hour: float = Field(0, alias="COST_PER_STT_HOUR")
+    cost_per_llm_request: float = Field(0, alias="COST_PER_LLM_REQUEST")
     turn_end_grace_ms: int = Field(150, alias="TURN_END_GRACE_MS")
     # Speech-to-text is billed per second of audio sent: skip long silences (keeps pre-roll and a silent tail for VAD)
     stt_silence_gate: bool = Field(True, alias="STT_SILENCE_GATE")
