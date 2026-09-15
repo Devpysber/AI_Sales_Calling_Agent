@@ -230,6 +230,20 @@ class CRMService:
             ).order_by(Lead.callback_at).limit(limit)
             return [l.to_dict() for l in db.scalars(query)]
 
+    def queued(self, limit: int) -> list[dict]:
+        """Leads someone explicitly queued (Pending), oldest first; skips scheduled callbacks and broken numbers."""
+        with get_db() as db:
+            query = self._scoped(select(Lead)).where(
+                Lead.call_status == "Pending", Lead.do_not_call.is_(False),
+                ~(Lead.phone.like("+91%") & (func.length(Lead.phone) != 13)),
+                or_(Lead.callback_at.is_(None), Lead.callback_at == ""),
+            ).order_by(Lead.updated_at).limit(limit)
+            return [l.to_dict() for l in db.scalars(query)]
+
+    def queue_size(self) -> int:
+        with get_db() as db:
+            return db.scalar(self._scoped(select(func.count(Lead.id))).where(Lead.call_status == "Pending", Lead.do_not_call.is_(False))) or 0
+
     def nurture_candidates(self, after_days: int, limit: int) -> list[dict]:
         """Warm leads with no contact for after_days and nothing already scheduled."""
         cutoff = _now_utc() - timedelta(days=after_days)

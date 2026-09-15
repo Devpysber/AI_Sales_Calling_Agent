@@ -3,6 +3,7 @@ Call lifecycle: place calls, run conversation turns, record outcomes.
 A CallService bound to an agent only sees and places that agent's calls.
 """
 
+import contextlib
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -217,11 +218,17 @@ class CallService:
         agent_id = agents.for_inbound(to_number)
         if agent_id is None:
             return None
-        lead = CRMService(agent_id).find_by_phone(from_number)
+        crm = CRMService(agent_id)
+        lead = crm.find_by_phone(from_number)
+        if lead is None:
+            # Unknown caller: save them now so the conversation, summary and follow-ups attach to a real lead
+            with contextlib.suppress(ValueError):
+                lead = crm.create({"phone": from_number, "source": "inbound call", "status": "New"}, actor="system")
         persona = agents.get_profile(agent_id)
         language = (lead or {}).get("language") or persona["default_language"]
+        known = bool(lead and lead.get("name"))
         context = {**(lead or {"phone": from_number}), "call_purpose": "inbound"}
-        context["call_goal"] = agent.call_goal(context, "inbound")
+        context["call_goal"] = agent.call_goal(context, "inbound" if known else "inbound_new")
         session = call_session.create(agent_id=agent_id, lead_id=lead and lead["id"], lead=context, language=language)
         with get_db() as db:
             call = Call(agent_id=agent_id, lead_id=lead and lead["id"], session_id=session["id"], direction="inbound",
@@ -300,6 +307,12 @@ class CallService:
         if lead_id:
             updates = {k: s.get(k) for k in ("summary", "requirements", "objections", "meeting_at", "follow_up_date", "email")
                        if s.get(k)}
+            # Details the caller gave about themselves fill in empty fields (a known lead's data is never overwritten)
+            current = self.crm.get(lead_id) or {}
+            for key in ("name", "company", "city"):
+                value = str(s.get(key) or "").strip()
+                if value and not current.get(key) and len(value) <= 120:
+                    updates[key] = value
             callback_at = _valid_callback(s.get("callback_at"))
             if callback_at:
                 updates["callback_at"] = callback_at

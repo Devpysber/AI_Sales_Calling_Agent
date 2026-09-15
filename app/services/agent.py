@@ -41,6 +41,10 @@ def call_goal(lead: dict, purpose: str | None) -> str | None:
     if purpose == "confirm_meeting" and lead.get("meeting_at"):
         return (f"Confirm the booked meeting on {lead['meeting_at']} (IST). Ask if that time still works; "
                 "if not, agree a new day and time and repeat it back. Do not pitch again. Keep the call under a minute.")
+    if purpose == "inbound_new":
+        return ("A new caller not yet in our CRM. After greeting, politely ask their name, then what they are looking for "
+                "(and their city or company if it matters), one question at a time. Once you have their name and need, "
+                "help them from the knowledge base and move to the call to action. Use their name from then on.")
     if purpose == "inbound":
         return ("The customer called us. Thank them, find out what they need, answer from the knowledge base, "
                 "and move them to the call to action. Ask their name if you do not know it.")
@@ -353,6 +357,9 @@ Rules:
 Return ONLY JSON:
 {{
   "summary": "2-3 sentence factual summary",
+  "name": "customer's own name if they said it, else empty",
+  "company": "customer's company or business if they said it, else empty",
+  "city": "customer's city if they said it, else empty",
   "qualification": "Hot | Warm | Cold",
   "outcome": "meeting_booked | interested | callback_requested | not_interested | do_not_call | wrong_person | no_conversation | other",
   "sentiment": "positive | neutral | negative",

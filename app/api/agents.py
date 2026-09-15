@@ -93,6 +93,7 @@ def update_profile(values: dict, request: Request, agent_id: int = Depends(works
 
 class Preview(BaseModel):
     text: str = Field(min_length=1, max_length=600)
+    language: str | None = None
     speaker: str | None = None
 
 

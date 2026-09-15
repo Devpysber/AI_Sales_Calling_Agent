@@ -173,8 +173,16 @@ def bulk_queue(body: Ids, request: Request, agent_id: int = Depends(workspace)):
             queued += 1
         except LookupError:
             continue
-    events.record("lead.queued", f"Queued {queued} lead(s) for auto-dial", agent_id=agent_id, actor=actor(request))
-    return {"queued": queued}
+    from app.services import agents as agent_service
+    from app.services.call_service import within_calling_hours
+    cfg = agent_service.get_automation(agent_id)
+    size = crm.queue_size()
+    if within_calling_hours(cfg):
+        eta = "Calling starts within a minute" + (f" ({size} in queue, {cfg['max_concurrent_calls']} at a time)" if size > 1 else "")
+    else:
+        eta = f"Outside calling hours: calls start at {cfg['calling_hours_start']}:00 IST"
+    events.record("lead.queued", f"Queued {queued} lead(s) for calling", eta, agent_id=agent_id, actor=actor(request))
+    return {"queued": queued, "queue_size": size, "eta": eta}
 
 
 @router.post("/bulk/call")

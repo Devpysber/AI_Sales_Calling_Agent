@@ -79,6 +79,20 @@ def job_callbacks(agent_id, cfg, force=False):
     return f"{placed} callback(s) placed" + (f", {len(skipped)} skipped ({skipped[0]})" if skipped else "")
 
 
+def job_queue(agent_id, cfg, force=False):
+    """Dial queued leads as call slots free up (works whether auto-dial is on or not)."""
+    if not force and not within_calling_hours(cfg):
+        return "outside calling hours"
+    calls = CallService(agent_id)
+    free = max(0, cfg["max_concurrent_calls"] - calls.active_count())
+    if not free:
+        return "all call slots busy"
+    leads = CRMService(agent_id).queued(free)
+    if not leads:
+        return "queue empty"
+    return _dial(agent_id, leads, "queue", free)
+
+
 def job_nurture(agent_id, cfg, force=False):
     """Follow up warm leads nobody has spoken to for N days (at most nurture_max_attempts times per lead)."""
     if not force and not within_calling_hours(cfg):
@@ -136,9 +150,9 @@ def job_daily_report(agent_id, cfg, force=False):
     return send_email(recipient, f"{name}: voice agent daily report", body, agent_id=agent_id)
 
 
-JOBS = {"auto_dial": job_auto_dial, "retry_calls": job_retry_calls, "callbacks": job_callbacks, "nurture": job_nurture,
+JOBS = {"auto_dial": job_auto_dial, "retry_calls": job_retry_calls, "callbacks": job_callbacks, "nurture": job_nurture, "queue": job_queue,
         "meeting_reminder": job_meeting_reminder, "daily_report": job_daily_report}
-LABELS = {"auto_dial": "Auto-dial", "retry_calls": "Retry calls", "callbacks": "Callbacks", "nurture": "Follow-ups", "meeting_reminder": "Meeting reminders",
+LABELS = {"auto_dial": "Auto-dial", "retry_calls": "Retry calls", "callbacks": "Callbacks", "nurture": "Follow-ups", "queue": "Call queue", "meeting_reminder": "Meeting reminders",
           "daily_report": "Daily report"}
 
 
@@ -195,6 +209,8 @@ def tick():
                 run_job(agent_id, job)
             if CRMService(agent_id).due_callbacks(datetime.now(IST).strftime("%Y-%m-%d %H:%M"), 1):
                 run_job(agent_id, "callbacks")
+            if within_calling_hours(cfg) and CRMService(agent_id).queued(1):
+                run_job(agent_id, "queue")
         except agents.AgentNotFound:
             continue  # deleted mid-tick
     CallService().expire_stale()

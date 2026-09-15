@@ -94,3 +94,36 @@ def test_alerts_summary_and_snooze(client, monkeypatch):
     assert data["popup"]["provider"] == "Plivo" and any(i["kind"] == "credit" for i in data["items"])
     assert client.post("/api/system/alerts/snooze", json={"key": "popup:Plivo", "hours": 1}).status_code == 200
     assert client.get("/api/system/alerts").json()["popup"] is None
+
+
+def test_unknown_inbound_caller_becomes_lead_and_queue_dials(client, base, monkeypatch):
+    from app.services import agent as agent_service
+    from app.services import scheduler
+    from app.services.call_service import CallService
+
+    agent_id = int(base.rsplit("/", 1)[1])
+    client.put(f"{base}/profile", json={"inbound_mode": "ai"})
+    monkeypatch.setattr("app.services.agents.for_inbound", lambda to, lead_agent_id=None: agent_id)
+    client.post("/api/plivo/answer", data={"From": "919812300077", "To": "918000000000", "CallUUID": "new-caller-1"})
+    lead = client.get(f"{base}/leads", params={"search": "9812300077"}).json()["items"][0]
+    assert lead["source"] == "inbound call" and not lead["name"]
+    assert "not yet in our CRM" in agent_service.call_goal({}, "inbound_new")
+
+    # Summary fills the new caller's details without touching known fields
+    monkeypatch.setattr(agent_service, "summarize", lambda history: {"summary": "Asked about prices.", "name": "Neha Gupta", "city": "Pune"})
+    CallService(agent_id)._summarize(0, lead["id"], [{"role": "customer", "text": "I am Neha from Pune"}])
+    lead = client.get(f"{base}/leads/{lead['id']}").json()
+    assert lead["name"] == "Neha Gupta" and lead["city"] == "Pune"
+
+    # Queue: pending leads are dialled when a slot is free, even with auto-dial off
+    queued = client.post(f"{base}/leads/bulk/queue", json={"ids": [lead["id"]]}).json()
+    assert queued["queued"] == 1 and "eta" in queued
+    placed = []
+    monkeypatch.setattr(scheduler, "within_calling_hours", lambda cfg, now=None: True)
+    monkeypatch.setattr(CallService, "start", lambda self, lead_id, trigger="manual", actor="admin", purpose=None: placed.append((lead_id, trigger)))
+    scheduler.job_queue(agent_id, {"max_concurrent_calls": 50})  # oldest queued leads go first
+    assert (lead["id"], "queue") in placed
+
+
+def test_voice_preview_accepts_language(client, base):
+    assert client.post(f"{base}/voice-preview", json={"text": "नमस्ते", "language": "hi-IN"}).status_code == 200

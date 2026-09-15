@@ -125,7 +125,11 @@ export default function LeadDetail() {
   })
   const queue = useMutation({
     mutationFn: () => api(`${base}/leads/bulk/queue`, { method: 'POST', json: { ids: [leadId] } }),
-    onSuccess: () => { toast.success('Queued for auto-dial', { description: 'It will be called within calling hours.' }); qc.invalidateQueries({ queryKey: ['lead', leadId] }) },
+    onSuccess: (r: unknown) => {
+      const res = r as { eta?: string }
+      toast.success('Added to the call queue', { description: res?.eta ?? 'It will be called within calling hours.' })
+      qc.invalidateQueries({ queryKey: ['lead', leadId] })
+    },
     onError: (e) => toast.error(e.message),
   })
   const remove = useMutation({
