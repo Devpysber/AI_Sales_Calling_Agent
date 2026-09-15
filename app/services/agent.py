@@ -20,7 +20,7 @@ from app.services.tts import LANGUAGES
 
 log = get_logger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
-MAX_HISTORY_TURNS = 10          # every turn resends history: fewer turns = fewer billed tokens
+MAX_HISTORY_TURNS = 14          # every turn resends history: fewer turns = fewer billed tokens
 KNOWLEDGE_CHARS = 600           # per retrieved passage in the prompt
 
 INTENTS = ["greeting", "question", "interested", "pricing", "objection", "meeting", "callback",
@@ -120,16 +120,74 @@ def _translate_line(text: str, language: str) -> str:
     return text
 
 
-def _system_prompt(persona: dict, lead: dict, knowledge: list[dict]) -> str:
+BRIEF_TOPICS = (("overview", "About"), ("services", "Services"), ("pricing", "Pricing"), ("faq", "FAQs"),
+                ("proof", "Clients & results"), ("policy", "Process & policies"))
+_memory_cache: dict[tuple, tuple[float, str]] = {}
+MEMORY_TTL = 60  # seconds: one lookup per call, not per turn
+
+
+def _cached(key: tuple, build) -> str:
+    hit = _memory_cache.get(key)
+    if hit and time.monotonic() - hit[0] < MEMORY_TTL:
+        return hit[1]
+    try:
+        value = build()
+    except Exception:  # noqa: BLE001 - memory is best-effort, never break a call
+        log.exception("Building call memory failed for %s", key)
+        value = ""
+    _memory_cache[key] = (time.monotonic(), value)
+    return value
+
+
+def company_brief(agent_id: int) -> str:
+    """Always-on facts from the knowledge base (AI-filled coverage), so core answers never depend on a search hit."""
+    def build():
+        from app.services import knowledge_profile
+        topics = knowledge_profile.get(agent_id).get("topics") or {}
+        return "\n".join(f"- {label}: {topics[key]['summary']}" for key, label in BRIEF_TOPICS
+                         if (topics.get(key) or {}).get("summary"))
+    return _cached(("brief", agent_id), build)
+
+
+def past_conversations(agent_id: int, lead: dict, limit: int = 3) -> str:
+    """What happened on this lead's earlier calls: date, outcome and summary, newest first."""
+    lead_id = lead.get("id")
+    if not lead_id:
+        return ""
+
+    def build():
+        from sqlalchemy import select
+
+        from app.core.database import get_db
+        from app.models.call import Call
+        with get_db() as db:
+            rows = db.execute(
+                select(Call.created_at, Call.direction, Call.outcome, Call.summary, Call.duration)
+                .where(Call.agent_id == agent_id, Call.lead_id == lead_id, Call.status == "Completed", Call.summary.is_not(None))
+                .order_by(Call.id.desc()).limit(limit)
+            ).all()
+        lines = []
+        for created, direction, outcome, summary, duration in rows:
+            when = (created + timedelta(hours=5, minutes=30)).strftime("%d %b %H:%M") if created else "earlier"
+            tag = ", ".join(x for x in (direction, (outcome or "").replace("_", " ")) if x)
+            lines.append(f"- {when} ({tag}, {duration or 0}s): {summary}")
+        return "\n".join(lines)
+    return _cached(("calls", agent_id, lead_id), build)
+
+
+def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: int | None = None) -> str:
     now = datetime.now(IST)
+    brief = company_brief(agent_id) if agent_id else ""
+    history = past_conversations(agent_id, lead) if agent_id else ""
     kb = "\n\n".join(f"[{i + 1}] ({k['title']}) {k['text'][:KNOWLEDGE_CHARS]}" for i, k in enumerate(knowledge)) or \
-        "(empty — no company information is available for this question)"
+        ("(no passage matched this question: use the Company brief)" if brief else
+         "(empty — no company information is available for this question)")
     grounding = (
         "Use ONLY the Knowledge section below for any fact about the company: what it does, services, pricing, "
         "clients, timelines. It is EMPTY for this turn, so do NOT describe the company or its offerings at all. "
         "Say a specialist will walk them through the details, then propose the call to action."
-        if not knowledge else
-        "Use ONLY the Knowledge section below for any fact about the company. Never add services, prices or claims that are not written there."
+        if not (knowledge or brief) else
+        "Use ONLY the Company brief and Knowledge sections below for any fact about the company. Never add services, prices or claims that are not written there."
     )
     lead_lines = "\n".join(f"- {label}: {lead.get(key)}" for key, label in [
         ("name", "Name"), ("company", "Company"), ("city", "City"), ("status", "Current status"),
@@ -164,7 +222,7 @@ Primary call to action: {persona['call_to_action']}
 {persona['qualification_criteria']}
 
 # Hard rules
-- Facts about the company, services, pricing and timelines must come ONLY from the Knowledge section. If it is not there, say you will have a specialist confirm, then move the conversation forward.
+- Facts about the company, services, pricing and timelines must come ONLY from the Company brief and Knowledge sections. If it is not there, say you will have a specialist confirm, then move the conversation forward.
 - {persona['forbidden_topics']}
 - If they ask not to be called again: apologise, confirm, set intent "do_not_call" and end_call true.
 - If wrong person or not interested after one gentle attempt: thank them, end_call true.
@@ -177,7 +235,14 @@ Primary call to action: {persona['call_to_action']}
 # Prospect
 {lead_lines or '- No details on file'}
 
-# Knowledge
+# Earlier conversations with this prospect (newest first)
+{history or '- None: this is the first conversation.'}
+Continue from what was already discussed: do not re-introduce the company or ask again for things they already told you.
+
+# Company brief (from the knowledge base)
+{brief or '- Not available'}
+
+# Knowledge (passages matching this question)
 {kb}
 
 # Output
@@ -208,7 +273,7 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
         log.exception("RAG search failed")
         knowledge = []
 
-    messages = [{"role": "system", "content": _system_prompt(persona, lead, knowledge)}]
+    messages = [{"role": "system", "content": _system_prompt(persona, lead, knowledge, agent_id)}]
     for turn in history[-MAX_HISTORY_TURNS:]:
         messages.append({"role": "assistant" if turn["role"] == "assistant" else "user", "content": turn["text"]})
     messages.append({"role": "user", "content": customer_text})
