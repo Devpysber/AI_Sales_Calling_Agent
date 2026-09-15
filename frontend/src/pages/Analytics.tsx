@@ -252,7 +252,7 @@ function UsageCard({ usage: u }: { usage: AnalyticsUsage }) {
   const rows: [string, string, number][] = [
     ['Telephony', `${u.call_minutes} connected min`, u.cost.telephony],
     ['Voice (TTS)', `${u.tts_chars.toLocaleString('en-IN')} characters`, u.cost.tts],
-    ['Speech recognition', `${Math.round(u.stt_seconds / 60)} min of caller audio`, u.cost.stt],
+    ['Speech recognition', u.stt_seconds < 120 ? `${u.stt_seconds}s of caller audio` : `${Math.round(u.stt_seconds / 60)} min of caller audio`, u.cost.stt],
     ['Conversation AI', `${u.llm_requests.toLocaleString('en-IN')} replies`, u.cost.llm],
   ]
   const max = Math.max(...rows.map((r) => r[2]), 0.0001)

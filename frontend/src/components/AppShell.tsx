@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
+import AlertsBell from '@/components/AlertsBell'
 import { CommandPalette, type Command } from '@/components/CommandPalette'
 import NewAgentSheet from '@/components/NewAgentSheet'
 import { Button, Dialog, Spinner } from '@/components/ui'
@@ -317,6 +318,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
             <Search className="size-4" />{!compact && <><span className="flex-1 text-left">Search</span><kbd className="!border-ink-fg/10 !bg-ink-fg/5 whitespace-nowrap !text-ink-muted">Ctrl K</kbd></>}
           </button>
           {agent && <Link to="/settings" title="Integrations & system" className={cn('grid size-9 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg', location.pathname === '/settings' && 'text-ink-fg')}><Settings className="size-4" /></Link>}
+          <AlertsBell compact={compact} />
           <button type="button" onClick={onHelp} title="Keyboard shortcuts (?)" className="grid size-9 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg"><Keyboard className="size-4" /></button>
           <button type="button" onClick={() => setDark(!dark)} title="Toggle theme" className="grid size-9 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg">{dark ? <Sun className="size-4" /> : <Moon className="size-4" />}</button>
         </div>

@@ -150,3 +150,10 @@ async def inbound_connect():
 @router.post("/system/inbound/restore")
 async def inbound_restore():
     return await asyncio.to_thread(_plivo_action, "restore_inbound")
+
+
+@router.get("/system/alerts")
+async def alerts():
+    """Navbar bell: reminders across agents plus provider balances (cached)."""
+    from app.services import alerts as alert_service
+    return await asyncio.to_thread(alert_service.summary)

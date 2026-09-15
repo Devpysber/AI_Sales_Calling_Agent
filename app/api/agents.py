@@ -128,7 +128,8 @@ async def playground(body: PlaygroundMessage, agent_id: int = Depends(workspace)
         lead = {**lead, "call_purpose": body.purpose, "call_goal": goal}
     history = [t.model_dump() for t in body.history]
     try:
-        result = await asyncio.to_thread(agent.respond, agent_id, history, body.message, lead)
+        # Same retrieval as live calls (keyword search, no embedding request per turn)
+        result = await asyncio.to_thread(agent.respond, agent_id, history, body.message, lead, False)
     except LLMError as e:
         raise HTTPException(502, str(e))
     if body.speak:

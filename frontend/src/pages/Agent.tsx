@@ -354,7 +354,8 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
   const coverage = useQuery({ queryKey: ['knowledge'], queryFn: () => api<{ coverage?: { topics: CoverageTopics } }>(`${base}/knowledge`), staleTime: 60_000 })
   const suggestions = quickReplies(profile, coverage.data?.coverage?.topics ?? {}, lang !== 'en-IN', direction === 'inbound')
   const [leadId, setLeadId] = useState<number | ''>('')
-  const [speak, setSpeak] = useState(true)
+  // Voice off by default: text rehearsals cost no TTS; switch on to hear the agent
+  const [speak, setSpeak] = useState(false)
   const [listening, setListening] = useState(false)
   const [selected, setSelected] = useState<number | null>(null)
   const [ended, setEnded] = useState(false)
