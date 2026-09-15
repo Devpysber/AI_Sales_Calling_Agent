@@ -202,6 +202,8 @@ export default function Home() {
     ...(a.status === 'paused' ? [{ a, text: 'Paused: no calls are being placed', to: '/settings' }] : []),
     ...(!a.setup.knowledge ? [{ a, text: 'No knowledge: the agent can\'t answer specifics', to: '/knowledge' }] : []),
     ...(!a.setup.leads ? [{ a, text: 'No leads to call yet', to: '/import' }] : []),
+    ...(!a.setup.number ? [{ a, text: 'No phone number: calls cannot be placed', to: '/settings' }] : []),
+    ...(!a.setup.automation && a.status !== 'paused' ? [{ a, text: 'Automation off: only manual calls go out', to: '/automation' }] : []),
     ...(a.period.calls >= 5 && (a.period.connect_rate ?? 0) < 20 ? [{ a, text: `Low connect rate (${Math.round(a.period.connect_rate ?? 0)}%)`, to: '/analytics' }] : []),
   ]), [agents])
 

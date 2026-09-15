@@ -178,7 +178,7 @@ def list_agents() -> list[dict]:
             "within_calling_hours": within_calling_hours(automation),
             "automation_on": automation_on,
             "setup": {"persona": customized.get(aid, False), "knowledge": documents.get(aid, 0) > 0,
-                      "leads": leads.get(aid, 0) > 0, "number": bool(agent["phone_number"]), "automation": automation_on},
+                      "leads": leads.get(aid, 0) > 0, "number": bool(agent["phone_number"] or settings.plivo_phone_number), "automation": automation_on},
             "persona": {k: profile[k] for k in ("agent_name", "company_name", "voice_speaker", "default_language")},
             "stats": {
                 "leads": leads.get(aid, 0), "hot": hot.get(aid, 0), "meetings": meetings.get(aid, 0),
