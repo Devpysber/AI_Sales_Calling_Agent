@@ -135,6 +135,8 @@ export interface AgentProfile {
   transfer_on_request: boolean
   after_hours_mode: 'ai' | 'forward' | 'message'
   after_hours_message: string
+  forward_fallback: 'ai' | 'message'
+  notify_missed_calls: boolean
 }
 
 export interface AutomationSettings {

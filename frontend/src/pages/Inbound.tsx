@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bot, Clock, MoonStar, PhoneForwarded, PhoneIncoming, Save, UserRound } from 'lucide-react'
+import { Bot, Clock, MoonStar, PhoneForwarded, PhoneIncoming, PhoneMissed, Save, UserRound } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -13,8 +13,8 @@ import type { AgentProfile, AutomationSettings, Call, Page } from '@/lib/types'
 import { cn, formatDuration, timeAgo } from '@/lib/utils'
 
 type ProfileResponse = { profile: AgentProfile }
-type Routing = Pick<AgentProfile, 'transfer_number' | 'inbound_mode' | 'transfer_on_request' | 'after_hours_mode' | 'after_hours_message'>
-const KEYS: (keyof Routing)[] = ['transfer_number', 'inbound_mode', 'transfer_on_request', 'after_hours_mode', 'after_hours_message']
+type Routing = Pick<AgentProfile, 'transfer_number' | 'inbound_mode' | 'transfer_on_request' | 'after_hours_mode' | 'after_hours_message' | 'forward_fallback' | 'notify_missed_calls'>
+const KEYS: (keyof Routing)[] = ['transfer_number', 'inbound_mode', 'transfer_on_request', 'after_hours_mode', 'after_hours_message', 'forward_fallback', 'notify_missed_calls']
 
 export default function Inbound() {
   const { agent, base, path } = useAgent()
@@ -117,6 +117,16 @@ export default function Inbound() {
                 <UserRound className="size-4 text-fg-2" />
                 <span className="flex-1"><span className="block font-semibold">AI transfers when a caller asks for a person</span><span className="text-xs text-muted">The agent says it is connecting them, then your number rings.</span></span>
                 <Switch checked={form.transfer_on_request && hasNumber} onChange={(v) => set('transfer_on_request', v)} disabled={!hasNumber} label="Transfer on request" />
+              </label>
+              <label className={cn('flex items-center gap-3 rounded-xl border border-border px-3 py-2.5 text-sm', !hasNumber && 'opacity-50')}>
+                <Bot className="size-4 text-fg-2" />
+                <span className="flex-1"><span className="block font-semibold">If your team doesn't pick up, the AI takes the call</span><span className="text-xs text-muted">Off: the caller hears “our team will call you back” and the call ends.</span></span>
+                <Switch checked={form.forward_fallback === 'ai'} onChange={(v) => set('forward_fallback', v ? 'ai' : 'message')} disabled={!hasNumber} label="AI fallback" />
+              </label>
+              <label className={cn('flex items-center gap-3 rounded-xl border border-border px-3 py-2.5 text-sm', !hasNumber && 'opacity-50')}>
+                <PhoneMissed className="size-4 text-fg-2" />
+                <span className="flex-1"><span className="block font-semibold">Email me about missed forwarded calls</span><span className="text-xs text-muted">Sent to your Admin profile email with the caller's CRM details.</span></span>
+                <Switch checked={form.notify_missed_calls} onChange={(v) => set('notify_missed_calls', v)} disabled={!hasNumber} label="Missed call email" />
               </label>
             </div>
           </Card>

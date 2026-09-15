@@ -682,7 +682,10 @@ class CallStream:
     # ----- conversation -----
 
     async def greet(self):
-        text = next((t["text"] for t in self.session["history"] if t["role"] == "assistant"), None)
+        history = self.session["history"]
+        # Resumed after an unanswered transfer: speak the latest agent line, not the original greeting
+        text = history[-1]["text"] if history and history[-1]["role"] == "assistant" and len(history) > 1 else \
+            next((t["text"] for t in history if t["role"] == "assistant"), None)
         if not text:
             text = agent.greeting(self.agent_id, self.session.get("lead") or {}, self.session.get("language") or "en-IN")
             self.turn("assistant", text)

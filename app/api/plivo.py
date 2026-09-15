@@ -131,7 +131,7 @@ def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = N
     """<Dial> the agent's transfer number; if nobody picks up the caller hears a short message instead of silence."""
     number = agents.phone_digits(persona.get("transfer_number", ""))
     dial = plivoxml.DialElement(caller_id=caller_id or None, timeout=30,
-                                action=f"{settings.base_url}/api/plivo/transfer-done" + (f"?cid={session['call_id']}" if session else ""),
+                                action=f"{settings.base_url}/api/plivo/transfer-done" + (f"?cid={session['call_id']}&sid={session['id']}" if session else ""),
                                 method="POST", redirect=True)
     dial.add(plivoxml.NumberElement(number))
     r.add(dial)
@@ -169,6 +169,9 @@ async def answer(request: Request):
         route = inbound_route(persona, agent_id, p.get("From"))
         if route == "forward":
             await asyncio.to_thread(calls.mark_transferred, session["call_id"], "Forwarded to " + persona["transfer_number"], "forward")
+            if persona["record_calls"]:
+                r.add(plivoxml.RecordElement(action=f"{settings.base_url}/api/plivo/recording?cid={session['call_id']}",
+                                             record_session=True, redirect=False, max_length=3600, file_format="mp3"))
             return xml(dial_human(r, persona, p.get("To"), session))
         if route == "message":
             key = "hi" if (session.get("language") or "").startswith("hi") else "en"
@@ -351,15 +354,63 @@ async def transfer(request: Request):
     return xml(dial_human(r, persona, caller, session if session.get("call_id") else None))
 
 
+FALLBACK_LINES = {"en": "Sorry, our team is busy right now. I can help you, what do you need?",
+                  "hi": "माफ़ कीजिए, हमारी टीम अभी व्यस्त है। मैं आपकी मदद कर सकता हूँ, बताइए क्या जानना है?"}
+
+
+def _notify_missed(session: dict, persona: dict, status: str):
+    """Email the admin about a forwarded call nobody answered, with the caller's CRM context."""
+    from app.core.auth import login_email
+    from app.services.notification_service import send_email
+
+    to = login_email()
+    if not to or not persona.get("notify_missed_calls", True):
+        return
+    lead = session.get("lead") or {}
+    who = lead.get("name") or lead.get("phone") or "Unknown caller"
+    lines = [f"{who} called {persona.get('company_name')} and was forwarded to {persona.get('transfer_number')}, but nobody answered ({status}).",
+             "", f"Phone: {lead.get('phone') or '—'}"]
+    for key, label in (("company", "Company"), ("status", "Stage"), ("summary", "Last summary"), ("meeting_at", "Meeting")):
+        if lead.get(key):
+            lines.append(f"{label}: {lead[key]}")
+    lines += ["", "Call them back soon."]
+    send_email(to, f"Missed call: {who}", "\n".join(lines), lead_id=session.get("lead_id"), agent_id=session.get("agent_id"))
+
+
 @router.post("/transfer-done")
 async def transfer_done(request: Request):
-    """After the transferred leg ends: nothing more to say if it was answered, a short apology if not."""
+    """After the transferred leg ends. Answered: done. Not answered: the AI takes the call back (or apologises), and the admin is emailed."""
     p = await verified(request)
     r = plivoxml.ResponseElement()
-    if (p.get("DialStatus") or "").lower() not in ("completed", "answer", "answered"):
-        cid = p.get("cid")
-        if cid:
-            await asyncio.to_thread(CallService().mark_transferred, int(cid), f"Transfer not answered ({p.get('DialStatus')})", None)
-        r.add(plivoxml.SpeakElement("Sorry, our team is not available right now. We will call you back soon.", voice="WOMAN", language="en-IN"))
-    r.add(plivoxml.HangupElement())
+    if (p.get("DialStatus") or "").lower() in ("completed", "answer", "answered"):
+        r.add(plivoxml.HangupElement())
+        return xml(r)
+
+    status = p.get("DialStatus") or "no answer"
+    session = call_session.get(p.get("sid") or "") or {}
+    agent_id = session_agent(session) if session else None
+    persona = agents.get_profile(agent_id) if agent_id else {}
+    if p.get("cid"):
+        await asyncio.to_thread(CallService().mark_transferred, int(p["cid"]), f"Team did not answer ({status})", None)
+    if session:
+        asyncio.get_running_loop().run_in_executor(None, _notify_missed, session, persona, status)
+
+    key = "hi" if (session.get("language") or "").startswith("hi") else "en"
+    if session and persona.get("forward_fallback", "ai") == "ai" and settings.voice_mode == "stream":
+        # The AI picks the caller back up on a fresh audio stream, with the conversation so far.
+        line = FALLBACK_LINES[key]
+        call_session.add_turn(session, "assistant", line)
+        session["transferred"] = False
+        call_session.save(session)
+        stream_url = settings.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1) + f"/api/plivo/stream?sid={session['id']}"
+        r.add(plivoxml.StreamElement(stream_url, bidirectional=True, keepCallAlive=True, contentType="audio/x-mulaw;rate=8000"))
+        return xml(r)
+
+    text = ("Sorry, our team is not available right now. We will call you back soon." if key == "en"
+            else "माफ़ कीजिए, हमारी टीम अभी उपलब्ध नहीं है। हम आपको जल्द ही कॉल करेंगे।")
+    if session:
+        hangup_with(r, session, text)
+    else:
+        r.add(plivoxml.SpeakElement(text, voice="WOMAN", language="en-IN"))
+        r.add(plivoxml.HangupElement())
     return xml(r)

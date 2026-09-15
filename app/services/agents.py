@@ -75,6 +75,8 @@ PROFILE_DEFAULTS = {
     "transfer_on_request": True,       # AI hands over when the caller asks for a person
     "after_hours_mode": "ai",          # ai | forward | message (outside the automation calling window)
     "after_hours_message": "",
+    "forward_fallback": "ai",          # ai (agent takes the call) | message, when the team does not pick up
+    "notify_missed_calls": True,       # email the admin when a forwarded call is missed
     "record_calls": False,
     "detect_voicemail": False,
 }
@@ -286,7 +288,8 @@ def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
         if digits and not 11 <= len(digits) <= 15:
             raise ValueError("Transfer number must be a full phone number with country code, e.g. +91 98765 43210.")
         values["transfer_number"] = f"+{digits}" if digits else ""
-    for key, allowed in (("inbound_mode", ("ai", "forward")), ("after_hours_mode", ("ai", "forward", "message"))):
+    for key, allowed in (("inbound_mode", ("ai", "forward")), ("after_hours_mode", ("ai", "forward", "message")),
+                         ("forward_fallback", ("ai", "message"))):
         if key in values and values[key] not in allowed:
             raise ValueError(f"{key} must be one of: {', '.join(allowed)}")
     if values.get("inbound_mode") == "forward" or values.get("after_hours_mode") == "forward":

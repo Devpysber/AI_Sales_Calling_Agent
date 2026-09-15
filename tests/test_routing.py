@@ -64,3 +64,20 @@ def test_supervision_socket_requires_login(support):
     with pytest.raises(WebSocketDisconnect):
         with anonymous.websocket_connect(f"/api/agents/{support}/calls/1/monitor") as ws:
             ws.receive_json()
+
+
+def test_unanswered_forward_falls_back_to_ai(client, support, monkeypatch):
+    from app.core.config import settings
+    from app.services import call_session
+
+    monkeypatch.setattr(settings, "voice_mode", "stream")
+    client.put(f"/api/agents/{support}/profile", json={"transfer_number": "9876543210", "forward_fallback": "ai"})
+    assert client.get(f"/api/agents/{support}/profile").json()["profile"]["transfer_number"] == "+919876543210"
+    session = call_session.create(agent_id=support, lead_id=None, lead={"phone": "+919000000077"}, language="en-IN")
+    xml = client.post(f"/api/plivo/transfer-done?sid={session['id']}", data={"DialStatus": "no-answer"}).text
+    assert "<Stream" in xml
+    assert call_session.get(session["id"])["history"][-1]["text"].startswith("Sorry, our team is busy")
+
+    client.put(f"/api/agents/{support}/profile", json={"forward_fallback": "message"})
+    xml = client.post(f"/api/plivo/transfer-done?sid={session['id']}", data={"DialStatus": "busy"}).text
+    assert "<Stream" not in xml and "<Hangup" in xml
