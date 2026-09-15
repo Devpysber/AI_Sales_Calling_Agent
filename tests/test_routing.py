@@ -81,3 +81,16 @@ def test_unanswered_forward_falls_back_to_ai(client, support, monkeypatch):
     client.put(f"/api/agents/{support}/profile", json={"forward_fallback": "message"})
     xml = client.post(f"/api/plivo/transfer-done?sid={session['id']}", data={"DialStatus": "busy"}).text
     assert "<Stream" not in xml and "<Hangup" in xml
+
+
+def test_alerts_summary_and_snooze(client, monkeypatch):
+    from app.services import alerts
+
+    monkeypatch.setattr(alerts, "_plivo", lambda: {"provider": "Plivo", "label": "x", "value": "0.10", "level": "critical", "detail": "≈ 20 min left",
+                                                     "facts": [], "action": {"label": "Top up", "url": "https://console.plivo.com/billing/"}, "balance": 0.1, "unit": "credits"})
+    monkeypatch.setattr(alerts, "_openrouter", lambda: None)
+    monkeypatch.setattr(alerts, "_routing", lambda: [])
+    data = client.get("/api/system/alerts", params={"refresh": True}).json()
+    assert data["popup"]["provider"] == "Plivo" and any(i["kind"] == "credit" for i in data["items"])
+    assert client.post("/api/system/alerts/snooze", json={"key": "popup:Plivo", "hours": 1}).status_code == 200
+    assert client.get("/api/system/alerts").json()["popup"] is None

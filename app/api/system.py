@@ -153,7 +153,18 @@ async def inbound_restore():
 
 
 @router.get("/system/alerts")
-async def alerts():
-    """Navbar bell: reminders across agents plus provider balances (cached)."""
+async def alerts(refresh: bool = False):
+    """Navbar bell: reminders across agents plus live provider balances (cached briefly; refresh=true re-fetches)."""
     from app.services import alerts as alert_service
-    return await asyncio.to_thread(alert_service.summary)
+    return await asyncio.to_thread(alert_service.summary, refresh)
+
+
+@router.post("/system/alerts/snooze")
+async def snooze_alert(body: dict):
+    """Hide one reminder (or a low-credit popup, key 'popup:<Provider>') for a number of hours."""
+    from app.services import alerts as alert_service
+    key = str(body.get("key") or "")
+    if not key:
+        raise HTTPException(400, "key is required")
+    await asyncio.to_thread(alert_service.snooze, key, float(body.get("hours") or 4))
+    return {"ok": True}
