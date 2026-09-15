@@ -23,7 +23,7 @@ function LeadCard({ lead, onOpen, onDragStart, onMove }: { lead: Lead; onOpen: (
   const fresh = !onCall && Date.now() - Date.parse(lead.updated_at) < RECENT_MS
   return (
     <div draggable onDragStart={onDragStart} role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => e.key === 'Enter' && onOpen()}
-      className={cn('group cursor-grab rounded-2xl border bg-surface p-3.5 shadow-card transition hover:border-border-strong active:cursor-grabbing',
+      className={cn('group min-w-0 cursor-grab overflow-hidden rounded-2xl border bg-surface p-3.5 shadow-card transition hover:border-border-strong active:cursor-grabbing',
         onCall ? 'border-success ring-2 ring-success/25' : fresh ? 'border-brand/50 animate-pop-in' : 'border-border')}>
       {(onCall || fresh) && (
         <div className={cn('mb-2 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10.5px] font-bold', onCall ? 'bg-success-soft text-success' : 'bg-surface-2 text-fg-2')}>
@@ -34,30 +34,32 @@ function LeadCard({ lead, onOpen, onDragStart, onMove }: { lead: Lead; onOpen: (
       <div className="flex items-start gap-2.5">
         <Avatar name={lead.name ?? lead.phone} className="size-8 text-[11px]" />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 truncate text-[13.5px] font-bold">{lead.name ?? 'Unnamed'}{lead.do_not_call && <Ban className="size-3 text-danger" />}</div>
-          <div className="flex items-center gap-1 truncate text-[11.5px] text-muted">{lead.company ? <><Building2 className="size-3 shrink-0" />{lead.company}</> : lead.phone}</div>
+          <div className="flex min-w-0 items-center gap-1.5 text-[13.5px] font-bold"><span className="truncate">{lead.name ?? 'Unnamed'}</span>{lead.do_not_call && <Ban className="size-3 shrink-0 text-danger" />}</div>
+          <div className="flex min-w-0 items-center gap-1 text-[11.5px] text-muted">{lead.company ? <><Building2 className="size-3 shrink-0" /><span className="truncate">{lead.company}</span></> : <span className="truncate">{lead.phone}</span>}</div>
         </div>
         <GripVertical className="size-4 shrink-0 text-muted opacity-0 transition group-hover:opacity-100" />
       </div>
-      {lead.summary && <p className="mt-2.5 line-clamp-2 text-[12px] leading-snug text-fg-2">{lead.summary}</p>}
-      {lead.meeting_at && <div className="mt-2.5 flex items-center gap-1.5 rounded-lg bg-success-soft px-2 py-1 text-[11.5px] font-semibold text-success"><CalendarClock className="size-3" />{lead.meeting_at}</div>}
-      <div className="mt-3 flex items-center gap-1.5">
+      {lead.summary && <p className="mt-2.5 line-clamp-2 break-words text-[12px] leading-snug text-fg-2">{lead.summary}</p>}
+      {lead.meeting_at && <div className="mt-2.5 flex min-w-0 items-center gap-1.5 rounded-lg bg-success-soft px-2 py-1 text-[11.5px] font-semibold text-success"><CalendarClock className="size-3 shrink-0" /><span className="truncate">{lead.meeting_at}</span></div>}
+      <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5">
         <QualificationBadge value={lead.qualification} />
         {lead.call_status && <CallStatusBadge status={lead.call_status} />}
-        <div className="flex-1" />
+      </div>
+      {/* Actions on their own row so badges never push them out of narrow columns */}
+      <div className="mt-2 flex min-w-0 items-center gap-1.5">
         {/* Keyboard / touch alternative to dragging */}
         <select aria-label="Move to stage" value={lead.status} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}
           onChange={(e) => onMove(e.target.value)}
-          className="h-7 max-w-24 rounded-lg border border-border bg-surface px-1 text-[11px] text-fg-2 opacity-0 transition group-hover:opacity-100 focus:opacity-100">
+          className="h-7 min-w-0 flex-1 rounded-lg border border-border bg-surface px-1 text-[11px] text-fg-2 opacity-70 transition group-hover:opacity-100 focus:opacity-100">
           {STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
         <button type="button" disabled={lead.do_not_call || onCall} title="Call now"
           onClick={(e) => { e.stopPropagation(); startCall.mutate(lead.id) }}
-          className="grid size-7 place-items-center rounded-lg bg-fg text-bg opacity-0 transition group-hover:opacity-100 disabled:hidden">
+          className="grid size-7 shrink-0 place-items-center rounded-lg bg-fg text-bg opacity-70 transition group-hover:opacity-100 disabled:hidden">
           <PhoneCall className="size-3.5" />
         </button>
       </div>
-      <div className="mt-2 text-[10.5px] text-muted">{lead.last_contacted_at ? `Contacted ${timeAgo(lead.last_contacted_at)}` : `Added ${timeAgo(lead.created_at)}`}</div>
+      <div className="mt-2 truncate text-[10.5px] text-muted">{lead.last_contacted_at ? `Contacted ${timeAgo(lead.last_contacted_at)}` : `Added ${timeAgo(lead.created_at)}`}</div>
     </div>
   )
 }
