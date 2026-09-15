@@ -320,8 +320,10 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
           <button type="button" onClick={() => setDark(!dark)} title="Toggle theme" className="grid size-9 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg">{dark ? <Sun className="size-4" /> : <Moon className="size-4" />}</button>
         </div>
         <div className={cn('mt-2 flex items-center gap-2.5 rounded-xl bg-ink-fg/[0.04] p-2', compact && 'justify-center')}>
-          <span className="grid size-8 place-items-center rounded-full bg-ink-fg text-xs font-bold text-ink uppercase">{user[0]}</span>
-          {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="truncate text-[13px] font-bold">{user}</div><div className="text-[11px] text-ink-muted">Administrator</div></div>}
+          <Link to="/profile" title="Admin profile" className={cn('flex min-w-0 items-center gap-2.5 rounded-lg transition hover:opacity-80', !compact && 'flex-1')}>
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-ink-fg text-xs font-bold text-ink uppercase">{user[0]}</span>
+            {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="truncate text-[13px] font-bold">{user}</div><div className="text-[11px] text-ink-muted">Administrator · Profile</div></div>}
+          </Link>
           {!compact && <button type="button" onClick={onLogout} title="Sign out" className="grid size-8 place-items-center rounded-lg text-ink-muted hover:bg-ink-fg/5 hover:text-danger"><LogOut className="size-4" /></button>}
         </div>
       </div>
@@ -357,7 +359,7 @@ export default function AppShell({ user }: { user: string }) {
   }, [navigate, qc])
 
   const sub = id ? location.pathname.replace(`/a/${id}`, '') || '/' : location.pathname
-  const pageTitle = id ? TITLES[sub] ?? '' : sub === '/settings' ? 'Integrations & system' : 'All agents'
+  const pageTitle = id ? TITLES[sub] ?? '' : sub === '/settings' ? 'Integrations & system' : sub === '/profile' ? 'Admin profile' : 'All agents'
   useEffect(() => {
     const live = agents.reduce((n, a) => n + a.stats.live, 0)
     document.title = `${live ? `(${live} live) ` : ''}${agent ? `${pageTitle} · ${agent.name}` : pageTitle} · Psyber Voice`
@@ -376,6 +378,7 @@ export default function AppShell({ user }: { user: string }) {
     ] : []),
     { id: 'home', group: 'Go to', label: 'All agents', icon: LayoutGrid, run: () => navigate('/') },
     { id: 'system', group: 'Go to', label: 'Integrations & system', icon: Settings, run: () => navigate('/settings') },
+    { id: 'profile', group: 'Go to', label: 'Admin profile & password', icon: UserPlus, keywords: 'account security', run: () => navigate('/profile') },
     { id: 'theme', group: 'Preferences', label: dark ? 'Switch to light theme' : 'Switch to dark theme', icon: dark ? Sun : Moon, keywords: 'dark mode', run: () => setDark(!dark) },
     { id: 'logout', group: 'Preferences', label: 'Sign out', icon: LogOut, run: logout },
   ], [agents, id, go, navigate, dark, setDark, logout])

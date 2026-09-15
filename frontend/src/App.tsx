@@ -20,6 +20,7 @@ const Knowledge = lazy(() => import('@/pages/Knowledge'))
 const Automation = lazy(() => import('@/pages/Automation'))
 const AgentSettings = lazy(() => import('@/pages/AgentSettings'))
 const SettingsPage = lazy(() => import('@/pages/Settings'))
+const ProfilePage = lazy(() => import('@/pages/Profile'))
 
 const Loading = () => <div className="grid h-64 place-items-center"><Spinner className="size-6" /></div>
 
@@ -29,7 +30,7 @@ export default function App() {
   const qc = useQueryClient()
   const { data: me, isLoading } = useQuery({
     queryKey: ['me'],
-    queryFn: () => api<{ user: string | null; auth_enabled: boolean }>('/api/auth/me'),
+    queryFn: () => api<{ user: string | null; auth_enabled: boolean; display_name?: string }>('/api/auth/me'),
     staleTime: 60_000,
   })
 
@@ -56,7 +57,7 @@ export default function App() {
     )
   }
 
-  const shell = <AppShell user={me.user} />
+  const shell = <AppShell user={me.display_name || me.user} />
   return (
     <Suspense fallback={<Loading />}>
       <Routes>
@@ -64,6 +65,7 @@ export default function App() {
         <Route element={shell}>
           <Route index element={<Home />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="profile" element={<ProfilePage />} />
         </Route>
         <Route path="a/:agentId" element={shell}>
           <Route index element={<Dashboard />} />

@@ -15,7 +15,7 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core import store
 from app.core.config import settings
@@ -33,8 +33,37 @@ _secret = (settings.secret_key or secrets.token_hex(32)).encode()
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+PROFILE_KEY = "admin_profile"
+PBKDF2_ROUNDS = 240_000
+
+
+def _profile() -> dict:
+    from app.services.settings_service import SettingsService
+    return SettingsService().get_state(PROFILE_KEY) or {}
+
+
+def _save_profile(profile: dict):
+    from app.services.settings_service import SettingsService
+    SettingsService().set_state(PROFILE_KEY, profile)
+
+
+def _hash_password(password: str, salt: str | None = None) -> str:
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), PBKDF2_ROUNDS).hex()
+    return f"pbkdf2${salt}${digest}"
+
+
+def _password_ok(password: str) -> bool:
+    """A password changed from the dashboard (hashed in the database) replaces ADMIN_PASSWORD."""
+    stored = _profile().get("password_hash")
+    if stored:
+        _, salt, _ = stored.split("$")
+        return hmac.compare_digest(_hash_password(password, salt), stored)
+    return bool(settings.admin_password) and hmac.compare_digest(password, settings.admin_password)
+
+
 def auth_enabled() -> bool:
-    return bool(settings.admin_password)
+    return bool(settings.admin_password or _profile().get("password_hash"))
 
 
 def _sign(payload: bytes) -> str:
@@ -94,9 +123,11 @@ def login(body: Login, request: Request, response: Response):
         raise HTTPException(429, "Too many attempts. Try again in 15 minutes.")
     if not auth_enabled():
         raise HTTPException(400, "Login is disabled: set ADMIN_PASSWORD on the server.")
-    if not (hmac.compare_digest(body.username, settings.admin_username) and
-            hmac.compare_digest(body.password, settings.admin_password)):
+    if not (hmac.compare_digest(body.username, settings.admin_username) and _password_ok(body.password)):
         raise HTTPException(401, "Invalid username or password.")
+    profile = _profile()
+    profile["last_login_at"], profile["last_login_ip"] = int(time.time()), ip
+    _save_profile(profile)
     https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
     response.set_cookie(COOKIE, make_token(body.username), max_age=TTL, httponly=True, samesite="lax",
                         secure=https, path="/")
@@ -111,4 +142,62 @@ def logout(response: Response):
 
 @router.get("/me")
 def me(request: Request):
-    return {"user": current_user(request), "auth_enabled": auth_enabled()}
+    profile = _profile()
+    return {"user": current_user(request), "auth_enabled": auth_enabled(),
+            "display_name": profile.get("display_name") or settings.admin_username, "role": profile.get("role") or "Administrator"}
+
+
+class ProfileUpdate(BaseModel):
+    display_name: str = Field("", max_length=80)
+    email: str = Field("", max_length=160)
+    phone: str = Field("", max_length=32)
+    role: str = Field("", max_length=60)
+    company: str = Field("", max_length=120)
+    timezone: str = Field("Asia/Kolkata", max_length=64)
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=10, max_length=128)
+
+
+def _public_profile(profile: dict) -> dict:
+    return {
+        "username": settings.admin_username,
+        **{k: profile.get(k, "") for k in ("display_name", "email", "phone", "role", "company")},
+        "timezone": profile.get("timezone") or "Asia/Kolkata",
+        "password_source": "dashboard" if profile.get("password_hash") else "environment",
+        "password_changed_at": profile.get("password_changed_at"),
+        "last_login_at": profile.get("last_login_at"), "last_login_ip": profile.get("last_login_ip"),
+        "session_hours": TTL // 3600, "api_token_enabled": bool(settings.api_token),
+    }
+
+
+@router.get("/profile")
+def get_profile():
+    return _public_profile(_profile())
+
+
+@router.put("/profile")
+def update_profile(body: ProfileUpdate):
+    email = body.email.strip()
+    if email and ("@" not in email or "." not in email.split("@")[-1]):
+        raise HTTPException(400, "Enter a valid email address.")
+    profile = {**_profile(), **{k: v.strip() for k, v in body.model_dump().items()}}
+    _save_profile(profile)
+    return _public_profile(profile)
+
+
+@router.post("/password")
+def change_password(body: PasswordChange, request: Request):
+    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0].strip()
+    if store.rate_limited(f"password:{ip}", limit=5, window=900):
+        raise HTTPException(429, "Too many attempts. Try again in 15 minutes.")
+    if auth_enabled() and not _password_ok(body.current_password):
+        raise HTTPException(400, "Current password is incorrect.")
+    new = body.new_password
+    if new.lower() == new or new.isalpha() or new.isdigit():
+        raise HTTPException(400, "Use at least 10 characters mixing upper and lower case letters with numbers or symbols.")
+    profile = {**_profile(), "password_hash": _hash_password(new), "password_changed_at": int(time.time())}
+    _save_profile(profile)
+    return {"ok": True}

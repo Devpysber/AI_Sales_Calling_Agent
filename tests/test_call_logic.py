@@ -47,3 +47,14 @@ def test_call_goal():
     assert "2026-09-16 11:00" in call_goal({"meeting_at": "2026-09-16 11:00"}, "confirm_meeting")
     assert call_goal({}, "confirm_meeting") is None
     assert call_goal({}, None) is None
+
+
+def test_ai_stage_moves_forward_only():
+    from app.services.call_service import _ai_may_move
+    assert _ai_may_move("New", "Interested")
+    assert _ai_may_move("Follow Up", "Meeting Booked")
+    assert not _ai_may_move("Meeting Booked", "Contacted")
+    assert _ai_may_move("Interested", "Not Interested")
+    assert not _ai_may_move("Closed Won", "Not Interested")
+    assert not _ai_may_move("Not Interested", "Contacted")
+    assert _ai_may_move(None, "Contacted")

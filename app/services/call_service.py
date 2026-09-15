@@ -35,6 +35,22 @@ class CallError(Exception):
     pass
 
 
+# Pipeline order the AI may only advance through; exits (lost, not interested, DNC) are always allowed.
+JOURNEY = ["New", "Contacted", "Interested", "Follow Up", "Meeting Booked", "Closed Won"]
+EXIT_STAGES = {"Not Interested", "Do Not Call", "Closed Lost"}
+
+
+def _ai_may_move(current: str | None, proposed: str) -> bool:
+    """AI stage changes never move a lead backwards (a short follow-up call must not undo a booked meeting)."""
+    if proposed in EXIT_STAGES:
+        return current != "Closed Won"
+    if proposed not in JOURNEY:
+        return False
+    if current not in JOURNEY:
+        return current is None  # closed/exit stages are only reopened by a person
+    return JOURNEY.index(proposed) >= JOURNEY.index(current)
+
+
 def _valid_callback(value) -> str | None:
     """Normalise an LLM-extracted callback time; drop anything unparsable or more than 30 days out."""
     try:
@@ -270,7 +286,9 @@ class CallService:
             if qualification:
                 updates["qualification"] = qualification
             if s.get("status"):
-                updates["status"] = s["status"]
+                current = (self.crm.get(lead_id) or {}).get("status")
+                if _ai_may_move(current, s["status"]):
+                    updates["status"] = s["status"]
             if s.get("outcome") == "do_not_call":
                 updates["do_not_call"] = True
             self.crm.update(lead_id, updates, actor="ai", event_type="ai.summary",

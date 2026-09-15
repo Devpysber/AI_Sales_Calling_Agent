@@ -14,11 +14,23 @@ import { cn, QUALIFICATIONS, timeAgo } from '@/lib/utils'
 const STAGES = ['New', 'Contacted', 'Interested', 'Follow Up', 'Meeting Booked', 'Closed Won', 'Closed Lost', 'Not Interested', 'Do Not Call']
 const OPEN = STAGES.slice(0, 6)
 
-function LeadCard({ lead, onOpen, onDragStart }: { lead: Lead; onOpen: () => void; onDragStart: (e: React.DragEvent) => void }) {
+const LIVE_CALL = ['Queued', 'Ringing', 'In Progress']
+const RECENT_MS = 3 * 60_000
+
+function LeadCard({ lead, onOpen, onDragStart, onMove }: { lead: Lead; onOpen: () => void; onDragStart: (e: React.DragEvent) => void; onMove: (status: string) => void }) {
   const startCall = useStartCall()
+  const onCall = LIVE_CALL.includes(lead.call_status ?? '')
+  const fresh = !onCall && Date.now() - Date.parse(lead.updated_at) < RECENT_MS
   return (
     <div draggable onDragStart={onDragStart} role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => e.key === 'Enter' && onOpen()}
-      className="group cursor-grab rounded-2xl border border-border bg-surface p-3.5 shadow-card transition hover:border-border-strong active:cursor-grabbing">
+      className={cn('group cursor-grab rounded-2xl border bg-surface p-3.5 shadow-card transition hover:border-border-strong active:cursor-grabbing',
+        onCall ? 'border-success ring-2 ring-success/25' : fresh ? 'border-brand/50 animate-pop-in' : 'border-border')}>
+      {(onCall || fresh) && (
+        <div className={cn('mb-2 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10.5px] font-bold', onCall ? 'bg-success-soft text-success' : 'bg-surface-2 text-fg-2')}>
+          <span className={cn('size-1.5 rounded-full', onCall ? 'animate-pulse bg-success' : 'bg-brand')} />
+          {onCall ? (lead.call_status === 'In Progress' ? 'On a call now' : `${lead.call_status}…`) : `Updated ${timeAgo(lead.updated_at)}`}
+        </div>
+      )}
       <div className="flex items-start gap-2.5">
         <Avatar name={lead.name ?? lead.phone} className="size-8 text-[11px]" />
         <div className="min-w-0 flex-1">
@@ -33,7 +45,13 @@ function LeadCard({ lead, onOpen, onDragStart }: { lead: Lead; onOpen: () => voi
         <QualificationBadge value={lead.qualification} />
         {lead.call_status && <CallStatusBadge status={lead.call_status} />}
         <div className="flex-1" />
-        <button type="button" disabled={lead.do_not_call} title="Call now"
+        {/* Keyboard / touch alternative to dragging */}
+        <select aria-label="Move to stage" value={lead.status} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}
+          onChange={(e) => onMove(e.target.value)}
+          className="h-7 max-w-24 rounded-lg border border-border bg-surface px-1 text-[11px] text-fg-2 opacity-0 transition group-hover:opacity-100 focus:opacity-100">
+          {STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <button type="button" disabled={lead.do_not_call || onCall} title="Call now"
           onClick={(e) => { e.stopPropagation(); startCall.mutate(lead.id) }}
           className="grid size-7 place-items-center rounded-lg bg-fg text-bg opacity-0 transition group-hover:opacity-100 disabled:hidden">
           <PhoneCall className="size-3.5" />
@@ -57,7 +75,9 @@ export default function Pipeline() {
   const board = useQuery({
     queryKey: ['leads', 'board', search, qualification],
     queryFn: () => api<Board>(`${base}/leads/board`, { params: { search, qualification, per_column: 100 } }),
-    refetchInterval: 15000,
+    // Live board: the AI moves leads after every call; faster while a call is running
+    refetchInterval: (q) => (Object.values(q.state.data ?? {}).some((c) => c.items.some((l) => LIVE_CALL.includes(l.call_status ?? ''))) ? 2000 : 4000),
+    refetchIntervalInBackground: false,
   })
 
   const move = useMutation({
@@ -99,7 +119,8 @@ export default function Pipeline() {
       <PageHeader
         eyebrow={<><Columns3 className="size-3.5" />{agent?.name} · Deals</>}
         title="Pipeline"
-        description="Drag leads between stages. The AI moves them automatically after each call; you can always override."
+        description={<span className="inline-flex flex-wrap items-center gap-x-2">Drag leads between stages or use a card's stage menu. The AI moves them automatically after each call; you can always override.
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-success"><span className="size-1.5 animate-pulse rounded-full bg-success" />Live</span></span>}
         actions={<Tabs value={scope} onChange={setScope} items={[{ value: 'open', label: 'Open stages' }, { value: 'all', label: 'All stages' }]} />}>
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-60 flex-1 sm:max-w-sm">
@@ -145,7 +166,8 @@ export default function Pipeline() {
                   {board.isLoading ? [0, 1].map((i) => <Skeleton key={i} className="h-28" />)
                     : col?.items.length ? col.items.map((lead) => (
                       <LeadCard key={lead.id} lead={lead} onOpen={() => navigate(path(`/leads/${lead.id}`))}
-                        onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; setDragging({ id: lead.id, from: stage }) }} />
+                        onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; setDragging({ id: lead.id, from: stage }) }}
+                        onMove={(status) => status !== lead.status && move.mutate({ id: lead.id, status })} />
                     )) : (
                       <div className={cn('grid flex-1 place-items-center rounded-2xl border-2 border-dashed py-10 text-center text-xs font-semibold text-muted', isOver ? 'border-fg' : 'border-border')}>
                         {dragging ? 'Drop here' : 'No leads'}

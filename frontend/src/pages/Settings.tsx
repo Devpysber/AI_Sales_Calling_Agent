@@ -60,7 +60,7 @@ export default function Settings() {
               </Row>
               <Row ok={s.public_url.ok} title="Public webhook URL">{s.public_url.ok ? <code className="font-mono">{base}</code> : s.public_url.detail}</Row>
               <Row ok={s.signature_validation} okLabel="Enabled" title="Webhook signature verification">{s.signature_validation ? 'Every Plivo request is verified with X-Plivo-Signature-V3.' : 'Disabled — set PLIVO_VALIDATE_SIGNATURE=true.'}</Row>
-              <Row ok={s.email.ok} title="Email (SMTP)">{s.email.ok ? String(s.email.detail) : 'Not configured — reminders and reports are logged to Activity only.'}</Row>
+              <Row ok={s.email.ok} title="Email · Resend / SMTP">{s.email.ok ? String(s.email.detail) : 'Not configured — reminders and reports are logged to Activity only.'}</Row>
             </Card>
 
             <Card>
