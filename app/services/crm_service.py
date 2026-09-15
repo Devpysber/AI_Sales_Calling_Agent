@@ -407,7 +407,9 @@ class CRMService:
         mapping = mapping or self.map_columns(df.columns)
         if "phone" not in mapping.values():
             raise ValueError("Map one column to Phone.")
-        defaults = defaults or {}
+        defaults = dict(defaults or {})
+        batch = datetime.now(IST).strftime("import-%m%d-%H%M")  # tag to find this import's leads later
+        defaults["tags"] = ",".join(t for t in (defaults.get("tags"), batch) if t)
         on_duplicate = on_duplicate or ("skip" if skip_duplicates else "update")
         created, updated, skipped, errors = 0, 0, 0, []
 
@@ -442,7 +444,8 @@ class CRMService:
         events.record("lead.imported", f"Imported {created} lead(s)",
                       f"{updated} updated · {skipped} duplicates skipped · {len(errors)} invalid rows", agent_id=self.agent_id,
                       actor=actor, data={"created": created, "updated": updated, "skipped": skipped, "errors": len(errors)})
-        return {"created": created, "updated": updated, "skipped_duplicates": skipped, "errors": errors[:500], "mapping": mapping}
+        return {"created": created, "updated": updated, "skipped_duplicates": skipped, "errors": errors[:500], "mapping": mapping,
+                "batch_tag": batch}
 
     def export_csv(self) -> str:
         with get_db() as db:

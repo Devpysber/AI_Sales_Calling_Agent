@@ -105,7 +105,7 @@ export default function Agent() {
           { value: 'playbook', label: 'Sales playbook' },
         ]} />} />
 
-      <AgentSummary profile={data.profile} voices={data.voices} languages={data.languages} docs={docs} checks={checks} onGo={setTab} />
+      <AgentSummary profile={draft} saved={data.profile} voices={data.voices} languages={data.languages} docs={docs} checks={checks} onGo={setTab} />
 
       {tab === 'playground'
         ? <Playground profile={data.profile} unsaved={dirty} onSave={() => save.mutate(draft)} saving={save.isPending} />
@@ -129,18 +129,20 @@ export default function Agent() {
 
 /* ============================== Summary ============================== */
 
-function AgentSummary({ profile, voices, languages, docs, checks, onGo }: {
-  profile: AgentProfile; voices: string[]; languages: Record<string, string>; docs: number
+function AgentSummary({ profile, saved, voices, languages, docs, checks, onGo }: {
+  profile: AgentProfile; saved: AgentProfile; voices: string[]; languages: Record<string, string>; docs: number
   checks: { label: string; done: boolean; tab: Section }[]; onGo: (t: Section) => void
 }) {
   const { path } = useAgent()
   const done = checks.filter((c) => c.done).length
   const pct = Math.round((done / checks.length) * 100)
   const [open, setOpen] = useState(false)
+  const changed = (k: keyof AgentProfile, value: ReactNode) => profile[k] === saved[k] ? value
+    : <span key={k} className="inline-flex items-center gap-1.5">{value}<span className="rounded-full bg-warning-soft px-1.5 text-[10px] font-bold text-warning">unsaved</span></span>
   const facts: [string, ReactNode][] = [
-    ['Voice', voices.includes(profile.voice_speaker) ? titleCase(profile.voice_speaker) : profile.voice_speaker],
-    ['Language', languages[profile.default_language] ?? profile.default_language],
-    ['Max length', `${profile.max_call_minutes} min`],
+    ['Voice', changed('voice_speaker', voices.includes(profile.voice_speaker) ? titleCase(profile.voice_speaker) : profile.voice_speaker)],
+    ['Language', changed('default_language', languages[profile.default_language] ?? profile.default_language)],
+    ['Max length', changed('max_call_minutes', `${profile.max_call_minutes} min`)],
     ['Knowledge', docs ? `${docs} document${docs > 1 ? 's' : ''}` : <span key="none" className="text-warning">None</span>],
     ['Recording', profile.record_calls ? 'On' : 'Off'],
   ]
@@ -284,7 +286,7 @@ function ProfileEditor({ section, draft, setDraft, data }: {
               <Input value={draft.company_tagline} maxLength={200} onChange={(e) => set('company_tagline', e.target.value)} placeholder="AI and software development partner for growing businesses" />
             </Field>
             <Field label="Website" className="sm:col-span-2" hint="The site this agent handles. The agent can mention it, and its website form link is on the Automation page.">
-              <Input type="url" value={draft.website_url ?? ''} maxLength={200} onChange={(e) => set('website_url', e.target.value)} placeholder="https://www.yourwebsite.com" />
+              <Input type="url" value={draft.website_url ?? ''} maxLength={200} onChange={(e) => set('website_url', e.target.value)} placeholder="Not set: e.g. https://www.carsindias.com" />
             </Field>
           </div>
         </Section>

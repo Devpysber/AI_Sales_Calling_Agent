@@ -88,7 +88,7 @@ def test_import_analyze_update_and_queue(client, base):
     assert (r["created"], r["skipped_duplicates"], len(r["errors"])) == (1, 1, 1)
     lead = client.get(f"{base}/leads", params={"search": "9876511111"}).json()["items"][0]
     assert lead["email"] is None and lead["language"] == "hi-IN" and lead["call_status"] == "Pending"
-    assert set(lead["tags"]) == {"a", "camp"}
+    assert {"a", "camp"} <= set(lead["tags"]) and r["batch_tag"] in lead["tags"]
 
     r = client.post(f"{base}/leads/import", files=files(), data={"on_duplicate": "update", "tags": "wave2"}).json()
     assert r["updated"] == 2 and r["created"] == 0

@@ -11,7 +11,7 @@ import { useAgent } from '@/lib/agent'
 type RowState = { state: 'ready' | 'duplicate' | 'invalid'; detail: string }
 type Analysis = { ready: number; duplicates: number; invalid: number; row_status: RowState[] }
 type Preview = { rows: number; columns: string[]; mapping: Record<string, string>; sample: Record<string, string>[]; analysis: Analysis }
-type Result = { created: number; updated?: number; skipped_duplicates: number; errors: { row: number; error: string }[] }
+type Result = { created: number; updated?: number; skipped_duplicates: number; errors: { row: number; error: string }[]; batch_tag?: string }
 
 const FIELDS = [
   ['', 'Ignore'], ['name', 'Name'], ['phone', 'Phone *'], ['company', 'Company'], ['email', 'Email'], ['city', 'City'],
@@ -245,6 +245,7 @@ export default function Import() {
           <div className="flex flex-col items-center text-center">
             <span className="grid size-14 place-items-center rounded-full bg-success-soft text-success"><CheckCircle2 className="size-7" /></span>
             <h2 className="mt-4 text-xl font-semibold text-fg">Import complete</h2>
+            {result.batch_tag && (result.created > 0 || (result.updated ?? 0) > 0) && <p className="mt-2 text-sm text-muted">Tagged <Badge>{result.batch_tag}</Badge> so you can find this import later.</p>}
             <p className="mt-1 text-muted">New leads start as <Badge tone="brand">New</Badge>{opts.queue ? ' and are queued: auto-dial calls them within calling hours.' : '. Queue them from Leads or switch on auto-dial.'}</p>
           </div>
           <div className="mx-auto mt-8 grid max-w-3xl gap-4 sm:grid-cols-4">
@@ -253,6 +254,11 @@ export default function Import() {
               <div key={l as string} className="rounded-xl border border-border bg-surface p-4 text-center"><div className={`text-3xl font-semibold tabular-nums ${c}`}>{v}</div><div className="mt-1 text-sm text-muted">{l}</div></div>
             ))}
           </div>
+          {result.created === 0 && (result.updated ?? 0) === 0 && result.skipped_duplicates > 0 && (
+            <p className="mx-auto mt-6 max-w-2xl rounded-xl bg-warning-soft p-3 text-center text-sm text-warning">
+              Every phone number is already in this agent's leads, so nothing new was added. Import again with “Update it” to refresh those leads, or use different numbers.
+            </p>
+          )}
           {result.errors.length > 0 && (
             <div className="mx-auto mt-6 max-h-56 max-w-3xl overflow-y-auto rounded-xl border border-border bg-surface">
               {result.errors.slice(0, 100).map((e) => <div key={e.row} className="flex gap-3 border-b border-border px-4 py-2 text-sm text-fg last:border-0"><span className="w-16 shrink-0 text-muted">Row {e.row}</span><span>{e.error}</span></div>)}
@@ -261,7 +267,9 @@ export default function Import() {
           <div className="mt-8 flex flex-wrap justify-center gap-2">
             <Button onClick={reset}>Import another file</Button>
             <Link to={path('/automation')}><Button>Set up auto-dial</Button></Link>
-            <Link to={path('/leads')}><Button variant="primary">View leads</Button></Link>
+            <Link to={path(result.batch_tag && (result.created || result.updated) ? `/leads?search=${encodeURIComponent(result.batch_tag)}` : '/leads')}>
+              <Button variant="primary">{result.created || result.updated ? `View these ${(result.created || 0) + (result.updated || 0)} leads` : 'View leads'}</Button>
+            </Link>
           </div>
         </Card>
       )}

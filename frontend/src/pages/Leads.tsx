@@ -60,7 +60,7 @@ export default function Leads() {
   const confirm = useConfirm()
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(params.get('search') ?? '')
   const [filters, setFilters] = useState({ status: '', call_status: '', qualification: params.get('qualification') ?? '', view: params.get('view') ?? '' })
   const [sort, setSort] = useState({ key: 'id', order: 'desc' as 'asc' | 'desc' })
   const [page, setPage] = useState(1)
