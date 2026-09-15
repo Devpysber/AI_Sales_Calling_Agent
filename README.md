@@ -90,6 +90,20 @@ pytest -q
 docker compose up -d --build        # app + Postgres + Redis on :8000
 ```
 
+### Hostinger VPS (single server, HTTPS)
+
+Tested layout for a KVM 2 (2 vCPU, 8 GB): Caddy (automatic HTTPS) → nginx → API (3 workers) + scheduler worker, PostgreSQL and Redis, all in Docker.
+
+1. **Domain:** add an `A` record for e.g. `voice.yourcompany.com` pointing to the VPS IP. Plivo needs HTTPS for webhooks and the audio stream.
+2. **On the VPS** (SSH as root):
+   ```bash
+   git clone https://github.com/Devpysber/AI_Sales_Calling_Agent.git /opt/psyber-voice
+   cd /opt/psyber-voice && sudo bash deploy/vps-setup.sh
+   ```
+   It installs Docker, opens ports 22/80/443, adds 2 GB swap, creates `.env` (domain, admin login, random `SECRET_KEY` and database password), asks you to add provider keys, builds and starts everything, and schedules a daily database backup.
+3. **Open** `https://your-domain`, sign in, then **Integrations & system → Inbound calls → Reconnect** so the Plivo number uses the new domain. Copy website form snippets again from **Automation** (the link now uses your domain).
+4. **Updates:** `bash deploy/update.sh` · **Backup now:** `bash deploy/backup.sh` · **Logs:** `docker compose -f docker-compose.vps.yml logs -f api worker`
+
 ### Horizontally scaled
 ```bash
 POSTGRES_PASSWORD=... docker compose -f docker-compose.prod.yml up -d --build

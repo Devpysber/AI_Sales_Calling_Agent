@@ -1,0 +1,98 @@
+# Single-server production for a Hostinger KVM 2 (2 vCPU · 8 GB RAM · Ubuntu)
+#
+#   Caddy (HTTPS, automatic Let's Encrypt)  →  nginx (dashboard + rate limits)  →  api
+#   worker (scheduler) · postgres · redis · migrate (one-off per deploy)
+#
+# First time:   sudo bash deploy/vps-setup.sh
+# Update:       bash deploy/update.sh
+# Logs:         docker compose -f docker-compose.vps.yml logs -f api worker
+#
+# Needs a domain (A record → the VPS IP) for HTTPS: Plivo webhooks and the audio stream require https/wss.
+
+x-app: &app
+  build: .
+  env_file: .env
+  environment: &app-env
+    ENVIRONMENT: production
+    DATABASE_URL: postgresql+psycopg://voiceagent:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/voiceagent
+    REDIS_URL: redis://redis:6379/0
+    PUBLIC_BASE_URL: https://${DOMAIN:?set DOMAIN}
+    RUN_MIGRATIONS: "false"
+    RUN_SCHEDULER: "false"
+  restart: unless-stopped
+  logging: { driver: json-file, options: { max-size: "20m", max-file: "5" } }
+
+services:
+  migrate:
+    <<: *app
+    command: ["python", "-m", "app.migrate"]
+    restart: "no"
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    <<: *app
+    environment:
+      <<: *app-env
+      WEB_CONCURRENCY: "3"          # 2 vCPU: 3 async workers handle many concurrent calls (I/O bound)
+      DB_POOL_SIZE: "10"
+    deploy:
+      resources: { limits: { cpus: "1.5", memory: 2g } }
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "app.worker"]
+    healthcheck: { disable: true }
+    deploy:
+      resources: { limits: { cpus: "0.5", memory: 512m } }
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  nginx:
+    build: { context: ., dockerfile: deploy/Dockerfile.web }
+    depends_on: [api]
+    restart: unless-stopped
+    expose: ["80"]
+
+  caddy:
+    image: caddy:2-alpine
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [nginx]
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: voiceagent
+      POSTGRES_USER: voiceagent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    command: ["postgres", "-c", "max_connections=100", "-c", "shared_buffers=512MB", "-c", "effective_cache_size=2GB"]
+    volumes: [pgdata:/var/lib/postgresql/data, ./backups:/backups]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U voiceagent"], interval: 5s, retries: 20 }
+    deploy:
+      resources: { limits: { memory: 1500m } }
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "volatile-lru"]
+    volumes: [redisdata:/data]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, retries: 20 }
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  caddy_data:
+  caddy_config:

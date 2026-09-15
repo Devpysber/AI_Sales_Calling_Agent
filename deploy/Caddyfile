@@ -1,0 +1,15 @@
+{
+	email {$ACME_EMAIL}
+}
+
+# HTTPS with automatic certificates. WebSockets (Plivo audio stream, live supervision) pass through as-is.
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy nginx:80 {
+		header_up X-Forwarded-Proto https
+		transport http {
+			read_timeout 1h
+			write_timeout 1h
+		}
+	}
+}

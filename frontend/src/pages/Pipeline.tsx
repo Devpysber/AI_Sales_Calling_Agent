@@ -140,8 +140,10 @@ export default function Pipeline() {
         </div>
       </PageHeader>
 
-      <div className="-mx-4 overflow-x-auto px-4 pb-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
-        <div className="flex gap-4" style={{ minWidth: 'max-content' }}>
+      {/* Responsive board: stacked on phones, a grid on tablets/laptops, all columns in one row on wide screens */}
+      <div className="pb-4">
+        <div className={cn('grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3',
+          scope === 'open' ? '2xl:grid-cols-6' : 'xl:grid-cols-4 2xl:grid-cols-5')}>
           {columns.map((stage) => {
             const col = data?.[stage]
             const hot = col?.items.filter((l) => l.qualification === 'Hot').length ?? 0
@@ -155,14 +157,14 @@ export default function Pipeline() {
                   if (dragging && dragging.from !== stage) move.mutate({ id: dragging.id, status: stage })
                   setDragging(null); setOver(null)
                 }}
-                className={cn('flex w-72 shrink-0 flex-col rounded-[var(--radius-card)] border bg-surface-2/60 transition', isOver ? 'border-fg bg-surface-2' : 'border-transparent')}>
+                className={cn('flex min-w-0 flex-col rounded-[var(--radius-card)] border bg-surface-2/60 transition', isOver ? 'border-fg bg-surface-2' : 'border-transparent')}>
                 <div className="flex items-center gap-2 px-3.5 pt-3.5 pb-2">
                   <span className={cn('size-2 rounded-full', stage === 'Closed Won' || stage === 'Meeting Booked' ? 'bg-success' : ['Not Interested', 'Do Not Call', 'Closed Lost'].includes(stage) ? 'bg-danger' : 'bg-fg')} />
                   <h3 className="flex-1 text-[13px] font-extrabold">{stage}</h3>
                   {hot > 0 && <span className="flex items-center gap-0.5 text-[11px] font-bold text-danger"><Flame className="size-3" />{hot}</span>}
                   <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] font-bold tabular-nums ring-1 ring-border">{col?.total ?? '…'}</span>
                 </div>
-                <div className="flex max-h-[calc(100vh-320px)] min-h-40 flex-col gap-2.5 overflow-y-auto px-2.5 pb-3">
+                <div className="flex max-h-[70vh] min-h-24 flex-col gap-2.5 overflow-y-auto px-2.5 pb-3 sm:min-h-40 lg:max-h-[calc(100vh-320px)]">
                   {board.isLoading ? [0, 1].map((i) => <Skeleton key={i} className="h-28" />)
                     : col?.items.length ? col.items.map((lead) => (
                       <LeadCard key={lead.id} lead={lead} onOpen={() => navigate(path(`/leads/${lead.id}`))}

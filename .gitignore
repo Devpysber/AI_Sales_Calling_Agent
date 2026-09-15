@@ -43,3 +43,4 @@ ref_audio.wav
 /rest
 data/*.xlsx
 data/*.csv
+backups/
