@@ -1,0 +1,114 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Bot, Clock, Gauge, PhoneOff, Timer, User } from 'lucide-react'
+import { toast } from 'sonner'
+import ActivityFeed from '@/components/ActivityFeed'
+import { CallStatusBadge, QualificationBadge, SentimentDot } from '@/components/status'
+import { Badge, Button, Sheet, Skeleton, useConfirm } from '@/components/ui'
+import { api } from '@/lib/api'
+import type { Call } from '@/lib/types'
+import { cn, formatDate, formatDuration, titleCase } from '@/lib/utils'
+import { useAgent } from '@/lib/agent'
+
+const LIVE = ['Queued', 'Ringing', 'In Progress']
+
+import LiveSupervision from '@/components/LiveSupervision'
+
+export default function CallSheet({ callId, onClose, onOpenLead }: { callId: number | null; onClose: () => void; onOpenLead?: (id: number) => void }) {
+  const { base } = useAgent()
+  const qc = useQueryClient()
+  const confirm = useConfirm()
+  const { data: call, isLoading } = useQuery({
+    queryKey: ['call', callId],
+    queryFn: () => api<Call>(`${base}/calls/${callId}`),
+    enabled: callId !== null,
+    refetchInterval: (q) => (q.state.data && (LIVE.includes(q.state.data.status) || (q.state.data.status === 'Completed' && !q.state.data.summary && (q.state.data.transcript?.length ?? 0) > 1)) ? 2500 : false),
+  })
+  const hangup = useMutation({
+    mutationFn: () => api(`${base}/calls/${callId}/hangup`, { method: 'POST' }),
+    onSuccess: () => { toast.success('Hanging up'); qc.invalidateQueries({ queryKey: ['calls'] }) },
+    onError: (e) => toast.error(e.message),
+  })
+
+  const live = call && LIVE.includes(call.status)
+
+  return (
+    <Sheet open={callId !== null} onClose={onClose} width="max-w-2xl"
+      title={call ? <span className="flex items-center gap-2">{call.lead_name ?? call.to_number ?? 'Call'} <CallStatusBadge status={call.status} /></span> : 'Call'}
+      description={call && `${call.direction === 'inbound' ? 'Inbound' : 'Outbound'} · ${formatDate(call.created_at)} · ${call.direction === 'inbound' ? call.from_number : call.to_number}`}
+      footer={call && <>
+        {call.lead_id && onOpenLead && <Button onClick={() => onOpenLead(call.lead_id!)}><User />Open lead</Button>}
+        {live && <Button variant="danger" loading={hangup.isPending} onClick={async () => {
+          if (await confirm({ title: 'Hang up this call?', description: 'The customer will be disconnected immediately.', confirmLabel: 'Hang up', danger: true })) hangup.mutate()
+        }}><PhoneOff />Hang up</Button>}
+      </>}>
+      {isLoading || !call ? <div className="space-y-3"><Skeleton className="h-20" /><Skeleton className="h-64" /></div> : (
+        <div className="space-y-6">
+          {live && <LiveSupervision callId={call.id} />}
+          
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              [Timer, 'Duration', formatDuration(call.duration)],
+              [Clock, 'Trigger', titleCase(call.trigger)],
+              [Gauge, 'AI latency', call.avg_latency_ms ? `${(call.avg_latency_ms / 1000).toFixed(1)}s` : '—'],
+              [Bot, 'Outcome', call.outcome ? titleCase(call.outcome) : '—'],
+            ].map(([Icon, label, value]) => {
+              const I = Icon as typeof Timer
+              return (
+                <div key={label as string} className="rounded-lg border border-border bg-surface-2 p-3">
+                  <div className="flex items-center gap-1.5 text-xs text-muted"><I className="size-3.5" />{label as string}</div>
+                  <div className="mt-1 text-sm font-semibold">{value as string}</div>
+                </div>
+              )
+            })}
+          </div>
+
+          {(call.summary || (call.status === 'Completed' && (call.transcript?.length ?? 0) > 1)) && (
+            <section className="rounded-xl border border-brand/20 bg-brand-soft/50 p-4">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold text-brand">AI summary</span>
+                <QualificationBadge value={call.qualification} />
+                <SentimentDot value={call.sentiment} />
+              </div>
+              <p className="text-sm leading-relaxed text-fg-2">{call.summary ?? 'Generating summary…'}</p>
+            </section>
+          )}
+
+          {call.error && <p className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">{call.error}</p>}
+          {call.recording_url && <audio controls src={call.recording_url} className="w-full" />}
+
+          <section>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Transcript</h3>
+              {live && <Badge tone="info" pulse>Live</Badge>}
+            </div>
+            {call.transcript?.length ? (
+              <div className="space-y-3">
+                {call.transcript.map((t, i) => (
+                  <div key={i} className={cn('flex gap-2.5', t.role === 'customer' && 'flex-row-reverse')}>
+                    <span className={cn('grid size-7 shrink-0 place-items-center rounded-full text-xs',
+                      t.role === 'assistant' ? 'bg-brand text-brand-fg' : 'bg-surface-2 text-fg-2 ring-1 ring-border')}>
+                      {t.role === 'assistant' ? <Bot className="size-3.5" /> : <User className="size-3.5" />}
+                    </span>
+                    <div className={cn('max-w-[80%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed',
+                      t.role === 'assistant' ? 'rounded-tl-sm bg-brand-soft text-fg' : 'rounded-tr-sm border border-border bg-surface text-fg')}>
+                      {t.text}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="text-sm text-muted">{live ? 'Waiting for the conversation to start…' : 'No conversation was captured on this call.'}</p>}
+          </section>
+
+          {call.events && call.events.length > 0 && (
+            <section>
+              <h3 className="mb-3 text-sm font-semibold">Timeline</h3>
+              <ActivityFeed events={call.events} compact />
+            </section>
+          )}
+
+          <p className="text-xs text-muted">Plivo ID: <code className="font-mono">{call.call_uuid ?? '—'}</code>{call.hangup_cause && ` · ${call.hangup_cause}`}</p>
+        </div>
+      )}
+    </Sheet>
+  )
+}

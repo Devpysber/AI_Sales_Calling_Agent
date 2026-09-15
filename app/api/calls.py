@@ -1,136 +1,113 @@
-"""
-Calls and Automation Router
+import asyncio
 
-Contains API endpoints for trigger automation workflows, status tracking,
-analytics compilations, and manual meeting bookings.
-"""
-
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from app.services.crm_service import CRMService
-from app.services.session_manager import SessionManager
-from app.services.twilio_service import TwilioService
+from app.api.deps import workspace
+from app.core.auth import actor
+from app.services import agents, events
+from app.services.call_service import CallError, CallService, within_calling_hours
 
-calls_router = APIRouter(
-    prefix="/calls",
-    tags=["Calls"],
-)
+router = APIRouter(prefix="/api/agents/{agent_id}/calls", tags=["calls"])
 
 
-class StartCallRequest(BaseModel):
+class StartCall(BaseModel):
     lead_id: int
+    purpose: str | None = None  # "confirm_meeting" | "follow_up"; None = normal sales call
 
 
-@calls_router.post("/start")
-def start_call(request: StartCallRequest):
-    """
-    Triggers an outbound Twilio call for a specific Lead ID.
-    Looks up lead info, initializes a customer session, and triggers Twilio.
-    """
-    crm = CRMService()
-    lead = crm.get_lead(request.lead_id)
-    if not lead:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Lead with ID {request.lead_id} not found.",
-        )
-
-    phone = lead.get("Phone")
-    if not phone or str(phone).lower() == "nan":
-        raise HTTPException(
-            status_code=400,
-            detail="Lead does not contain a valid phone number.",
-        )
-
-    current_call_status = str(lead.get("Call Status")).strip().lower() if lead.get("Call Status") else ""
-    retry_count = lead.get("Retry Count")
+@router.post("")
+async def start(body: StartCall, request: Request, agent_id: int = Depends(workspace)):
     try:
-        retry_count = int(retry_count) if retry_count is not None else 0
-    except (ValueError, TypeError):
-        retry_count = 0
+        return await asyncio.to_thread(CallService(agent_id).start, body.lead_id, "manual", actor(request), body.purpose)
+    except CallError as e:
+        raise HTTPException(400, str(e))
 
-    # Prevent calling if maximum retries reached for automated triggers
-    if current_call_status != "pending" and retry_count >= 3:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Lead with ID {request.lead_id} has reached the maximum retry limit of 3.",
-        )
 
-    # Clean phone number
-    phone_str = str(phone).strip()
-    if phone_str.endswith(".0"):
-        phone_str = phone_str[:-2]
-    phone_str = "".join(c for c in phone_str if c.isdigit() or c == "+")
-    
-    if len(phone_str) == 10 and not phone_str.startswith("+"):
-        phone_str = "+91" + phone_str
-    elif not phone_str.startswith("+"):
-        phone_str = "+" + phone_str
+@router.get("")
+def list_calls(lead_id: int | None = None, status: str | None = None, direction: str | None = None,
+               search: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=200),
+               agent_id: int = Depends(workspace)):
+    return CallService(agent_id).list_calls(lead_id, status, direction, search, page, page_size)
 
-    # 1. Initialize user session
-    session_manager = SessionManager()
-    session_id = session_manager.create_session(
-        phone=phone_str, lead_id=str(request.lead_id)
-    )
 
-    # 2. Trigger Outbound Twilio Call
+@router.get("/stats")
+def stats(days: int = Query(14, ge=1, le=90), agent_id: int = Depends(workspace)):
+    data = CallService(agent_id).stats(days)
+    data["within_calling_hours"] = within_calling_hours(agents.get_automation(agent_id))
+    return data
+
+
+@router.get("/{call_id}")
+def get(call_id: int, agent_id: int = Depends(workspace)):
+    call = CallService(agent_id).get(call_id)
+    if not call:
+        raise HTTPException(404, "Call not found.")
+    call["events"] = events.list_events(agent_id, call_id=call_id, limit=50)
+    return call
+
+
+@router.post("/{call_id}/hangup")
+async def hangup(call_id: int, agent_id: int = Depends(workspace)):
     try:
-        twilio = TwilioService()
-        call_sid = twilio.make_call(phone_number=phone_str)
-
-        # Check if this is the first call or a manually scheduled pending call
-        last_sid = lead.get("Last Call SID")
-        is_first_call = (
-            last_sid is None
-            or str(last_sid).lower() == "nan"
-            or str(last_sid).strip() == ""
-        )
-        is_manual_pending = current_call_status == "pending"
-
-        updates = {
-            "last_call_sid": call_sid,
-            "call_status": "Queued"
-        }
-        if is_first_call or is_manual_pending:
-            updates["retry_count"] = 0
-
-        # Update last call SID, status and optionally retry count in Excel CRM
-        crm.update_lead(request.lead_id, updates)
-
-        return {
-            "success": True,
-            "lead_id": request.lead_id,
-            "session_id": session_id,
-            "call_sid": call_sid,
-            "status": "Queued"
-        }
+        await asyncio.to_thread(CallService(agent_id).hangup, call_id)
+        return {"ok": True}
+    except CallError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
-        error_msg = str(e)
-        print(f"\n❌ [CALL TRIGGER FAILED] Lead ID {request.lead_id}: {error_msg}")
+        raise HTTPException(502, f"Plivo error: {e}")
+
+
+
+from fastapi import WebSocket, WebSocketDisconnect
+from app.services.voice_stream import LIVE
+import json
+
+@router.websocket("/{call_id}/monitor")
+async def monitor_call(websocket: WebSocket, call_id: int):
+    await websocket.accept()
+    # Find live stream matching this call_id (uuid)
+    # The LIVE dict keys are session_id. Call_id might not match session_id perfectly.
+    # Let's find it.
+    call_service = CallService(1) # We can ignore agent_id for finding live calls, but wait, we need agent_id.
+    # We can just iterate over LIVE streams to find the one with the right call_id.
+    stream = next((s for s in LIVE.values() if str(s.call_uuid) == str(call_id) or str(s.session.get('call_id')) == str(call_id)), None)
+    
+    if not stream:
+        await websocket.close(code=1008)
+        return
         
-        # Gracefully update the lead status to 'Failed' in Excel CRM
+    queue = asyncio.Queue()
+    stream.monitors[queue] = {"listen": True}
+    
+    async def receive():
         try:
-            crm.update_lead(request.lead_id, {
-                "call_status": "Failed"
-            })
-        except Exception as ue:
-            print(f"⚠️ Failed to update CRM status to Failed: {ue}")
-
-        return {
-            "success": False,
-            "lead_id": request.lead_id,
-            "session_id": None,
-            "call_sid": None,
-            "status": "Failed",
-            "error": error_msg
-        }
-
-
-@calls_router.get("/status")
-def get_calls_status():
-    """
-    Returns active call sessions and their execution progress.
-    """
-    session_manager = SessionManager()
-    return session_manager.list_sessions()
+            while True:
+                data = await websocket.receive_text()
+                msg = json.loads(data)
+                action = msg.get("action")
+                text = msg.get("text", "")
+                now = msg.get("now", False)
+                if action == "human_audio":
+                    import base64
+                    pcm = base64.b64decode(msg["audio"])
+                    await stream.human_audio(pcm)
+                elif action:
+                    await stream.control(action, text=text, now=now)
+        except WebSocketDisconnect:
+            pass
+            
+    async def send():
+        try:
+            while True:
+                event = await queue.get()
+                await websocket.send_json(event)
+        except Exception:
+            pass
+            
+    try:
+        # Publish initial state
+        await websocket.send_json(stream.state())
+        await asyncio.gather(receive(), send())
+    finally:
+        stream.monitors.pop(queue, None)

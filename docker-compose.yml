@@ -1,67 +1,40 @@
-version: "3.9"
+# Single-server setup: one app container (API + dashboard + scheduler), Postgres, Redis.
+#   docker compose up -d --build
+# For horizontal scaling use docker-compose.prod.yml.
 
 services:
-
-  fastapi:
-
+  app:
     build: .
-
-    container_name: ai_voice_agent
-
-    ports:
-      - "8000:8000"
-
-    env_file:
-      - .env
-
-    volumes:
-      - .:/app
-
-    restart: unless-stopped
-
-    depends_on:
-      - n8n
-
-  n8n:
-
-    image: n8nio/n8n:latest
-
-    container_name: n8n
-
-    ports:
-      - "5678:5678"
-
+    env_file: .env
     environment:
-      - N8N_HOST=localhost
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=http
-      - TZ=Asia/Kolkata
-      - GENERIC_TIMEZONE=Asia/Kolkata
-      - N8N_OWNER_EMAIL=ashishsharma12512@gmail.com
-      - N8N_OWNER_PASSWORD=0187As231012
-      - N8N_OWNER_FIRST_NAME=Ashish
-      - N8N_OWNER_LAST_NAME=Sharma
-      - N8N_USER_MANAGEMENT_JWT_SECRET=ai-voice-agent-secret-key-2024
-      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
-      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
-
-    volumes:
-      - n8n_data:/home/node/.n8n
-
-    restart: unless-stopped
-
-  ngrok:
-    image: ngrok/ngrok:latest
-    container_name: ngrok
-    restart: unless-stopped
-    environment:
-      - NGROK_AUTHTOKEN=3GDapDq8IkSI7vKhFgZrD6NhESY_219c5N9NBGip56mVi3S4M
-    command:
-      - "http"
-      - "fastapi:8000"
-      - "--url=tapeless-slab-facsimile.ngrok-free.dev"
+      DATABASE_URL: postgresql+psycopg://voiceagent:${POSTGRES_PASSWORD:-voiceagent}@postgres:5432/voiceagent
+      REDIS_URL: redis://redis:6379/0
+      RUN_SCHEDULER: "true"
+      RUN_MIGRATIONS: "true"
+      WEB_CONCURRENCY: "2"
+    ports: ["8000:8000"]
     depends_on:
-      - fastapi
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: voiceagent
+      POSTGRES_USER: voiceagent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-voiceagent}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U voiceagent"], interval: 5s, retries: 10 }
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "volatile-lru"]
+    volumes: [redisdata:/data]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, retries: 10 }
+    restart: unless-stopped
 
 volumes:
-  n8n_data:
+  pgdata:
+  redisdata:

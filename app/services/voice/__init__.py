@@ -1,3 +1,0 @@
-"""
-Voice Services Package
-"""

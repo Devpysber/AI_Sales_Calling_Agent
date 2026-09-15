@@ -1,115 +1,99 @@
 """
-Main Application
-
-Entry point of the AI Voice Sales Agent.
-
-Responsibilities
-----------------
-1. Create FastAPI application.
-2. Register all API routers.
-3. Configure application metadata.
-4. Run background scheduler for auto-calling Pending leads.
+FastAPI application: REST API under /api, Plivo webhooks, and (when a
+frontend build exists) the dashboard SPA.
 """
 
 import asyncio
-import threading
+import time
+import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-from app.api.health import router as health_router
-from app.api.leads import router as leads_router
-from app.api.chat import router as chat_router
-from app.api.conversation import router as conversation_router
-from app.api.voice import router as voice_router
-from app.api.twilio import router as twilio_router
-from app.api.calls import calls_router
-from app.api.notifications import router as notifications_router
+from app.api import agents, calls, knowledge, leads, plivo, system
+from app.core import auth
+from app.core.config import settings
+from app.core.database import run_migrations
+from app.core.logging import get_logger, setup_logging
 
-
-app = FastAPI(
-    title="AI Voice Sales Agent",
-    description="Production Ready AI Voice Sales Agent Backend",
-    version="1.0.0",
-)
-
-
-# ----------------------------
-# Register Routers
-# ----------------------------
-
-app.include_router(health_router)
-
-app.include_router(leads_router)
-
-app.include_router(chat_router)
-
-app.include_router(conversation_router)
-
-app.include_router(voice_router)
-
-# NEW
-app.include_router(twilio_router)
-
-app.include_router(calls_router)
-
-app.include_router(notifications_router)
+setup_logging(settings.log_level, json_logs=settings.is_production)
+log = get_logger("app")
+FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 
 
-# ----------------------------
-# Startup
-# ----------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if settings.run_migrations:
+        await asyncio.to_thread(run_migrations)
+        from app.services import agents
+        from app.services.crm_service import CRMService
+        first = (await asyncio.to_thread(agents.ids) or [None])[0]
+        await asyncio.to_thread(CRMService(first).import_legacy_excel, settings.legacy_excel_file)
 
-@app.on_event("startup")
-async def startup():
+    if settings.is_production and not settings.admin_password:
+        log.error("ADMIN_PASSWORD is not set in production: the API is unprotected")
 
-    print("=" * 60)
-    print("AI Voice Sales Agent Started")
-    print("=" * 60)
+    task = None
+    if settings.run_scheduler:
+        from app.services.scheduler import scheduler_loop
+        task = asyncio.create_task(scheduler_loop())
+    log.info("%s %s started (%s)", settings.app_name, settings.app_version, settings.environment)
+    
+    # Warm up TTS in background so startup isn't blocked, but it's ready quickly
+    from app.services import tts
+    asyncio.create_task(asyncio.to_thread(tts.warmup))
 
-    # Start setup in a background thread so it doesn't block startup
-    import threading
-    from app.core.setup_workflows import run_setup
-    threading.Thread(target=run_setup, daemon=True).start()
-
-    # Pre-load heavy ML models in a background thread for faster replies
-    def preload_models():
-        try:
-            print("[STARTUP] Pre-loading ML models in the background...")
-            from app.services.stt_service import STTService
-            from app.services.knowledge_service import KnowledgeService
-            
-            # Instantiating the services and accessing properties triggers lazy loading in background
-            stt = STTService()
-            _ = stt.model
-            
-            ks = KnowledgeService()
-            _ = ks.embedding_model
-            print("[STARTUP] ML models pre-loaded successfully!")
-        except Exception as e:
-            print(f"[STARTUP] Error pre-loading ML models: {e}")
-
-    threading.Thread(target=preload_models, daemon=True).start()
+    yield
+    if task:
+        task.cancel()
 
 
-# ----------------------------
-# Shutdown
-# ----------------------------
+app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan,
+              docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
 
-@app.on_event("shutdown")
-async def shutdown():
-
-    print("=" * 60)
-    print("AI Voice Sales Agent Stopped")
-    print("=" * 60)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+if settings.cors_origins:
+    app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins.split(","), allow_credentials=True,
+                       allow_methods=["*"], allow_headers=["*"])
+app.middleware("http")(auth.auth_middleware)
 
 
-@app.get("/")
-def root():
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        log.exception("Unhandled error on %s %s", request.method, request.url.path, extra={"request_id": request_id})
+        response = JSONResponse({"detail": "Internal server error", "request_id": request_id}, status_code=500)
+    response.headers["x-request-id"] = request_id
+    elapsed = (time.perf_counter() - started) * 1000
+    if request.url.path.startswith("/api/") and elapsed > 1500:
+        log.warning("Slow request %s %s %.0fms", request.method, request.url.path, elapsed, extra={"request_id": request_id})
+    return response
 
-    return {
-        "project": "AI Voice Sales Agent",
-        "version": "1.0.0",
-        "status": "Running",
-        "docs": "/docs",
-        "health": "/health",
-    }
+
+
+for module in (auth, agents, leads, calls, knowledge, system, plivo):
+    app.include_router(module.router)
+
+
+# ---------------- SPA (single-container / local mode; nginx serves it in production) ----------------
+
+if FRONTEND_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def spa(path: str):
+        if path.startswith("api/"):
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        file = FRONTEND_DIST / path
+        if path and file.is_file():
+            return FileResponse(file)
+        return FileResponse(FRONTEND_DIST / "index.html", headers={"Cache-Control": "no-cache"})

@@ -1,310 +1,363 @@
 """
-CRM Service
-
-This service acts as a high-level wrapper over the Excel file using the 'pandas' library.
-It is responsible for modifying and querying the CRM lead spreadsheet in a robust tabular format.
-
-Key Features & Operations:
---------------------------
-1. Load DataFrame (load): Reads the Excel file into a Pandas DataFrame and forces string columns 
-   (like Status, Call Status, Last Call SID, Objections, etc.) to behave as generic objects. This prevents 
-   Pandas from misinterpreting missing fields as floats (e.g. NaN) and crashing during updates.
-2. Save DataFrame (save): Writes the Pandas DataFrame back to the Leads.xlsx file, preserving sheet index alignment.
-3. Update Lead (update_lead): Finds the row matching a specific Lead ID and conditionally updates columns 
-   (Status, Qualification, Summary, Objections, Requirements, etc.) ONLY if they are present in the update payload.
-4. Upsert Lead (upsert_lead): If the Lead ID is found, it updates the row; otherwise, it appends a brand new row to the sheet.
+CRM: leads CRUD, search, bulk import/export, and AI-driven updates.
+Every instance is bound to one agent so leads never mix between agents.
 """
 
-from datetime import datetime, timezone, timedelta
+import io
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
+from sqlalchemy import func, or_, select
 
-from app.core.config import settings
+from app.core.database import get_db
+from app.models.lead import Lead
+from app.services import events
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+EDITABLE = {"name", "company", "phone", "email", "city", "language", "source", "tags", "notes", "do_not_call",
+            "status", "call_status", "retry_count", "qualification", "summary", "requirements", "objections",
+            "follow_up_date", "meeting_at", "callback_at"}
+
+SORTABLE = {"id": Lead.id, "name": Lead.name, "company": Lead.company, "status": Lead.status,
+            "last_contacted_at": Lead.last_contacted_at, "created_at": Lead.created_at,
+            "qualification": Lead.qualification, "meeting_at": Lead.meeting_at}
+
+IMPORT_ALIASES = {
+    "name": "name", "fullname": "name", "customername": "name", "contactname": "name", "leadname": "name",
+    "company": "company", "companyname": "company", "organization": "company", "organisation": "company", "business": "company",
+    "phone": "phone", "phonenumber": "phone", "mobile": "phone", "mobilenumber": "phone", "contact": "phone",
+    "contactnumber": "phone", "number": "phone", "whatsapp": "phone", "cell": "phone",
+    "email": "email", "emailaddress": "email", "mail": "email",
+    "city": "city", "location": "city",
+    "language": "language", "lang": "language", "preferredlanguage": "language",
+    "source": "source", "leadsource": "source",
+    "tags": "tags", "tag": "tags",
+    "notes": "notes", "note": "notes", "remarks": "notes", "comments": "notes",
+    "status": "status",
+}
+
+LANGUAGE_NAMES = {"english": "en-IN", "hindi": "hi-IN", "bengali": "bn-IN", "tamil": "ta-IN", "telugu": "te-IN",
+                  "kannada": "kn-IN", "malayalam": "ml-IN", "marathi": "mr-IN", "gujarati": "gu-IN",
+                  "punjabi": "pa-IN", "odia": "od-IN", "en": "en-IN", "hi": "hi-IN"}
+
+
+def _clean(value):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    return text or None
+
+
+def normalize_phone(phone) -> str | None:
+    text = _clean(phone)
+    if not text:
+        return None
+    if text.endswith(".0"):
+        text = text[:-2]
+    digits = "".join(c for c in text if c.isdigit())
+    if digits.startswith("0") and len(digits) == 11:
+        digits = digits[1:]
+    if len(digits) == 10:
+        return "+91" + digits
+    if 11 <= len(digits) <= 15:
+        return "+" + digits
+    return None
+
+
+def normalize_language(value) -> str:
+    text = (_clean(value) or "en-IN")
+    if len(text) == 5 and text[2] == "-":
+        return text[:2].lower() + "-IN"
+    return LANGUAGE_NAMES.get(text.lower(), "en-IN")
+
+
+def _now_utc():
+    return datetime.utcnow()
 
 
 class CRMService:
-    """
-    Excel CRM Service.
-    """
+    """Leads of one agent. agent_id=None is unscoped: only for webhooks that already hold a trusted lead id."""
 
-    def __init__(self):
+    def __init__(self, agent_id: int | None = None):
+        self.agent_id = agent_id
 
-        self.file = settings.excel_file
+    def _scoped(self, query):
+        return query.where(Lead.agent_id == self.agent_id) if self.agent_id is not None else query
 
-    # -------------------------------------------------
+    def _load(self, db, lead_id: int) -> Lead | None:
+        lead = db.get(Lead, lead_id)
+        if lead is None or (self.agent_id is not None and lead.agent_id != self.agent_id):
+            return None
+        return lead
 
-    def load(self):
-        df = pd.read_excel(self.file)
-        # Prevent dtype conversion errors for string fields
-        string_cols = [
-            "Last Call SID", "Call Status", "Status", "Lead Qualification", 
-            "Conversation Summary", "Customer Requirements", "Objections Raised",
-            "Email", "City", "Name", "Last Contacted Timestamp", "Meeting Date & Time",
-            "Follow-up Date", "Company"
-        ]
-        for col in string_cols:
-            if col in df.columns:
-                df[col] = df[col].astype(object)
-        return df
+    # ---------------- read ----------------
 
-    # -------------------------------------------------
+    def list_leads(self, search=None, status=None, call_status=None, qualification=None, sort="id", order="desc",
+                   page=1, page_size=25) -> dict:
+        with get_db() as db:
+            query = self._scoped(select(Lead))
+            if search:
+                like = f"%{search.strip()}%"
+                query = query.where(or_(Lead.name.ilike(like), Lead.company.ilike(like), Lead.phone.ilike(like),
+                                        Lead.email.ilike(like), Lead.city.ilike(like), Lead.tags.ilike(like)))
+            if status:
+                query = query.where(Lead.status == status)
+            if call_status:
+                query = query.where(Lead.call_status == call_status)
+            if qualification:
+                query = query.where(Lead.qualification == qualification)
+            total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+            column = SORTABLE.get(sort, Lead.id)
+            query = query.order_by(column.desc().nulls_last() if order == "desc" else column.asc().nulls_last())
+            rows = db.scalars(query.offset((page - 1) * page_size).limit(page_size)).all()
+            return {"items": [r.to_dict() for r in rows], "total": total, "page": page, "page_size": page_size}
 
-    def save(
-        self,
-        df,
-    ):
+    def board(self, statuses: list[str], search=None, qualification=None, per_column: int = 50) -> dict:
+        """Leads grouped by status for the pipeline board: the most recently active per column plus totals."""
+        with get_db() as db:
+            base = self._scoped(select(Lead))
+            if search:
+                like = f"%{search.strip()}%"
+                base = base.where(or_(Lead.name.ilike(like), Lead.company.ilike(like), Lead.phone.ilike(like),
+                                      Lead.city.ilike(like), Lead.tags.ilike(like)))
+            if qualification:
+                base = base.where(Lead.qualification == qualification)
+            columns = {}
+            for status in statuses:
+                query = base.where(Lead.status == status)
+                total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+                rows = db.scalars(query.order_by(func.coalesce(Lead.last_contacted_at, Lead.updated_at).desc())
+                                  .limit(per_column)).all()
+                columns[status] = {"total": total, "items": [r.to_dict() for r in rows]}
+            return columns
 
-        df.to_excel(
-            self.file,
-            index=False,
-        )
+    def bulk_update(self, lead_ids: list[int], data: dict, add_tags: list[str] | None = None, actor: str = "admin") -> int:
+        updated = 0
+        for lead_id in lead_ids:
+            values = dict(data)
+            if add_tags:
+                current = (self.get(lead_id) or {}).get("tags") or []
+                values["tags"] = list(dict.fromkeys([*current, *add_tags]))
+            try:
+                self.update(lead_id, values, actor="system")
+                updated += 1
+            except LookupError:
+                continue
+        if updated:
+            fields = [*data, *(["tags"] if add_tags else [])]
+            events.record("lead.updated", f"Bulk updated {updated} lead(s)", ", ".join(fields), agent_id=self.agent_id,
+                          actor=actor, data={"ids": lead_ids, **data, **({"add_tags": add_tags} if add_tags else {})})
+        return updated
 
-    # -------------------------------------------------
+    def get(self, lead_id: int) -> dict | None:
+        with get_db() as db:
+            lead = self._load(db, lead_id)
+            return lead.to_dict() if lead else None
 
-    def update_lead(
-        self,
-        lead_id: int,
-        crm_update: dict,
-    ):
+    def find_by_phone(self, phone) -> dict | None:
+        normalized = normalize_phone(phone)
+        if not normalized:
+            return None
+        with get_db() as db:
+            lead = db.scalars(self._scoped(select(Lead)).where(Lead.phone == normalized).order_by(Lead.id.desc())).first()
+            return lead.to_dict() if lead else None
 
-        df = self.load()
+    def pending_for_dial(self, limit: int) -> list[dict]:
+        with get_db() as db:
+            query = self._scoped(select(Lead)).where(
+                Lead.do_not_call.is_(False),
+                or_(Lead.call_status == "Pending", (Lead.status == "New") & Lead.call_status.is_(None)),
+            ).order_by(Lead.id).limit(limit)
+            return [l.to_dict() for l in db.scalars(query)]
 
-        idx = df.index[
-            df["Lead ID"] == lead_id
-        ]
+    def retry_candidates(self, max_retries: int, min_gap_minutes: int, limit: int) -> list[dict]:
+        cutoff = _now_utc() - timedelta(minutes=min_gap_minutes)
+        with get_db() as db:
+            query = self._scoped(select(Lead)).where(
+                Lead.do_not_call.is_(False),
+                Lead.call_status.in_(("No Answer", "Busy", "Failed")),
+                Lead.retry_count < max_retries,
+                or_(Lead.last_contacted_at.is_(None), Lead.last_contacted_at < cutoff),
+            ).order_by(Lead.last_contacted_at).limit(limit)
+            return [l.to_dict() for l in db.scalars(query)]
 
-        if len(idx) == 0:
+    def due_callbacks(self, now_ist: str, limit: int) -> list[dict]:
+        """Leads whose promised callback time ("YYYY-MM-DD HH:MM" IST, sortable as text) has arrived."""
+        with get_db() as db:
+            query = self._scoped(select(Lead)).where(
+                Lead.do_not_call.is_(False), Lead.callback_at.is_not(None), Lead.callback_at != "", Lead.callback_at <= now_ist,
+            ).order_by(Lead.callback_at).limit(limit)
+            return [l.to_dict() for l in db.scalars(query)]
 
-            raise ValueError(
-                f"Lead {lead_id} not found."
-            )
+    def meetings_on(self, date_str: str) -> list[dict]:
+        with get_db() as db:
+            return [l.to_dict() for l in db.scalars(self._scoped(select(Lead)).where(Lead.meeting_at.like(f"{date_str}%")))]
 
-        row = idx[0]
+    def stats(self) -> dict:
+        with get_db() as db:
+            def count(*conds):
+                return db.scalar(self._scoped(select(func.count(Lead.id))).where(*conds)) or 0
 
-        # ------------------------
-        # Status
-        # ------------------------
-
-        if "status" in crm_update:
-
-            df.loc[
-                row,
-                "Status",
-            ] = crm_update["status"]
-
-        # ------------------------
-        # Qualification
-        # ------------------------
-
-        if "qualification" in crm_update:
-
-            df.loc[
-                row,
-                "Lead Qualification",
-            ] = crm_update[
-                "qualification"
-            ]
-
-        # ------------------------
-        # Summary
-        # ------------------------
-
-        if "summary" in crm_update:
-
-            df.loc[
-                row,
-                "Conversation Summary",
-            ] = crm_update[
-                "summary"
-            ]
-
-        # ------------------------
-        # Objection
-        # ------------------------
-
-        if "objection" in crm_update:
-
-            df.loc[
-                row,
-                "Objections Raised",
-            ] = crm_update[
-                "objection"
-            ]
-
-        # ------------------------
-        # Requirement
-        # ------------------------
-
-        if "requirement" in crm_update:
-
-            df.loc[
-                row,
-                "Customer Requirements",
-            ] = crm_update[
-                "requirement"
-            ]
-
-        # ------------------------
-        # Meeting
-        # ------------------------
-
-        if "meeting" in crm_update:
-
-            df.loc[
-                row,
-                "Meeting Date & Time",
-            ] = crm_update[
-                "meeting"
-            ]
-
-        # ------------------------
-        # Follow Up
-        # ------------------------
-
-        if "follow_up" in crm_update:
-
-            df.loc[
-                row,
-                "Follow-up Date",
-            ] = crm_update[
-                "follow_up"
-            ]
-
-        # ------------------------
-        # Call status/retries
-        # ------------------------
-
-        if "call_status" in crm_update:
-            df.loc[row, "Call Status"] = crm_update["call_status"]
-
-        if "retry_count" in crm_update:
-            df.loc[row, "Retry Count"] = crm_update["retry_count"]
-
-        if "last_call_sid" in crm_update:
-            df.loc[row, "Last Call SID"] = crm_update["last_call_sid"]
-
-        # ------------------------
-        # Last Contact
-        # ------------------------
-
-        ist = timezone(timedelta(hours=5, minutes=30))
-        df.loc[
-            row,
-            "Last Contacted Timestamp",
-        ] = datetime.now(ist).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
-
-        self.save(df)
-
-        return True
-
-    # -------------------------------------------------
-
-    def upsert_lead(
-        self,
-        lead_id,
-        crm_update,
-    ):
-
-        df = self.load()
-
-        idx = df.index[
-            df["Lead ID"].astype(str) == str(lead_id)
-        ]
-
-        if len(idx) == 0:
-
-            new_row = {
-
-                "Lead ID": lead_id,
-
-                "Status": crm_update.get("status", "Pending"),
-
-                "Lead Qualification": crm_update.get("qualification", "Warm"),
-
-                "Conversation Summary": crm_update.get("summary", ""),
-
-                "Customer Requirements": crm_update.get("requirement", ""),
-
-                "Objections Raised": crm_update.get("objection", ""),
-
-                "Meeting Date & Time": crm_update.get("meeting", ""),
-
-                "Follow-up Date": crm_update.get("follow_up", ""),
-
-                "Call Status": crm_update.get("call_status", ""),
-
-                "Retry Count": crm_update.get("retry_count", 0),
-
-                "Last Call SID": crm_update.get("last_call_sid", ""),
-
-                "Last Contacted Timestamp": datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d %H:%M:%S"),
-
+            def group(column):
+                return {(k or "Unknown"): v for k, v in db.execute(self._scoped(select(column, func.count())).group_by(column)).all()}
+            return {
+                "total": count(),
+                "by_status": group(Lead.status),
+                "by_call_status": group(Lead.call_status),
+                "by_qualification": group(Lead.qualification),
+                "pending": count(Lead.do_not_call.is_(False),
+                                 or_(Lead.call_status == "Pending", (Lead.status == "New") & Lead.call_status.is_(None))),
+                "meetings": count(Lead.meeting_at.is_not(None), Lead.meeting_at != ""),
             }
 
-            df = pd.concat(
+    # ---------------- write ----------------
 
-                [df, pd.DataFrame([new_row])],
+    @staticmethod
+    def _apply(lead: Lead, data: dict) -> dict:
+        changes = {}
+        for key, value in data.items():
+            if key not in EDITABLE:
+                continue
+            if key == "phone":
+                value = normalize_phone(value)
+                if not value:
+                    raise ValueError("Invalid phone number.")
+            elif key == "language":
+                value = normalize_language(value)
+            elif key == "tags" and isinstance(value, list):
+                value = ",".join(t.strip() for t in value if t.strip())
+            elif key == "retry_count":
+                value = int(value or 0)
+            elif key == "do_not_call":
+                value = bool(value)
+            elif isinstance(value, str):
+                value = value.strip() or None
+            if getattr(lead, key) != value:
+                changes[key] = {"from": getattr(lead, key), "to": value}
+                setattr(lead, key, value)
+        return changes
 
-                ignore_index=True,
+    def create(self, data: dict, actor: str = "admin") -> dict:
+        if self.agent_id is None:
+            raise ValueError("A lead must belong to an agent.")
+        if not normalize_phone(data.get("phone")):
+            raise ValueError("A valid phone number is required (10-digit Indian or +country code).")
+        with get_db() as db:
+            lead = Lead(agent_id=self.agent_id, status="New", language="en-IN", retry_count=0)
+            self._apply(lead, {k: v for k, v in data.items() if v not in (None, "")})
+            db.add(lead)
+            db.flush()
+            result = lead.to_dict()
+        events.record("lead.created", f"Lead added: {result['name'] or result['phone']}", agent_id=self.agent_id,
+                      lead_id=result["id"], actor=actor)
+        return result
 
-            )
+    def update(self, lead_id: int, data: dict, actor: str = "admin", event_type: str = "lead.updated",
+               title: str | None = None, touch: bool = False) -> dict:
+        with get_db() as db:
+            lead = self._load(db, lead_id)
+            if lead is None:
+                raise LookupError(f"Lead {lead_id} not found.")
+            changes = self._apply(lead, data)
+            if touch:
+                lead.last_contacted_at = _now_utc()
+            result = lead.to_dict()
+        if changes and actor != "system":
+            events.record(event_type, title or f"Updated {', '.join(changes)}", agent_id=result["agent_id"], lead_id=lead_id,
+                          actor=actor, data={k: v["to"] for k, v in changes.items()})
+        return result
 
-        else:
+    def delete(self, lead_ids: list[int], actor: str = "admin") -> int:
+        with get_db() as db:
+            query = db.query(Lead).filter(Lead.id.in_(lead_ids))
+            if self.agent_id is not None:
+                query = query.filter(Lead.agent_id == self.agent_id)
+            count = query.delete(synchronize_session=False)
+        if count:
+            events.record("lead.deleted", f"Deleted {count} lead(s)", agent_id=self.agent_id, actor=actor, data={"ids": lead_ids})
+        return count
 
-            row = idx[0]
+    # ---------------- import / export ----------------
 
-            if "status" in crm_update:
-                df.loc[row, "Status"] = crm_update["status"]
+    @staticmethod
+    def read_table(filename: str, content: bytes) -> pd.DataFrame:
+        name = filename.lower()
+        if name.endswith((".xlsx", ".xls")):
+            return pd.read_excel(io.BytesIO(content), dtype=str)
+        for encoding in ("utf-8-sig", "cp1252", "latin-1"):
+            try:
+                return pd.read_csv(io.BytesIO(content), dtype=str, encoding=encoding, sep=None, engine="python")
+            except UnicodeDecodeError:
+                continue
+        raise ValueError("Could not decode the CSV file.")
 
-            if "qualification" in crm_update:
-                df.loc[row, "Lead Qualification"] = crm_update["qualification"]
+    @staticmethod
+    def map_columns(columns) -> dict:
+        mapping = {}
+        for col in columns:
+            key = "".join(ch for ch in str(col).lower() if ch.isalnum())
+            if key in IMPORT_ALIASES and IMPORT_ALIASES[key] not in mapping.values():
+                mapping[str(col)] = IMPORT_ALIASES[key]
+        return mapping
 
-            if "summary" in crm_update:
-                df.loc[row, "Conversation Summary"] = crm_update["summary"]
+    def import_rows(self, df: pd.DataFrame, mapping: dict | None = None, skip_duplicates: bool = True,
+                    defaults: dict | None = None, actor: str = "admin") -> dict:
+        if self.agent_id is None:
+            raise ValueError("Leads must be imported into an agent.")
+        mapping = mapping or self.map_columns(df.columns)
+        if "phone" not in mapping.values():
+            raise ValueError("Map one column to Phone.")
+        defaults = defaults or {}
+        created, skipped, errors = 0, 0, []
 
-            if "requirement" in crm_update:
-                df.loc[row, "Customer Requirements"] = crm_update["requirement"]
+        with get_db() as db:
+            existing = set(db.scalars(self._scoped(select(Lead.phone))))  # duplicates are per agent
+            for i, row in enumerate(df.to_dict("records"), start=2):
+                values = {field: _clean(row.get(col)) for col, field in mapping.items() if field}
+                phone = normalize_phone(values.get("phone"))
+                if not phone:
+                    errors.append({"row": i, "error": f"Invalid phone: {values.get('phone') or '(empty)'}"})
+                    continue
+                if skip_duplicates and phone in existing:
+                    skipped += 1
+                    continue
+                lead = Lead(
+                    agent_id=self.agent_id,
+                    name=values.get("name"), company=values.get("company"), phone=phone, email=values.get("email"),
+                    city=values.get("city"), language=normalize_language(values.get("language") or defaults.get("language")),
+                    source=values.get("source") or defaults.get("source") or "import",
+                    tags=values.get("tags") or defaults.get("tags"), notes=values.get("notes"),
+                    status=values.get("status") or "New", retry_count=0,
+                )
+                db.add(lead)
+                existing.add(phone)
+                created += 1
 
-            if "objection" in crm_update:
-                df.loc[row, "Objections Raised"] = crm_update["objection"]
+        events.record("lead.imported", f"Imported {created} lead(s)",
+                      f"{skipped} duplicates skipped · {len(errors)} invalid rows", agent_id=self.agent_id, actor=actor,
+                      data={"created": created, "skipped": skipped, "errors": len(errors)})
+        return {"created": created, "skipped_duplicates": skipped, "errors": errors[:500], "mapping": mapping}
 
-            if "meeting" in crm_update:
-                df.loc[row, "Meeting Date & Time"] = crm_update["meeting"]
+    def export_csv(self) -> str:
+        with get_db() as db:
+            rows = [l.to_dict() for l in db.scalars(self._scoped(select(Lead)).order_by(Lead.id))]
+        for r in rows:
+            r["tags"] = ",".join(r["tags"])
+        return pd.DataFrame(rows).to_csv(index=False)
 
-            if "follow_up" in crm_update:
-                df.loc[row, "Follow-up Date"] = crm_update["follow_up"]
-
-            if "call_status" in crm_update:
-                df.loc[row, "Call Status"] = crm_update["call_status"]
-
-            if "retry_count" in crm_update:
-                df.loc[row, "Retry Count"] = crm_update["retry_count"]
-
-            if "last_call_sid" in crm_update:
-                df.loc[row, "Last Call SID"] = crm_update["last_call_sid"]
-
-            ist = timezone(timedelta(hours=5, minutes=30))
-            df.loc[row, "Last Contacted Timestamp"] = datetime.now(ist).strftime("%Y-%m-%d %H:%M:%S")
-
-        self.save(df)
-
-    # -------------------------------------------------
-
-    def get_lead(
-        self,
-        lead_id: int,
-    ):
-
-        df = self.load()
-
-        row = df[
-            df["Lead ID"] == lead_id
-        ]
-
-        if row.empty:
-
-            return None
-
-        return row.iloc[0].to_dict()
+    def import_legacy_excel(self, path: str):
+        from pathlib import Path
+        if self.agent_id is None or not Path(path).exists():
+            return
+        with get_db() as db:
+            if db.scalar(select(func.count(Lead.id))):
+                return
+        df = pd.read_excel(path, dtype=str)
+        result = self.import_rows(df, actor="system")
+        events.record("lead.imported", f"Migrated {result['created']} lead(s) from {path}", agent_id=self.agent_id, actor="system")

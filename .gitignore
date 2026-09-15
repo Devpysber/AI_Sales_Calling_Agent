@@ -27,3 +27,17 @@ Thumbs.db
 # Audio Directories
 audio/input/
 audio/output/
+data/*.db
+
+# v3
+frontend/node_modules/
+frontend/dist/
+data/*.db*
+data/uploads/
+.pytest_cache/
+
+# Local media / generated audio
+*.mp4
+data/voices/
+ref_audio.wav
+/rest
