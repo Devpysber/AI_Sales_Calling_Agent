@@ -129,7 +129,7 @@ TRANSFER_LINES = {"en": "Please hold, I am connecting you to our team.", "hi": "
 
 def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = None):
     """<Dial> the agent's transfer number; if nobody picks up the caller hears a short message instead of silence."""
-    number = "".join(c for c in persona.get("transfer_number", "") if c.isdigit())
+    number = agents.phone_digits(persona.get("transfer_number", ""))
     dial = plivoxml.DialElement(caller_id=caller_id or None, timeout=30,
                                 action=f"{settings.base_url}/api/plivo/transfer-done" + (f"?cid={session['call_id']}" if session else ""),
                                 method="POST", redirect=True)
@@ -138,14 +138,14 @@ def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = N
     return r
 
 
-def inbound_route(persona: dict, agent_id: int) -> str:
+def inbound_route(persona: dict, agent_id: int, caller: str | None = None) -> str:
     """ai | forward | message for an incoming call right now."""
     from app.services.call_service import within_calling_hours
     has_number = bool("".join(c for c in persona.get("transfer_number", "") if c.isdigit()))
     open_now = within_calling_hours(agents.get_automation(agent_id))
     mode = persona.get("inbound_mode", "ai") if open_now else persona.get("after_hours_mode", "ai")
-    if mode == "forward" and not has_number:
-        return "ai"
+    if mode == "forward" and (not has_number or (caller and agents.phone_digits(caller) == agents.phone_digits(persona.get("transfer_number")))):
+        return "ai"  # no number, or the team's own phone is calling: forwarding would ring the caller back
     return mode if mode in ("ai", "forward", "message") else "ai"
 
 
@@ -166,7 +166,7 @@ async def answer(request: Request):
     agent_id = session_agent(session)
     persona = agents.get_profile(agent_id)
     if not p.get("sid"):
-        route = inbound_route(persona, agent_id)
+        route = inbound_route(persona, agent_id, p.get("From"))
         if route == "forward":
             await asyncio.to_thread(calls.mark_transferred, session["call_id"], "Forwarded to " + persona["transfer_number"], "forward")
             return xml(dial_human(r, persona, p.get("To"), session))

@@ -87,6 +87,16 @@ class AgentNotFound(LookupError):
     pass
 
 
+def phone_digits(value: str | None) -> str:
+    """Digits with country code. A bare 10-digit Indian mobile (6-9…) or 0-prefixed number gets 91."""
+    digits = "".join(c for c in (value or "") if c.isdigit())
+    if len(digits) == 11 and digits.startswith("0"):
+        digits = digits[1:]
+    if len(digits) == 10 and digits[0] in "6789":
+        digits = "91" + digits
+    return digits
+
+
 def normalize_number(value: str | None) -> str | None:
     digits = "".join(c for c in (value or "") if c.isdigit())
     return f"+{digits}" if digits else None
@@ -272,8 +282,8 @@ def get_profile(agent_id: int) -> dict:
 def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
     values = dict(values)
     if "transfer_number" in values:
-        digits = "".join(c for c in str(values["transfer_number"] or "") if c.isdigit())
-        if digits and not 10 <= len(digits) <= 15:
+        digits = phone_digits(str(values["transfer_number"] or ""))
+        if digits and not 11 <= len(digits) <= 15:
             raise ValueError("Transfer number must be a full phone number with country code, e.g. +91 98765 43210.")
         values["transfer_number"] = f"+{digits}" if digits else ""
     for key, allowed in (("inbound_mode", ("ai", "forward")), ("after_hours_mode", ("ai", "forward", "message"))):
