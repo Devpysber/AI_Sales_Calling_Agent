@@ -77,6 +77,33 @@ def job_callbacks(agent_id, cfg, force=False):
     return f"{placed} callback(s) placed" + (f", {len(skipped)} skipped ({skipped[0]})" if skipped else "")
 
 
+def job_nurture(agent_id, cfg, force=False):
+    """Follow up warm leads nobody has spoken to for N days (at most nurture_max_attempts times per lead)."""
+    if not force and not within_calling_hours(cfg):
+        return "outside calling hours"
+    state = SettingsService()
+    leads = CRMService(agent_id).nurture_candidates(cfg["nurture_after_days"], cfg["max_calls_per_run"] * 3)
+    calls, placed, skipped = CallService(agent_id), 0, []
+    for lead in leads:
+        if placed >= cfg["max_calls_per_run"]:
+            break
+        key = f"nurture.{lead['id']}"
+        attempts = state.get_state(key) or 0
+        if attempts >= cfg["nurture_max_attempts"]:
+            continue
+        try:
+            calls.start(lead["id"], trigger="nurture", actor="scheduler", purpose="follow_up")
+            state.set_state(key, attempts + 1)
+            placed += 1
+        except CallError as e:
+            skipped.append(str(e))
+            if "limit" in str(e).lower():
+                break
+    if not placed and not skipped:
+        return "no leads to follow up"
+    return f"{placed} follow-up call(s) placed" + (f", {len(skipped)} skipped ({skipped[0]})" if skipped else "")
+
+
 def job_meeting_reminder(agent_id, cfg, force=False):
     persona = agents.get_profile(agent_id)
     tomorrow = (datetime.now(IST) + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -92,8 +119,10 @@ def job_meeting_reminder(agent_id, cfg, force=False):
 
 
 def job_daily_report(agent_id, cfg, force=False):
-    if not cfg["daily_report_email"]:
-        return "no report email configured"
+    from app.core.auth import login_email
+    recipient = cfg["daily_report_email"] or login_email()
+    if not recipient:
+        return "no report email configured (set a recipient or your Admin profile email)"
     name = (agents.get(agent_id) or {}).get("name", "Agent")
     crm, calls = CRMService(agent_id).stats(), CallService(agent_id).stats(days=1)
     q = crm["by_qualification"]
@@ -102,12 +131,12 @@ def job_daily_report(agent_id, cfg, force=False):
             f"Talk time: {calls['today']['talk_seconds'] // 60} min\n"
             f"Leads: {crm['total']} · Pending: {crm['pending']} · Meetings: {crm['meetings']}\n"
             f"Hot {q.get('Hot', 0)} · Warm {q.get('Warm', 0)} · Cold {q.get('Cold', 0)}\n")
-    return send_email(cfg["daily_report_email"], f"{name}: voice agent daily report", body, agent_id=agent_id)
+    return send_email(recipient, f"{name}: voice agent daily report", body, agent_id=agent_id)
 
 
-JOBS = {"auto_dial": job_auto_dial, "retry_calls": job_retry_calls, "callbacks": job_callbacks,
+JOBS = {"auto_dial": job_auto_dial, "retry_calls": job_retry_calls, "callbacks": job_callbacks, "nurture": job_nurture,
         "meeting_reminder": job_meeting_reminder, "daily_report": job_daily_report}
-LABELS = {"auto_dial": "Auto-dial", "retry_calls": "Retry calls", "callbacks": "Callbacks", "meeting_reminder": "Meeting reminders",
+LABELS = {"auto_dial": "Auto-dial", "retry_calls": "Retry calls", "callbacks": "Callbacks", "nurture": "Follow-ups", "meeting_reminder": "Meeting reminders",
           "daily_report": "Daily report"}
 
 
@@ -143,8 +172,10 @@ def _due(agent_id: int, cfg: dict) -> list[str]:
 
     due = []
     # Callbacks are checked every tick but only logged when something was due (see tick()).
+    cfg = {**cfg, "nurture_interval_minutes": 60}
     for job, enabled, minutes in (("auto_dial", "auto_dial_enabled", "auto_dial_interval_minutes"),
-                                  ("retry_calls", "retry_enabled", "retry_interval_minutes")):
+                                  ("retry_calls", "retry_enabled", "retry_interval_minutes"),
+                                  ("nurture", "nurture_enabled", "nurture_interval_minutes")):
         if cfg[enabled] and (not last(job) or now - last(job) >= timedelta(minutes=cfg[minutes])):
             due.append(job)
     for job, enabled, hour in (("meeting_reminder", "meeting_reminder_enabled", "meeting_reminder_hour"),

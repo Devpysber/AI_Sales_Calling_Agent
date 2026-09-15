@@ -15,6 +15,10 @@ const TEMPLATES = [
   { id: 'sales', label: 'Outbound sales', objective: 'Understand the prospect\'s business, explain how our services help, and book a discovery meeting with our team.', cta: 'Book a 30-minute discovery call with our solutions team.' },
   { id: 'support', label: 'Customer support', objective: 'Resolve the caller\'s question using the knowledge base, confirm the issue is solved, and log anything that needs a human follow-up.', cta: 'Create a follow-up for our support team if the issue is not solved on the call.' },
   { id: 'reminder', label: 'Appointments & reminders', objective: 'Confirm, reschedule or cancel the customer\'s upcoming appointment and answer simple questions about it.', cta: 'Confirm the appointment date and time.' },
+  { id: 'website', label: 'Website enquiries', objective: 'Call people who filled a form on our website, understand what they need, answer from the knowledge base and book the next step.', cta: 'Book a callback or visit with our team.' },
+  { id: 'realestate', label: 'Real estate site visits', objective: 'Qualify property enquiries on budget, location and timeline, share project details from the knowledge base, and book a site visit.', cta: 'Book a site visit this week.' },
+  { id: 'collections', label: 'Payment reminders', objective: 'Politely remind the customer about a due payment, confirm when they will pay, and note any issue that needs our team.', cta: 'Get a promised payment date.' },
+  { id: 'onboarding', label: 'Customer onboarding', objective: 'Welcome new customers, confirm their details, explain the next steps and answer setup questions from the knowledge base.', cta: 'Confirm the customer is ready for the next step.' },
   { id: 'survey', label: 'Feedback survey', objective: 'Collect short feedback about the customer\'s recent experience with a few friendly questions.', cta: 'Thank the customer and note their rating and comments.' },
 ]
 
@@ -65,7 +69,7 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
     const t = TEMPLATES.find((x) => x.id === template)!
     // Only send what was filled in: blanks keep the copied agent's (or the default) values.
     const profile: Record<string, string> = Object.fromEntries(
-      (['agent_name', 'company_name', 'company_tagline', 'voice_speaker', 'default_language', 'objective', 'call_to_action', 'instructions'] as const)
+      (['agent_name', 'company_name', 'company_tagline', 'website_url', 'voice_speaker', 'default_language', 'objective', 'call_to_action', 'instructions'] as const)
         .map((k) => [k, (f[k] ?? '').trim()]).filter(([, v]) => v))
     if (!copyFrom) {
       profile.objective ??= t.objective
@@ -89,6 +93,9 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
             <Input name="name" required autoFocus placeholder="Real estate outbound" maxLength={255} />
           </Field>
           <Field label="What is it for?"><Textarea name="description" rows={2} placeholder="Calls website enquiries for the Pune project and books site visits." /></Field>
+          <Field label="Website" hint="The site this agent handles leads for. Each agent gets its own website form link on its Automation page.">
+            <Input name="website_url" type="url" placeholder="https://www.yourwebsite.com" maxLength={200} />
+          </Field>
           <Field label="Phone number" hint="Plivo number for caller ID and inbound calls. Leave blank to use the default number."><Input name="phone_number" inputMode="tel" placeholder="+91 80 1234 5678" /></Field>
         </section>
 

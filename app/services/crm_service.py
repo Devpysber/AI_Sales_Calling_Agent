@@ -195,6 +195,18 @@ class CRMService:
             ).order_by(Lead.callback_at).limit(limit)
             return [l.to_dict() for l in db.scalars(query)]
 
+    def nurture_candidates(self, after_days: int, limit: int) -> list[dict]:
+        """Warm leads with no contact for after_days and nothing already scheduled."""
+        cutoff = _now_utc() - timedelta(days=after_days)
+        with get_db() as db:
+            query = self._scoped(select(Lead)).where(
+                Lead.do_not_call.is_(False), Lead.status.in_(("Interested", "Follow Up")),
+                or_(Lead.meeting_at.is_(None), Lead.meeting_at == ""), or_(Lead.callback_at.is_(None), Lead.callback_at == ""),
+                or_(Lead.call_status.is_(None), Lead.call_status.notin_(("Queued", "Ringing", "In Progress"))),
+                or_(Lead.last_contacted_at.is_(None), Lead.last_contacted_at < cutoff),
+            ).order_by(Lead.last_contacted_at).limit(limit)
+            return [l.to_dict() for l in db.scalars(query)]
+
     def meetings_on(self, date_str: str) -> list[dict]:
         with get_db() as db:
             return [l.to_dict() for l in db.scalars(self._scoped(select(Lead)).where(Lead.meeting_at.like(f"{date_str}%")))]

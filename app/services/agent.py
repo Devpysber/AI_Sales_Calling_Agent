@@ -200,7 +200,7 @@ def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: i
         ("meeting_at", "Booked meeting"), ("notes", "Notes"),
         ("call_goal", "GOAL OF THIS CALL (follow this first)")] if lead.get(key))
 
-    return f"""You are {persona['agent_name']}, a senior sales consultant at {persona['company_name']}{' — ' + persona['company_tagline'] if persona['company_tagline'] else ''}, speaking with a prospect on a live PHONE CALL.
+    return f"""You are {persona['agent_name']}, a senior sales consultant at {persona['company_name']}{' — ' + persona['company_tagline'] if persona['company_tagline'] else ''}, speaking with a prospect on a live PHONE CALL.{(' Company website: ' + persona['website_url'] + ' (say it as a spoken domain if asked).') if persona.get('website_url') else ''}
 
 # Grounding (most important rule)
 {grounding}

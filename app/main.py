@@ -15,7 +15,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import agents, calls, knowledge, leads, plivo, system
+from app.api import agents, calls, intake, knowledge, leads, plivo, system
 from app.core import auth
 from app.core.config import settings
 from app.core.database import run_migrations
@@ -107,8 +107,9 @@ async def request_context(request: Request, call_next):
 
 
 
-for module in (auth, agents, leads, calls, knowledge, system, plivo):
+for module in (auth, agents, leads, calls, knowledge, system, plivo, intake):
     app.include_router(module.router)
+app.include_router(intake.public)
 
 
 # ---------------- SPA (single-container / local mode; nginx serves it in production) ----------------

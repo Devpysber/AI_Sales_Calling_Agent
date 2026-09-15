@@ -44,12 +44,21 @@ AUTOMATION_DEFAULTS = {
     "daily_report_enabled": False,
     "daily_report_hour": 18,
     "daily_report_email": "",
+    # Website leads: call a new enquiry within seconds of the form being submitted
+    "speed_to_lead_enabled": False,
+    # Nurture: call Interested / Follow Up leads again when nobody has spoken to them for a while
+    "nurture_enabled": False,
+    "nurture_after_days": 3,
+    "nurture_max_attempts": 2,
 }
+
+LANGUAGE_CODES = ("en-IN", "hi-IN", "bn-IN", "ta-IN", "te-IN", "kn-IN", "ml-IN", "mr-IN", "gu-IN", "pa-IN", "od-IN")
 
 PROFILE_DEFAULTS = {
     "agent_name": "Ashish",
     "company_name": "Psyber Technologies",
     "company_tagline": "",
+    "website_url": "",                 # the site this agent handles leads for
     "voice_speaker": "rahul",
     "default_language": "en-IN",
     "objective": "Understand the prospect's business, explain how our services help, and book a discovery meeting with our team.",

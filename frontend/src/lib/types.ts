@@ -117,6 +117,7 @@ export interface AgentProfile {
   agent_name: string
   company_name: string
   company_tagline: string
+  website_url: string
   voice_speaker: string
   default_language: string
   objective: string
@@ -156,6 +157,10 @@ export interface AutomationSettings {
   daily_report_enabled: boolean
   daily_report_hour: number
   daily_report_email: string
+  speed_to_lead_enabled: boolean
+  nurture_enabled: boolean
+  nurture_after_days: number
+  nurture_max_attempts: number
 }
 
 export interface AnalyticsKpis {

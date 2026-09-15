@@ -283,6 +283,9 @@ function ProfileEditor({ section, draft, setDraft, data }: {
             <Field label="Company tagline" className="sm:col-span-2" hint="One line on what you do — used when the prospect asks “who are you?”">
               <Input value={draft.company_tagline} maxLength={200} onChange={(e) => set('company_tagline', e.target.value)} placeholder="AI and software development partner for growing businesses" />
             </Field>
+            <Field label="Website" className="sm:col-span-2" hint="The site this agent handles. The agent can mention it, and its website form link is on the Automation page.">
+              <Input type="url" value={draft.website_url ?? ''} maxLength={200} onChange={(e) => set('website_url', e.target.value)} placeholder="https://www.yourwebsite.com" />
+            </Field>
           </div>
         </Section>
 
