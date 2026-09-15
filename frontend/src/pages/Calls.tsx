@@ -1,10 +1,11 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { Bot, Clock, Gauge, PhoneCall, PhoneIncoming, PhoneOutgoing, Radio, Search, Timer, X } from 'lucide-react'
+import { Bot, Clock, Gauge, PhoneCall, PhoneIncoming, PhoneOutgoing, Radio, Search, Timer, X, ListOrdered } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { LiveDot } from '@/components/AppShell'
 import CallSheet from '@/components/CallSheet'
 import { CallStatusBadge, QualificationBadge, SentimentDot } from '@/components/status'
+import CallQueue from '@/components/CallQueue'
 import { Button, Card, EmptyState, Input, PageHeader, Pagination, Select, Skeleton, StatTile, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
 import { useAgent } from '@/lib/agent'
@@ -44,20 +45,21 @@ export default function Calls() {
   const { agent, base, path } = useAgent()
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
-  const [view, setView] = useState<'all' | 'active'>(params.get('status') === 'active' ? 'active' : 'all')
+  const [view, setView] = useState<'all' | 'active' | 'queue'>(params.get('status') === 'active' ? 'active' : params.get('view') === 'queue' ? 'queue' : 'all')
   const [status, setStatus] = useState('')
   const [direction, setDirection] = useState('')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [callId, setCallId] = useState<number | null>(null)
 
-  useEffect(() => { setPage(1); setParams(view === 'active' ? { status: 'active' } : {}, { replace: true }) }, [view, status, direction, search, setParams])
+  useEffect(() => { setPage(1); setParams(view === 'active' ? { status: 'active' } : view === 'queue' ? { view: 'queue' } : {}, { replace: true }) }, [view, status, direction, search, setParams])
 
   const { data, isLoading } = useQuery({
     queryKey: ['calls', view, status, direction, search, page],
     queryFn: () => api<Page<Call>>(`${base}/calls`, { params: { status: view === 'active' ? 'active' : status, direction, search, page, page_size: 25 } }),
     placeholderData: keepPreviousData,
-    refetchInterval: view === 'active' ? 2500 : 6000,
+    refetchInterval: view === 'active' ? 2000 : 4000,
+    enabled: view !== 'queue',
   })
   const stats = useQuery({ queryKey: ['calls', 'stats', 7], queryFn: () => api<CallStats>(`${base}/calls/stats`, { params: { days: 7 } }), refetchInterval: 5000 })
   const s = stats.data
@@ -73,6 +75,7 @@ export default function Calls() {
         description="Every conversation this agent had, with transcript, AI summary, temperature and outcome."
         actions={<Tabs value={view} onChange={setView} items={[
           { value: 'all', label: 'All calls' },
+          { value: 'queue', label: <span className="flex items-center gap-1.5"><ListOrdered className="size-3.5" />Queue</span> },
           { value: 'active', label: <span className="flex items-center gap-1.5"><Radio className="size-3.5" />Live{!!s?.active && <span className="rounded-full bg-success px-1.5 text-[11px] text-white">{s.active}</span>}</span> },
         ]} />}>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -83,7 +86,7 @@ export default function Calls() {
         </div>
       </PageHeader>
 
-      {view === 'active' ? (
+      {view === 'queue' ? <CallQueue /> : view === 'active' ? (
         isLoading ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-80" />)}</div>
           : data?.items.length ? (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{data.items.map((c) => <LiveCallCard key={c.id} call={c} onOpen={() => setCallId(c.id)} />)}</div>

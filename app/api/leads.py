@@ -185,6 +185,50 @@ def bulk_queue(body: Ids, request: Request, agent_id: int = Depends(workspace)):
     return {"queued": queued, "queue_size": size, "eta": eta}
 
 
+@router.get("/queue")
+def call_queue(agent_id: int = Depends(workspace)):
+    """The call queue in dialling order, with why a lead is waiting and a rough time estimate."""
+    from app.services import agents as agent_service
+    from app.services.call_service import CallService, within_calling_hours
+    crm = CRMService(agent_id)
+    cfg = agent_service.get_automation(agent_id)
+    items = crm.queued(500, dialable_only=False)
+    ready_ids = {l["id"] for l in crm.queued(500)}
+    slots = max(1, cfg["max_concurrent_calls"])
+    open_now = within_calling_hours(cfg)
+    rows, ready_index = [], 0
+    for position, lead in enumerate(items, start=1):
+        if lead["id"] in ready_ids:
+            wait = "Next up" if ready_index < slots and open_now else (f"≈ {((ready_index // slots) + 1) * 2} min" if open_now else "When calling hours open")
+            state, ready_index = "ready", ready_index + 1
+        elif lead.get("phone_valid") is False:
+            state, wait = "blocked", "Fix the phone number"
+        elif lead.get("callback_at"):
+            state, wait = "scheduled", f"Callback at {lead['callback_at'][11:16]}"
+        else:
+            state, wait = "cooldown", "Just called: waits 10 min"
+        rows.append({**lead, "position": position, "state": state, "wait": wait})
+    return {"items": rows, "active_calls": CallService(agent_id).active_count(), "slots": cfg["max_concurrent_calls"],
+            "open_now": open_now, "hours": f"{cfg['calling_hours_start']}:00–{cfg['calling_hours_end']}:00 IST"}
+
+
+class QueueOrder(BaseModel):
+    ids: list[int]
+
+
+@router.post("/queue/order")
+def reorder_queue(body: QueueOrder, request: Request, agent_id: int = Depends(workspace)):
+    moved = CRMService(agent_id).reorder_queue(body.ids)
+    return {"reordered": moved}
+
+
+@router.post("/queue/remove")
+def dequeue(body: QueueOrder, request: Request, agent_id: int = Depends(workspace)):
+    removed = CRMService(agent_id).dequeue(body.ids)
+    events.record("lead.dequeued", f"Removed {removed} lead(s) from the call queue", agent_id=agent_id, actor=actor(request))
+    return {"removed": removed}
+
+
 @router.post("/bulk/call")
 def bulk_call(body: Ids, request: Request, agent_id: int = Depends(workspace)):
     calls, placed, errors = CallService(agent_id), [], []

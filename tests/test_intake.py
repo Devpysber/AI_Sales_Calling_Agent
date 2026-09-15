@@ -94,3 +94,14 @@ def test_import_analyze_update_and_queue(client, base):
     assert r["updated"] == 2 and r["created"] == 0
     lead = client.get(f"{base}/leads", params={"search": "9876511111"}).json()["items"][0]
     assert {"a", "camp", "b", "wave2"} <= set(lead["tags"])
+
+
+def test_call_queue_order_and_remove(client, base):
+    ids = [client.post(f"{base}/leads", json={"name": f"Q{i}", "phone": f"98765222{i:02d}"}).json()["id"] for i in range(3)]
+    client.post(f"{base}/leads/bulk/queue", json={"ids": ids})
+    client.post(f"{base}/leads/queue/order", json={"ids": [ids[2], ids[0], ids[1]]})
+    queue = client.get(f"{base}/leads/queue").json()
+    mine = [i["id"] for i in queue["items"] if i["id"] in ids]
+    assert mine == [ids[2], ids[0], ids[1]] and queue["items"][0]["position"] == 1
+    client.post(f"{base}/leads/queue/remove", json={"ids": [ids[0]]})
+    assert ids[0] not in [i["id"] for i in client.get(f"{base}/leads/queue").json()["items"]]

@@ -26,6 +26,7 @@ class Lead(Base):
     status: Mapped[str] = mapped_column(String(64), default="New", index=True)
     call_status: Mapped[str | None] = mapped_column(String(64), index=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    queue_position: Mapped[int | None] = mapped_column(Integer, index=True)  # order in the call queue (lower first)
     last_call_uuid: Mapped[str | None] = mapped_column(String(64))
 
     qualification: Mapped[str | None] = mapped_column(String(64), index=True)
@@ -57,6 +58,7 @@ class Lead(Base):
             "status": self.status,
             "call_status": self.call_status,
             "retry_count": self.retry_count,
+            "queue_position": self.queue_position,
             "qualification": self.qualification,
             "summary": self.summary,
             "requirements": self.requirements,

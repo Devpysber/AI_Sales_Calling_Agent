@@ -232,15 +232,35 @@ class CRMService:
             ).order_by(Lead.callback_at).limit(limit)
             return [l.to_dict() for l in db.scalars(query)]
 
-    def queued(self, limit: int) -> list[dict]:
-        """Leads someone explicitly queued (Pending), oldest first; skips scheduled callbacks and broken numbers."""
+    def queued(self, limit: int, dialable_only: bool = True) -> list[dict]:
+        """The call queue in order: queue_position first (set by the user), then when queued."""
         with get_db() as db:
-            query = self._scoped(select(Lead)).where(
-                Lead.call_status == "Pending", Lead.do_not_call.is_(False),
-                ~(Lead.phone.like("+91%") & (func.length(Lead.phone) != 13)),
-                or_(Lead.callback_at.is_(None), Lead.callback_at == ""),
-            ).order_by(Lead.updated_at).limit(limit)
+            query = self._scoped(select(Lead)).where(Lead.call_status == "Pending", Lead.do_not_call.is_(False))
+            if dialable_only:
+                query = query.where(
+                    ~(Lead.phone.like("+91%") & (func.length(Lead.phone) != 13)),
+                    or_(Lead.callback_at.is_(None), Lead.callback_at == ""),
+                    # never ring someone again minutes after a call
+                    or_(Lead.last_contacted_at.is_(None), Lead.last_contacted_at < _now_utc() - timedelta(minutes=10)),
+                )
+            query = query.order_by(Lead.queue_position.is_(None), Lead.queue_position, Lead.updated_at).limit(limit)
             return [l.to_dict() for l in db.scalars(query)]
+
+    def reorder_queue(self, lead_ids: list[int]) -> int:
+        """Set the queue order exactly as given (position 1..n); leads not listed keep their place after them."""
+        with get_db() as db:
+            leads = {l.id: l for l in db.scalars(self._scoped(select(Lead)).where(Lead.id.in_(lead_ids), Lead.call_status == "Pending"))}
+            for position, lead_id in enumerate(lead_ids, start=1):
+                if lead_id in leads:
+                    leads[lead_id].queue_position = position
+            return len(leads)
+
+    def dequeue(self, lead_ids: list[int]) -> int:
+        with get_db() as db:
+            leads = list(db.scalars(self._scoped(select(Lead)).where(Lead.id.in_(lead_ids), Lead.call_status == "Pending")))
+            for lead in leads:
+                lead.call_status, lead.queue_position = None, None
+            return len(leads)
 
     def queue_size(self) -> int:
         with get_db() as db:
