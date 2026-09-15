@@ -63,12 +63,14 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
     e.preventDefault()
     const f = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>
     const t = TEMPLATES.find((x) => x.id === template)!
-    const profile: Record<string, string> = {
-      agent_name: f.agent_name ?? '', company_name: f.company_name ?? '', voice_speaker: f.voice_speaker ?? '',
-      default_language: f.default_language ?? '',
+    // Only send what was filled in: blanks keep the copied agent's (or the default) values.
+    const profile: Record<string, string> = Object.fromEntries(
+      (['agent_name', 'company_name', 'company_tagline', 'voice_speaker', 'default_language', 'objective', 'call_to_action', 'instructions'] as const)
+        .map((k) => [k, (f[k] ?? '').trim()]).filter(([, v]) => v))
+    if (!copyFrom) {
+      profile.objective ??= t.objective
+      profile.call_to_action ??= t.cta
     }
-    if (!copyFrom) Object.assign(profile, { objective: f.objective || t.objective, call_to_action: t.cta })
-    else if (f.objective) profile.objective = f.objective
     create.mutate({
       name: f.name, description: f.description || undefined, phone_number: f.phone_number || undefined, color,
       copy_from: copyFrom ? Number(copyFrom) : undefined, profile,
@@ -116,8 +118,8 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
         <section className="space-y-4 border-t border-border pt-5">
           <h3 className="text-sm font-semibold">Persona</h3>
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Speaks as"><Input name="agent_name" placeholder="Neha" /></Field>
-            <Field label="On behalf of (company)"><Input name="company_name" placeholder="Skyline Realty" /></Field>
+            <Field label={copyFrom ? 'Speaks as' : 'Speaks as *'} hint="First name the agent introduces itself with."><Input name="agent_name" required={!copyFrom} placeholder="e.g. Neha" maxLength={60} /></Field>
+            <Field label={copyFrom ? 'Company' : 'Company *'} hint="Said in the greeting: “calling from …”."><Input name="company_name" required={!copyFrom} placeholder="e.g. Skyline Realty" maxLength={120} /></Field>
             <Field label="Voice">
               <Select name="voice_speaker" defaultValue="">
                 <option value="">{copyFrom ? 'Same as copied agent' : 'Default (rahul)'}</option>
@@ -131,7 +133,24 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
               </Select>
             </Field>
           </div>
-          <Field label="Objective" hint="Optional. You can refine the full playbook after creating."><Textarea name="objective" rows={2} placeholder={copyFrom ? 'Keep the copied objective' : TEMPLATES.find((t) => t.id === template)!.objective} /></Field>
+          <Field label={copyFrom ? 'What the company does' : 'What the company does *'} hint="One or two lines the agent can say. Details belong in the knowledge base.">
+            <Textarea name="company_tagline" rows={2} required={!copyFrom} maxLength={400} placeholder="e.g. 2 & 3 BHK apartments in Hinjewadi, Pune, ready to move in, from ₹65 lakh." />
+          </Field>
+        </section>
+
+        <section className="space-y-4 border-t border-border pt-5">
+          <h3 className="text-sm font-semibold">Call playbook</h3>
+          <Field label="Objective" hint="What a successful call achieves. Pre-filled from the template.">
+            <Textarea name="objective" rows={2} key={`o-${template}-${copyFrom}`} placeholder={copyFrom ? 'Keep the copied objective' : undefined}
+              defaultValue={copyFrom ? '' : TEMPLATES.find((t) => t.id === template)!.objective} />
+          </Field>
+          <Field label="Call to action" hint="The one concrete next step the agent asks for.">
+            <Input name="call_to_action" key={`c-${template}-${copyFrom}`} placeholder={copyFrom ? 'Keep the copied call to action' : undefined}
+              defaultValue={copyFrom ? '' : TEMPLATES.find((t) => t.id === template)!.cta} />
+          </Field>
+          <Field label="How should it talk?" hint="Optional: tone, questions to ask, what to avoid. You can refine the full playbook after creating.">
+            <Textarea name="instructions" rows={3} placeholder="e.g. Friendly and brief. Ask budget, preferred location and move-in timeline. Offer a Saturday site visit." />
+          </Field>
         </section>
       </form>
     </Sheet>

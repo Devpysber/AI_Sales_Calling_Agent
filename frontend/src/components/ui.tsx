@@ -116,6 +116,19 @@ export function CardHeader({ title, description, action, className }: { title: R
   )
 }
 
+/** Long text clamped to a few lines with a Show more / Show less toggle. */
+export function ShowMore({ text, lines = 3, limit = 220, className }: { text: string; lines?: number; limit?: number; className?: string }) {
+  const [open, setOpen] = useState(false)
+  const long = text.length > limit
+  return (
+    <span className={className}>
+      <span className={cn('whitespace-pre-wrap', long && !open && 'line-clamp-[var(--lines)]')} style={{ ['--lines' as string]: lines }}>{text}</span>
+      {long && <button type="button" onClick={(e) => { e.stopPropagation(); setOpen(!open) }}
+        className="mt-1 block text-xs font-semibold text-brand hover:underline">{open ? 'Show less' : 'Show more'}</button>}
+    </span>
+  )
+}
+
 export const Skeleton = ({ className }: { className?: string }) => <div className={cn('animate-pulse rounded-xl bg-surface-2', className)} />
 
 export const Spinner = ({ className }: { className?: string }) => <Loader2 className={cn('size-4 animate-spin text-muted', className)} />

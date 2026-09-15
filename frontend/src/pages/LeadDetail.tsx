@@ -10,7 +10,7 @@ import ActivityFeed from '@/components/ActivityFeed'
 import CallSheet from '@/components/CallSheet'
 import { LeadFormSheet, useStartCall } from '@/components/LeadSheets'
 import { CallStatusBadge, QualificationBadge, SentimentDot } from '@/components/status'
-import { Avatar, Badge, Button, Card, CardHeader, EmptyState, Input, PageHeader, Ring, Select, Skeleton, Switch, Tabs, Textarea, useConfirm } from '@/components/ui'
+import { Avatar, Badge, Button, Card, CardHeader, EmptyState, Input, PageHeader, Ring, Select, ShowMore, Skeleton, Switch, Tabs, Textarea, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
 import { useAgent } from '@/lib/agent'
 import type { ActivityEvent, Call, Lead, Page } from '@/lib/types'
@@ -74,7 +74,7 @@ function Insight({ icon, title, children, empty }: { icon: ReactNode; title: str
   return (
     <div className="rounded-2xl border border-border bg-surface-2/40 p-4">
       <div className="mb-1.5 flex items-center gap-2 text-[13px] font-bold [&_svg]:size-4">{icon}{title}</div>
-      {children ? <p className="text-sm leading-relaxed whitespace-pre-wrap text-fg-2">{children}</p> : <p className="text-sm text-muted">{empty}</p>}
+      {children ? <p className="text-sm leading-relaxed text-fg-2">{typeof children === 'string' ? <ShowMore text={children} lines={4} limit={320} /> : children}</p> : <p className="text-sm text-muted">{empty}</p>}
     </div>
   )
 }
@@ -99,7 +99,9 @@ export default function LeadDetail() {
   const activity = useQuery({ queryKey: ['activity', 'lead', leadId], queryFn: () => api<ActivityEvent[]>(`${base}/leads/${leadId}/activity`), refetchInterval: 8000 })
 
   const items = useMemo(() => calls.data?.items ?? [], [calls.data])
-  const talked = useMemo(() => items.filter((c) => c.status === 'Completed' && (c.turns ?? 0) > 0), [items])
+  // A conversation = the customer said something (greeting-only calls have 1 turn)
+  const talked = useMemo(() => items.filter((c) => c.status === 'Completed' && (c.turns ?? 0) > 1), [items])
+  const analyzed = talked.find((c) => c.outcome || c.summary) ?? talked[0]
   const liveCall = items.find((c) => LIVE_STATUSES.includes(c.status))
   const shownCallId = transcriptOf ?? liveCall?.id ?? talked[0]?.id ?? null
   const conversation = useQuery({
@@ -265,7 +267,7 @@ export default function LeadDetail() {
               </div>
               {talked[0] && (
                 <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-                  {[['Last outcome', talked[0].outcome ? titleCase(talked[0].outcome) : '—'], ['Sentiment', talked[0].sentiment ? <SentimentDot value={talked[0].sentiment} /> : '—'],
+                  {[['Last outcome', analyzed.outcome ? titleCase(analyzed.outcome) : '—'], ['Sentiment', analyzed.sentiment ? <SentimentDot value={analyzed.sentiment} /> : '—'],
                     ['Temperature', <QualificationBadge value={l.qualification} />], ['Language', LANGUAGES[l.language] ?? l.language]].map(([k, v]) => (
                     <div key={k as string} className="rounded-xl border border-border px-3 py-2.5">
                       <div className="text-[11px] font-bold tracking-wider text-muted uppercase">{k as string}</div>

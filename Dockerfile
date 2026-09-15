@@ -22,7 +22,6 @@ COPY --from=deps /venv /venv
 COPY --chown=app:app app ./app
 COPY --chown=app:app migrations ./migrations
 COPY --chown=app:app alembic.ini ./
-COPY --chown=app:app audio/static ./audio/static
 COPY --from=web --chown=app:app /web/dist ./frontend/dist
 RUN mkdir -p data && chown app:app data
 USER app

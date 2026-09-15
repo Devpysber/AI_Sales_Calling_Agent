@@ -2,6 +2,7 @@ import {
   Bot, CalendarCheck, CircleAlert, Clock, FileText, Mail, Phone, PhoneIncoming, PhoneOff, Settings2, Sparkles,
   Upload, UserPlus, UserRoundPen, Users,
 } from 'lucide-react'
+import { ShowMore } from '@/components/ui'
 import type { ActivityEvent } from '@/lib/types'
 import { cn, timeAgo } from '@/lib/utils'
 
@@ -47,11 +48,11 @@ export default function ActivityFeed({ events, showLead, onLead, onCall, compact
                   <button className="text-brand hover:underline" onClick={() => onLead?.(e.lead_id!)}>{e.lead_name}</button>
                 )}
               </div>
-              {e.detail && !compact && <p className="mt-0.5 text-[13px] break-words text-muted">{e.detail}</p>}
+              {e.detail && !compact && <p className="mt-0.5 text-[13px] break-words text-muted"><ShowMore text={e.detail} lines={2} limit={180} /></p>}
               {data.length > 0 && !compact && (
                 <dl className="mt-2 grid gap-1 rounded-lg border border-border bg-surface-2 p-2.5 text-xs">
                   {data.slice(0, 6).map(([k, v]) => (
-                    <div key={k} className="flex gap-2"><dt className="w-28 shrink-0 text-muted capitalize">{k.replace(/_/g, ' ')}</dt><dd className="break-words text-fg-2">{String(v)}</dd></div>
+                    <div key={k} className="flex gap-2"><dt className="w-28 shrink-0 text-muted capitalize">{k.replace(/_/g, ' ')}</dt><dd className="min-w-0 break-words text-fg-2"><ShowMore text={String(v)} lines={2} limit={160} /></dd></div>
                   ))}
                 </dl>
               )}

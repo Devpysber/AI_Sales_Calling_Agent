@@ -41,3 +41,5 @@ data/uploads/
 data/voices/
 ref_audio.wav
 /rest
+data/*.xlsx
+data/*.csv

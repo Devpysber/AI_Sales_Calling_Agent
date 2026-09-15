@@ -53,6 +53,7 @@ PLAY_CHUNK_BYTES = 1600          # 200 ms of 8 kHz μ-law per playAudio message
 SENTENCE_SPLIT = re.compile(r"(?<=[।.!?])\s+")
 SENTENCE_END = re.compile(r"[।!?]|\.(?=\s)")
 CLAUSE_END = re.compile(r"[,;:]\s")
+LANGUAGE_SWITCH_CONFIDENCE = 0.6   # Sarvam language_probability needed to follow the caller into another language
 SPOKEN_ONLY = ("Answer out loud in 1-2 short sentences of plain speech. Do not call any tool. "
                "If a meeting or callback time was agreed, repeat the day and time back to confirm it.")
 
@@ -384,7 +385,8 @@ class CallStream:
         self.persona = agents.get_profile(self.agent_id) if self.agent_id else {}
         self.stream_id: str | None = None
         self.call_uuid: str | None = None
-        self.stt = SarvamSTT(self.session.get("language", "en-IN") if self.session else "en-IN")
+        # Auto-detect: the caller may answer in another language than the lead's; replies follow what they speak.
+        self.stt = SarvamSTT("unknown")
         self.gate = SilenceGate() if settings.stt_silence_gate else None
         self.tts = make_tts(self.session.get("language", "en-IN") if self.session else "en-IN", self.persona.get("voice_speaker"))
 
@@ -659,6 +661,10 @@ class CallStream:
                 self.publish_state()
         elif kind == "data":
             text = (data.get("transcript") or "").strip()
+            spoken = data.get("language_code")
+            if (text and spoken in tts.LANGUAGES and spoken != self.session.get("language")
+                    and (data.get("language_probability") or 0) >= LANGUAGE_SWITCH_CONFIDENCE and len(text.split()) >= 2):
+                await self.switch_language(spoken)
             if text and self.mode != "ai":
                 # Supervisor has the call: log what the caller said, the AI does not answer
                 self.turn("customer", text)
@@ -687,10 +693,6 @@ class CallStream:
             return
         log.info("Language switch %s -> %s on session %s", self.session.get("language"), language, self.session_id[:8])
         self.session["language"] = language
-        old_stt, self.stt = self.stt, SarvamSTT(language)
-        await old_stt.close()  # stt_loop reconnects with the new language
-        with contextlib.suppress(Exception):
-            await self.stt.connect()
         await self.tts.close()
         self.tts = make_tts(language, self.persona.get("voice_speaker"))
         self.tts.warm()
@@ -721,6 +723,8 @@ class CallStream:
         if self.mode != "ai":
             return
         log.info("Customer said (%s): %s", self.session_id[:8], text)
+        language = self.session.get("language") or "en-IN"
+        supervised = bool(self.direction or self.guidance)
         guidance = " ".join(g for g in (self.direction, self.guidance) if g) or None
         self.guidance = None
         self.publish_state()
@@ -737,7 +741,7 @@ class CallStream:
 
         def pump():
             try:
-                for delta in agent.respond_stream(self.agent_id, history, prompt_text, lead, guidance):
+                for delta in agent.respond_stream(self.agent_id, history, prompt_text, lead, guidance, language):
                     if stop.is_set():
                         return
                     loop.call_soon_threadsafe(deltas.put_nowait, delta)
@@ -823,7 +827,7 @@ class CallStream:
             with contextlib.suppress(Exception):
                 retry = ReplyFilter()
                 spoken_only = ((guidance + " ") if guidance else "") + SPOKEN_ONLY
-                raw = await asyncio.to_thread(lambda: "".join(agent.respond_stream(self.agent_id, history, prompt_text, lead, spoken_only)))
+                raw = await asyncio.to_thread(lambda: "".join(agent.respond_stream(self.agent_id, history, prompt_text, lead, spoken_only, language)))
                 reply = " ".join((retry.feed(raw) + retry.flush()).split())
                 cleaner.end_call = retry.end_call
                 if reply:
@@ -836,7 +840,7 @@ class CallStream:
             await self.say_fixed(reply)
         if text is not None:
             self.turn("customer", text)
-        self.turn("assistant", reply, by="ai-guided" if guidance else None)
+        self.turn("assistant", reply, by="ai-guided" if supervised else None)
         if first_audio_ms is not None:
             self.session["latencies"] = (self.session.get("latencies") or []) + [first_audio_ms]
         self.save_session(silent_prompts=0)

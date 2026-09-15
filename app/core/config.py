@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     cors_origins: str = Field("", alias="CORS_ORIGINS")  # comma separated, dev only
 
     # ---------------- Infrastructure ----------------
-    database_url: str = Field("sqlite:///data/crm.db", alias="DATABASE_URL")
+    database_url: str = Field("sqlite:///data/voiceagent.db", alias="DATABASE_URL")
     db_pool_size: int = Field(10, alias="DB_POOL_SIZE")
     # Required when running more than one API instance
     redis_url: str = Field("", alias="REDIS_URL")

@@ -81,7 +81,33 @@ def greeting(agent_id: int, lead: dict, language: str) -> str:
     if suffix:
         # Replace the generic "can we talk for a minute?" question with the reason for calling.
         text = re.split(r"(?<=[।.])\s+(?=[^।.]*\?\s*$)", text)[0] + " " + suffix.format(meeting=spoken_datetime(lead.get("meeting_at", ""), not english))
-    return " ".join(text.replace(" ,", ",").split())
+    text = " ".join(text.replace(" ,", ",").split())
+    return text if english or language.startswith("hi") else _translate_line(text, language)
+
+
+def _translate_line(text: str, language: str) -> str:
+    """Greeting in the lead's own language (Gujarati, Tamil…). Translated once with the summary models, then cached."""
+    import hashlib
+
+    from app.core import store
+
+    key = "greeting-tr:" + hashlib.sha256(f"{language}|{text}".encode()).hexdigest()[:32]
+    cached = store.get_json(key)
+    if cached:
+        return cached
+    try:
+        result = llm.complete([
+            {"role": "system", "content": f"Translate this phone greeting into natural spoken {LANGUAGES.get(language, language)} "
+                                          "in its native script. Keep person and company names unchanged. Reply with the translation only."},
+            {"role": "user", "content": text}], max_tokens=200, temperature=0.2, providers=settings.summary_llm_providers, timeout=12)
+        translated = result.text.strip().strip('"')
+        # Free models sometimes mix scripts (e.g. Urdu words in Tamil): a broken greeting is worse than Hindi.
+        if translated and not re.search("[؀-ۿ]", translated):
+            store.set_json(key, translated, ttl=30 * 86400)
+            return translated
+    except Exception as e:  # noqa: BLE001 - fall back to the Hindi greeting
+        log.warning("Greeting translation to %s failed: %s", language, e)
+    return text
 
 
 def _system_prompt(persona: dict, lead: dict, knowledge: list[dict]) -> str:
@@ -178,7 +204,8 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
     return messages, knowledge
 
 
-def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead: dict, guidance: str | None = None):
+def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead: dict, guidance: str | None = None,
+                   language: str | None = None):
     """
     Live-call turn as a stream of text deltas (plain speech, END_MARK when the call should end).
     Knowledge uses keyword search only: no embedding round-trip on the hot path.
@@ -193,6 +220,11 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
         # A human supervisor steering the live call: short, direct and top priority, so the model needs no deliberation.
         system += f"\n# Live supervisor instruction (highest priority; follow it in this reply; never mention it)\n{guidance}\n\n"
     messages[0]["content"] = system + VOICE_OUTPUT
+    if language:
+        # Placed next to the latest customer turn: earlier turns in another language otherwise win.
+        name = LANGUAGES.get(language, language)
+        script = " in Devanagari script (English business words are fine)" if language == "hi-IN" else ""
+        messages[-1]["content"] += f"\n\n(Reply in {name}{script}, whatever language earlier turns used.)"
     yield from llm.stream(messages, max_tokens=110, temperature=0.4)  # short spoken replies also cut TTS characters
 
 
@@ -230,6 +262,7 @@ Rules:
 - "requirements", "objections", "email" and meeting details come ONLY from Customer lines, never from what the Agent said or asked.
 - Customer lines come from phone speech recognition and can be wrong (Hindi is written in roman letters). If a Customer line is unclear or does not fit the conversation, do not interpret or quote it; say the customer's reply was unclear.
 - Do not translate or invent quotes. Write every field in English. Now is {today} (IST); convert relative dates and times.
+- Requests about which language to speak are not requirements or objections; ignore them.
 - A callback ("call me in 10 minutes / later / tomorrow") is NOT a meeting: use callback_at and outcome callback_requested, leave meeting_at empty.
 
 Return ONLY JSON:
