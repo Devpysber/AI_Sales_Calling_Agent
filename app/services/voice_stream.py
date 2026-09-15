@@ -413,6 +413,8 @@ class CallStream:
         self.guidance: str | None = None   # one-shot instruction for the next AI reply
         self.direction: str | None = None  # standing instruction for every AI reply until cleared
         self.monitors: dict[asyncio.Queue, dict] = {}
+        from app.services.live_bridge import CallBridge
+        self.bridge = CallBridge(self, self.session.get("call_id") if self.session else None)
 
     # ----- plumbing -----
 
@@ -450,19 +452,21 @@ class CallStream:
         for queue in list(self.monitors):
             if queue.qsize() < 400:
                 queue.put_nowait(event)
+        self.bridge.emit_nowait(event)  # supervisors connected to other replicas
 
     def publish_state(self):
         self.publish(self.state())
 
     def publish_audio(self, track: str, audio: bytes, is_mulaw: bool = False):
         listeners = [q for q, opts in self.monitors.items() if opts.get("listen")]
-        if not listeners:
+        if not listeners and not self.bridge.remote_listening:
             return
         pcm = mulaw_to_pcm16(audio) if is_mulaw else audio
         event = {"type": "audio", "track": track, "pcm": base64.b64encode(pcm).decode()}
         for queue in listeners:
             if queue.qsize() < 400:
                 queue.put_nowait(event)
+        self.bridge.emit_nowait(event)
 
     def turn(self, role: str, text: str, by: str | None = None):
         call_session.add_turn(self.session, role, text)
@@ -590,6 +594,7 @@ class CallStream:
             await self.ws.close()
             return
         LIVE[self.session_id] = self
+        self.bridge.start()
         self.tts.warm()
         try:
             await self.stt.connect()
@@ -603,6 +608,7 @@ class CallStream:
             self.closed = True
             LIVE.pop(self.session_id, None)
             self.publish({"type": "ended"})
+            await self.bridge.stop()
             for t in tasks + [self.reply_task, self.commit_task]:
                 if t and not t.done():
                     t.cancel()

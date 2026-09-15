@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import base64
 import json
 
@@ -75,6 +76,12 @@ async def monitor_call(websocket: WebSocket, call_id: int, agent_id: int):
     stream = next((s for s in LIVE.values() if s.agent_id == agent_id and str(s.session.get("call_id")) == str(call_id)), None)
     await websocket.accept()
     if not stream:
+        from app.services import live_bridge
+        owned = await asyncio.to_thread(CallService(agent_id).get, call_id) is not None
+        if owned and await live_bridge.is_live_elsewhere(call_id):
+            with contextlib.suppress(WebSocketDisconnect, RuntimeError):
+                await live_bridge.relay(websocket, call_id)  # call runs on another replica
+            return
         await websocket.send_json({"type": "ended"})
         await websocket.close(code=1000)
         return

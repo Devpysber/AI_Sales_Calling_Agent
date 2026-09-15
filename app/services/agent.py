@@ -135,6 +135,10 @@ def _cached(key: tuple, build) -> str:
     except Exception:  # noqa: BLE001 - memory is best-effort, never break a call
         log.exception("Building call memory failed for %s", key)
         value = ""
+    if len(_memory_cache) > 2000:  # long-running replicas: drop expired entries, then the oldest
+        now = time.monotonic()
+        for k in [k for k, (at, _) in _memory_cache.items() if now - at > MEMORY_TTL] or list(_memory_cache)[:500]:
+            _memory_cache.pop(k, None)
     _memory_cache[key] = (time.monotonic(), value)
     return value
 

@@ -26,6 +26,29 @@ log = get_logger("app")
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 
 
+def production_problems() -> list[str]:
+    """Settings that are unsafe or break scaling in production (only enforced when ENVIRONMENT=production)."""
+    if not settings.is_production:
+        return []
+    import os
+
+    from app.core.auth import auth_enabled
+    problems = []
+    if not settings.secret_key or len(settings.secret_key) < 32:
+        problems.append("SECRET_KEY must be set (32+ characters) and identical on every replica")
+    if not auth_enabled():
+        problems.append("ADMIN_PASSWORD must be set (or a password set on the Admin profile)")
+    if not settings.public_base_url.startswith("https://"):
+        problems.append("PUBLIC_BASE_URL must be an https:// URL Plivo can reach")
+    if int(os.environ.get("WEB_CONCURRENCY", "1")) > 1 and not settings.redis_url:
+        problems.append("REDIS_URL is required with more than one worker (call state is shared in Redis)")
+    if settings.database_url.startswith("sqlite") and settings.redis_url:
+        problems.append("Use PostgreSQL (DATABASE_URL) when running several replicas; SQLite is single-host only")
+    if settings.plivo_auth_id and not settings.plivo_validate_signature:
+        problems.append("PLIVO_VALIDATE_SIGNATURE must be true in production")
+    return problems
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if settings.run_migrations:
@@ -35,8 +58,12 @@ async def lifespan(app: FastAPI):
         first = (await asyncio.to_thread(agents.ids) or [None])[0]
         await asyncio.to_thread(CRMService(first).import_legacy_excel, settings.legacy_excel_file)
 
-    if settings.is_production and not settings.admin_password:
-        log.error("ADMIN_PASSWORD is not set in production: the API is unprotected")
+    problems = production_problems()
+    if problems:
+        for problem in problems:
+            log.error("Production check failed: %s", problem)
+        if settings.is_production:
+            raise RuntimeError("Refusing to start in production: " + "; ".join(problems))
 
     task = None
     if settings.run_scheduler:
