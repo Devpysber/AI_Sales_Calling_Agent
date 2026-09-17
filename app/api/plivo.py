@@ -36,8 +36,11 @@ PROMPTS = {
                  "hi": "जी बोलिए, मैं सुन रहा हूँ।"},
     "goodbye": {"en": "Thanks for your time. Have a great day!",
                 "hi": "आपके समय के लिए धन्यवाद। आपका दिन शुभ हो!"},
-    "error": {"en": "Sorry, I'm having a technical issue. Our team will call you back shortly. Goodbye.",
-              "hi": "माफ़ कीजिए, अभी तकनीकी समस्या है। हमारी टीम आपको जल्द ही कॉल करेगी। नमस्ते।"},
+    # Nothing here names a fault: the caller only needs to know a person is coming, not why.
+    "error": {"en": "Sorry about that. Someone from our team will call you right back. Thank you.",
+              "hi": "माफ़ कीजिए। हमारी team आपको अभी call करेगी। धन्यवाद।"},
+    "handover": {"en": "One moment — let me put you through to someone from our team.",
+                 "hi": "एक मिनट, मैं आपको अपनी team से जोड़ता हूँ।"},
 }
 
 
@@ -292,7 +295,14 @@ async def _reply_or_hold(session_id: str, max_wait: float) -> plivoxml.ResponseE
             await asyncio.to_thread(listen, r, session, audio_id=pending["audio_id"])
     elif pending.get("state") == "error":
         call_session.update(session_id, pending=None)
-        await asyncio.to_thread(hangup_with, r, session, PROMPTS["error"][lang_key(session)])
+        agent_id = session_agent(session)
+        persona = agents.get_profile(agent_id) if agent_id else {}
+        # Put the caller through to a person rather than ending the call on our own failure.
+        if "".join(c for c in persona.get("transfer_number", "") if c.isdigit()):
+            speak(r, session, PROMPTS["handover"][lang_key(session)])
+            dial_human(r, persona, agents.caller_id(agent_id), session)
+        else:
+            await asyncio.to_thread(hangup_with, r, session, PROMPTS["error"][lang_key(session)])
     else:
         # Still thinking: short silence (no hold tone), then poll again
         r.add(plivoxml.WaitElement(length=1))

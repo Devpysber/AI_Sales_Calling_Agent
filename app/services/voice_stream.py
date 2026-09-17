@@ -31,6 +31,7 @@ import json
 import re
 import threading
 import time
+from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
 import numpy as np
@@ -39,8 +40,8 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services import agent, agents, call_session, tts
-from app.services.call_service import CallService, session_agent
+from app.services import agent, agents, call_session, events, tts
+from app.services.call_service import IST, CallService, session_agent
 
 log = get_logger(__name__)
 
@@ -832,6 +833,31 @@ class CallStream:
         elif kind == "error":
             log.warning("Sarvam STT error: %s", data)
 
+    def escalate_failure(self, error: str):
+        """
+        A caller we could not keep talking to: tell the team and book a callback.
+
+        Runs when the agent breaks mid-call and there is no number to transfer to, so the person on
+        the line is not simply dropped and forgotten.
+        """
+        lead_id = self.session.get("lead_id")
+        lead = self.session.get("lead") or {}
+        who = lead.get("name") or lead.get("phone") or "A caller"
+        with contextlib.suppress(Exception):
+            events.record("call.failed", f"Call with {who} ended early", f"agent error: {error[:200]}",
+                          agent_id=self.agent_id, lead_id=lead_id, call_id=self.session.get("call_id"), actor="system")
+        if lead_id:
+            with contextlib.suppress(Exception):
+                soon = (datetime.now(IST) + timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M")
+                CallService(self.agent_id).crm.update(lead_id, {"callback_at": soon}, actor="system",
+                                                      event_type="lead.updated", title="Callback after a dropped call")
+        with contextlib.suppress(Exception):
+            from app.services.notification_service import notify_team
+            notify_team(f"Call dropped: {who} needs a call back",
+                        f"The call with {who} ({lead.get('phone') or 'unknown number'}) ended early because the agent "
+                        f"could not continue.\n\nPlease call them back.\n\nWhat went wrong: {error[:300]}",
+                        lead_id=lead_id, agent_id=self.agent_id)
+
     async def interrupt(self, force: bool = False):
         """Caller (or supervisor) talks over the agent: stop audio and drop the reply in flight."""
         if self.reply_task and not self.reply_task.done():
@@ -998,7 +1024,15 @@ class CallStream:
                 self.turn("customer", text)
             self.save_session()
             from app.api.plivo import PROMPTS
-            await self.say_fixed(PROMPTS["error"][self.lang_key()], hangup=True)
+            # Something broke on our side. Hanging up on a caller mid-conversation is the worst
+            # outcome, so hand them to a person when there is one, and promise a callback otherwise.
+            if self.can_transfer():
+                await self.say_fixed(PROMPTS["handover"][self.lang_key()])
+                self.turn("assistant", PROMPTS["handover"][self.lang_key()])
+                await self.checkpoint(transfer=True)
+            else:
+                await self.say_fixed(PROMPTS["error"][self.lang_key()], hangup=True)
+                await asyncio.to_thread(self.escalate_failure, str(e))
             return
 
         reply = " ".join("".join(spoken).split())
