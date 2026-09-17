@@ -216,12 +216,22 @@ def _check_credential(key: str, value: str):
         raise HTTPException(400, message)
 
 
+def _hint(value: str) -> str:
+    """Enough of a stored credential to recognise it, never enough to use it."""
+    if len(value) <= 6:
+        return "•" * len(value)
+    return f"{value[:4]}…{value[-4:]}"
+
+
 @router.get("/system/secrets", dependencies=[Depends(require_admin)])
 async def get_secrets():
     # The encrypted AppSetting row is the one app.core.config actually reads; SettingsService held an
     # older plaintext copy that nothing consumed, so edits saved there never took effect.
+    stored = {k: v for k, v in get_all_secrets_from_db().items() if v}
     secrets = {**(SettingsService().get_state("secrets") or {}),
-               **{k: "********" for k, v in get_all_secrets_from_db().items() if v}}
+               **{k: "********" for k in stored}}
+    # A masked field alone cannot show that the wrong value is saved; a short hint can.
+    secrets["_hints"] = {k: _hint(v) for k, v in stored.items()}
     sarvam_credits = secrets.get("sarvam_credits")
     sarvam_credits_updated_at = secrets.get("sarvam_credits_updated_at")
     
@@ -246,6 +256,8 @@ async def update_secrets(body: dict):
     plain = SettingsService().get_state("secrets") or {}
     credentials: dict[str, str] = {}
     for key, raw in body.items():
+        if key.startswith("_"):
+            continue                                      # display-only fields such as _hints
         value = "" if raw is None else str(raw).strip()   # numeric fields arrive as numbers, not strings
         if value.startswith("*"):
             continue                                      # untouched masked field: keep what is stored

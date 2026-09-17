@@ -1,15 +1,70 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Key } from 'lucide-react'
+import { Check, Eye, EyeOff, Key, Trash2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Button, Card, CardHeader, Input } from './ui'
+
+const MASK = '********'
+
+type Secrets = Record<string, string> & { _hints?: Record<string, string> }
+
+/**
+ * A stored credential is never sent back, so the field shows the mask and a hint of what is saved —
+ * without the hint a wrong value (an email address in the Plivo Auth ID) is invisible from here.
+ */
+function Credential({ label, value, hint, secret, placeholder, help, onChange }: {
+  label: string
+  value: string
+  hint?: string
+  secret?: boolean
+  placeholder?: string
+  help?: string
+  onChange: (v: string) => void
+}) {
+  const [reveal, setReveal] = useState(false)
+  const saved = value === MASK
+  const editing = value !== MASK && value !== ''
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-sm font-bold">{label}</label>
+        {saved && <span className="flex items-center gap-1 text-[11px] font-semibold text-success"><Check className="size-3" />Saved</span>}
+      </div>
+      <div className="flex items-center gap-1.5">
+        <Input
+          className="flex-1"
+          type={secret && !reveal ? 'password' : 'text'}
+          value={value}
+          placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)}
+          onFocus={() => { if (saved) onChange('') }}   // typing over the mask should replace it, not append
+        />
+        {secret && editing && (
+          <button type="button" onClick={() => setReveal((r) => !r)} title={reveal ? 'Hide' : 'Show'}
+            className="grid size-9 shrink-0 place-items-center rounded-lg border border-border text-fg-2 transition hover:border-border-strong hover:text-fg">
+            {reveal ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+          </button>
+        )}
+        {saved && (
+          <button type="button" onClick={() => onChange('')} title="Remove this value"
+            className="grid size-9 shrink-0 place-items-center rounded-lg border border-border text-fg-2 transition hover:border-danger hover:text-danger">
+            <Trash2 className="size-4" />
+          </button>
+        )}
+      </div>
+      {saved && hint && <p className="text-[11.5px] text-muted">Currently saved: <span className="font-mono">{hint}</span></p>}
+      {help && !saved && <p className="text-[11.5px] text-muted">{help}</p>}
+    </div>
+  )
+}
 
 export default function SecretsForm() {
   const queryClient = useQueryClient()
   const { data: secrets, isLoading } = useQuery({
     queryKey: ['system', 'secrets'],
-    queryFn: () => api<Record<string, string>>('/api/system/secrets'),
+    queryFn: () => api<Secrets>('/api/system/secrets'),
   })
 
   const [form, setForm] = useState<Record<string, string>>({})
@@ -23,30 +78,35 @@ export default function SecretsForm() {
       setForm({})
       queryClient.invalidateQueries({ queryKey: ['system'] })
     },
-    onError: (e) => toast.error(String(e))
+    // The server rejects a malformed credential with the reason; show that, not a generic failure.
+    onError: (e) => toast.error('Could not save', { description: (e as Error).message }),
   })
 
   if (isLoading) return null
 
+  const hints = secrets?._hints ?? {}
   const getVal = (key: string) => (form[key] !== undefined ? form[key] : (secrets?.[key] || ''))
   const setVal = (key: string, val: string) => setForm((prev) => ({ ...prev, [key]: val }))
+  const cred = (key: string, label: string, opts: { secret?: boolean; placeholder?: string; help?: string } = {}) => (
+    <Credential label={label} value={getVal(key)} hint={hints[key]} onChange={(v) => setVal(key, v)} {...opts} />
+  )
 
   return (
     <Card className="mt-4">
-      <CardHeader title={<span className="flex items-center gap-2"><Key className="size-4" />Secrets & Costs</span>} description="Manage credentials securely in the database. Leave fields alone (or as ********) to keep existing values. Emptying a field removes the override. Update cost pricing or credits manually." />
+      <CardHeader title={<span className="flex items-center gap-2"><Key className="size-4" />Secrets & Costs</span>} description="Manage credentials securely in the database. A saved value shows as ******** with a hint of what is stored — click the field to replace it, or the bin to remove it. Update cost pricing or credits manually." />
       <div className="grid gap-6 p-5 sm:grid-cols-2">
         <div className="space-y-4">
           <h3 className="font-bold">Telephony & AI</h3>
-          <div className="space-y-1.5"><label className="text-sm font-bold">Plivo Auth ID</label><Input value={getVal('plivo_auth_id')} onChange={(e) => setVal('plivo_auth_id', e.target.value)} /></div>
-          <div className="space-y-1.5"><label className="text-sm font-bold">Plivo Auth Token</label><Input type="password" value={getVal('plivo_auth_token')} onChange={(e) => setVal('plivo_auth_token', e.target.value)} /></div>
-          <div className="space-y-1.5"><label className="text-sm font-bold">Plivo Phone Number</label><Input value={getVal('plivo_phone_number')} onChange={(e) => setVal('plivo_phone_number', e.target.value)} placeholder="+1234567890" /></div>
-          <div className="space-y-1.5"><label className="text-sm font-bold">OpenRouter API Key</label><Input type="password" value={getVal('openrouter_api_key')} onChange={(e) => setVal('openrouter_api_key', e.target.value)} /></div>
-          <div className="space-y-1.5"><label className="text-sm font-bold">Sarvam API Key</label><Input type="password" value={getVal('sarvam_api_key')} onChange={(e) => setVal('sarvam_api_key', e.target.value)} /></div>
+          {cred('plivo_auth_id', 'Plivo Auth ID', { placeholder: 'MA…', help: '20 characters starting with MA or SA, from the Plivo console overview.' })}
+          {cred('plivo_auth_token', 'Plivo Auth Token', { secret: true })}
+          {cred('plivo_phone_number', 'Plivo Phone Number', { placeholder: '+919876543210', help: 'International format, including the country code.' })}
+          {cred('openrouter_api_key', 'OpenRouter API Key', { secret: true, placeholder: 'sk-or-…' })}
+          {cred('sarvam_api_key', 'Sarvam API Key', { secret: true, placeholder: 'sk_…' })}
         </div>
         <div className="space-y-4">
           <h3 className="font-bold">Email (Resend)</h3>
-          <div className="space-y-1.5"><label className="text-sm font-bold">Resend API Key</label><Input type="password" value={getVal('resend_api_key')} onChange={(e) => setVal('resend_api_key', e.target.value)} /></div>
-          <div className="space-y-1.5"><label className="text-sm font-bold">Email From</label><Input value={getVal('email_from')} onChange={(e) => setVal('email_from', e.target.value)} placeholder="Company <noreply@domain.com>" /></div>
+          {cred('resend_api_key', 'Resend API Key', { secret: true, placeholder: 're_…' })}
+          {cred('email_from', 'Email From', { placeholder: 'Company <noreply@domain.com>', help: 'The domain must be verified in Resend.' })}
         </div>
       </div>
       <div className="border-t border-border p-5 grid gap-6 sm:grid-cols-2">
