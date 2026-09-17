@@ -58,8 +58,12 @@ services:
     restart: unless-stopped
     expose: ["80"]
 
+  # Terminates TLS on the host's own :80/:443. A host that already runs a web server there (or sits
+  # behind a cloud load balancer) must not start this, or the bind fails and takes the deploy with it.
+  # Opt in with: docker compose --profile caddy up -d
   caddy:
     image: caddy:2-alpine
+    profiles: ["caddy"]
     ports: ["80:80", "443:443", "443:443/udp"]
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN}
