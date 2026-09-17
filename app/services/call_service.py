@@ -480,16 +480,23 @@ class CallService:
                             continue
                         target = str(e["to"]).lower()
                         subject = e.get("subject", f"Update regarding call with {updates.get('name') or current.get('name') or current.get('phone')}")
-                        recipient = None
+                        recipients = []
                         if "lead" in target:
-                            recipient = updates.get("email") or current.get("email")
+                            if updates.get("email") or current.get("email"):
+                                recipients.append(updates.get("email") or current.get("email"))
                         else:
                             from app.core.auth import login_email
-                            recipient = login_email()  # team/admin default to the system owner's email
+                            profile = agents.get_profile(self.agent_id)
+                            team_members = profile.get("team_members") or []
+                            for m in team_members:
+                                if m.get("email"):
+                                    recipients.append(m["email"])
+                            if not recipients:
+                                recipients.append(login_email())  # team/admin default to the system owner's email
                         
-                        if recipient:
+                        from app.services.notification_service import send_email
+                        for recipient in set(recipients):
                             try:
-                                from app.services.notification_service import send_email
                                 send_email(recipient, subject, e["body"], lead_id=lead_id, agent_id=self.agent_id, actor="ai")
                                 events.record("email.sent", f"Sent email to {target} ({recipient})", lead_id=lead_id, call_id=call_id, actor="ai")
                             except Exception as err:

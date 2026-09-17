@@ -140,6 +140,7 @@ export interface AgentProfile {
   forward_fallback: 'ai' | 'message'
   notify_missed_calls: boolean
   inbound_collect: string[]
+  team_members: { name: string; phone: string; email: string }[]
 }
 
 export interface AutomationSettings {

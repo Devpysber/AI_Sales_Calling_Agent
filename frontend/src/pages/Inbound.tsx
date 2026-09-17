@@ -15,8 +15,8 @@ import { cn, formatDuration, timeAgo } from '@/lib/utils'
 type ProfileResponse = { profile: AgentProfile }
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
 const hourLabel = (h: number) => `${((h + 11) % 12) + 1}:00 ${h < 12 ? 'AM' : 'PM'}`
-type Routing = Pick<AgentProfile, 'transfer_number' | 'inbound_mode' | 'transfer_on_request' | 'after_hours_mode' | 'after_hours_message' | 'forward_fallback' | 'notify_missed_calls' | 'inbound_collect'>
-const KEYS: (keyof Routing)[] = ['transfer_number', 'inbound_mode', 'transfer_on_request', 'after_hours_mode', 'after_hours_message', 'forward_fallback', 'notify_missed_calls', 'inbound_collect']
+type Routing = Pick<AgentProfile, 'transfer_number' | 'team_members' | 'inbound_mode' | 'transfer_on_request' | 'after_hours_mode' | 'after_hours_message' | 'forward_fallback' | 'notify_missed_calls' | 'inbound_collect'>
+const KEYS: (keyof Routing)[] = ['transfer_number', 'team_members', 'inbound_mode', 'transfer_on_request', 'after_hours_mode', 'after_hours_message', 'forward_fallback', 'notify_missed_calls', 'inbound_collect']
 
 export default function Inbound() {
   const { agent, base, path } = useAgent()
@@ -68,9 +68,11 @@ export default function Inbound() {
   if (!form || !data) return <><PageHeader title="Inbound & transfer" /><div className="grid gap-4 lg:grid-cols-2"><Skeleton className="h-80" /><Skeleton className="h-80" /></div></>
 
   const set = <K extends keyof Routing>(k: K, v: Routing[K]) => setForm((f) => (f ? { ...f, [k]: v } : f))
-  const tNums = (form.transfer_number || '').split(',').map(n => n.trim()).filter(n => n)
+  const tNums = form.team_members && form.team_members.length > 0
+    ? form.team_members.map(m => m.phone).filter(n => n)
+    : (form.transfer_number || '').split(',').map(n => n.trim()).filter(n => n)
   const hasNumber = tNums.length > 0 && tNums.every(n => { const d = n.replace(/\D/g, ''); return d.length >= 11 && d.length <= 15 })
-  const numberError = form.transfer_number && !hasNumber
+  const numberError = tNums.length > 0 && !hasNumber
     ? 'All numbers must include the country code and be valid length, e.g. +91 98765 43210.'
     : undefined
   // Only a full international number can be dialled, so only those count as a backup line.
@@ -140,19 +142,20 @@ export default function Inbound() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="font-semibold">Team members</div>
-                  <button type="button" onClick={() => set('transfer_number', form.transfer_number ? form.transfer_number + ',' : ',')} className="text-xs font-semibold text-fg hover:underline">+ Add number</button>
+                  <button type="button" onClick={() => set('team_members', [...(form.team_members || []), { name: '', phone: '', email: '' }])} className="text-xs font-semibold text-fg hover:underline">+ Add team member</button>
                 </div>
-                <div className="text-[13px] text-muted mb-2">Mobile or office line with country code, e.g. +91 98765 43210.</div>
+                <div className="text-[13px] text-muted mb-2">Team members who should receive urgent alerts and fallback calls.</div>
                 {numberError && <div className="text-xs font-medium text-destructive">{numberError}</div>}
-                {(form.transfer_number || '').split(',').map((num, i) => {
-                   const arr = (form.transfer_number || '').split(',')
-                   return (
-                     <div key={i} className="flex items-center gap-2">
-                       <Input type="tel" value={num} onChange={e => { arr[i] = e.target.value; set('transfer_number', arr.join(',')) }} placeholder="e.g. +91 98765 43210" maxLength={20} />
-                       <button type="button" onClick={() => { arr.splice(i, 1); set('transfer_number', arr.join(',')) }} className="text-muted hover:text-fg p-2"><X className="size-4" /></button>
+                {((form.team_members && form.team_members.length > 0) ? form.team_members : (form.transfer_number || '').split(',').map(n => ({ name: '', phone: n.trim(), email: '' }))).filter(m => form.team_members?.length || m.phone).map((member, i, arr) => (
+                   <div key={i} className="flex items-start gap-2 rounded-xl border border-border p-3 bg-surface-2">
+                     <div className="flex-1 space-y-2">
+                       <Input type="text" value={member.name} onChange={e => { const updated = [...arr]; updated[i].name = e.target.value; set('team_members', updated) }} placeholder="Name (e.g. Alice)" className="h-8 text-sm" />
+                       <Input type="tel" value={member.phone} onChange={e => { const updated = [...arr]; updated[i].phone = e.target.value; set('team_members', updated) }} placeholder="Phone (e.g. +91 98765 43210)" maxLength={20} className="h-8 text-sm" />
+                       <Input type="email" value={member.email} onChange={e => { const updated = [...arr]; updated[i].email = e.target.value; set('team_members', updated) }} placeholder="Email (e.g. alice@example.com)" className="h-8 text-sm" />
                      </div>
-                   )
-                })}
+                     <button type="button" onClick={() => { const updated = [...arr]; updated.splice(i, 1); set('team_members', updated) }} className="text-muted hover:text-fg p-1 mt-1"><X className="size-4" /></button>
+                   </div>
+                ))}
               </div>
               {backups.length > 0 && (
                 <div className="rounded-xl border border-border px-3 py-2.5 text-sm">

@@ -83,6 +83,7 @@ PROFILE_DEFAULTS = {
     "max_call_minutes": 8,
     # Call routing: a human number to hand callers to
     "transfer_number": "",
+    "team_members": [],
     "inbound_mode": "ai",              # ai | forward (ring the transfer number directly)
     "transfer_on_request": True,       # AI hands over when the caller asks for a person
     "after_hours_mode": "ai",          # ai | forward | message (outside the automation calling window)
@@ -297,7 +298,26 @@ def get_profile(agent_id: int) -> dict:
 
 def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
     values = dict(values)
-    if "transfer_number" in values:
+    if "team_members" in values:
+        if not isinstance(values["team_members"], list):
+            raise ValueError("team_members must be a list")
+        validated = []
+        for m in values["team_members"]:
+            if not isinstance(m, dict):
+                continue
+            digits = phone_digits(str(m.get("phone") or ""))
+            if digits:
+                if not 11 <= len(digits) <= 15:
+                    raise ValueError("Each team member's phone must be a full phone number with country code.")
+                validated.append({
+                    "name": str(m.get("name") or ""),
+                    "phone": f"+{digits}",
+                    "email": str(m.get("email") or "")
+                })
+        values["team_members"] = validated
+        # Auto-sync transfer_number for backwards compatibility
+        values["transfer_number"] = ",".join(m["phone"] for m in validated)
+    elif "transfer_number" in values:
         raw_val = str(values["transfer_number"] or "")
         parts = [p.strip() for p in raw_val.split(",")]
         valid_parts = []
