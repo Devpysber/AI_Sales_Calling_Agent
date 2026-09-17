@@ -61,7 +61,13 @@ export default function Inbound() {
   if (!form || !data) return <><PageHeader title="Inbound & transfer" /><div className="grid gap-4 lg:grid-cols-2"><Skeleton className="h-80" /><Skeleton className="h-80" /></div></>
 
   const set = <K extends keyof Routing>(k: K, v: Routing[K]) => setForm((f) => (f ? { ...f, [k]: v } : f))
-  const hasNumber = form.transfer_number.replace(/\D/g, '').length >= 10
+  // The server stores 11-15 digits, i.e. a country code and then the line. Accepting 10 here let a
+  // bare Indian mobile through the form and the save came back rejected with the field still empty.
+  const transferDigits = form.transfer_number.replace(/\D/g, '').length
+  const hasNumber = transferDigits >= 11 && transferDigits <= 15
+  const numberError = form.transfer_number && !hasNumber
+    ? (transferDigits > 15 ? 'That is too long for a phone number.' : 'Include the country code, e.g. +91 98765 43210.')
+    : undefined
   const dirty = KEYS.some((k) => JSON.stringify(form[k]) !== JSON.stringify(data.profile[k]))
   const cfg = automation.data?.settings
   const hours = cfg ? `${cfg.calling_hours_start}:00 – ${cfg.calling_hours_end}:00 IST` : '…'
@@ -121,7 +127,7 @@ export default function Inbound() {
             <CardHeader title="2 · Your team's number" description="Where calls go when a person should take over."
               action={<Badge tone={hasNumber ? 'success' : 'warning'} dot>{hasNumber ? 'Set' : 'Not set'}</Badge>} />
             <div className="space-y-3 px-5 pb-5">
-              <Field label="Transfer number" hint="Mobile or office line with country code, e.g. +91 98765 43210." error={form.transfer_number && !hasNumber ? 'Enter the full number with country code' : undefined}>
+              <Field label="Transfer number" hint="Mobile or office line with country code, e.g. +91 98765 43210." error={numberError}>
                 <Input type="tel" inputMode="tel" value={form.transfer_number} onChange={(e) => set('transfer_number', e.target.value)} placeholder="Enter your team's number" maxLength={20} />
               </Field>
               <label className={cn('flex items-center gap-3 rounded-xl border border-border px-3 py-2.5 text-sm', !hasNumber && 'opacity-50')}>
