@@ -176,6 +176,7 @@ async def snooze_alert(body: dict):
 from app.services.settings_service import SettingsService
 from pydantic import BaseModel
 import hashlib
+import re
 import uuid
 import time
 
@@ -193,6 +194,26 @@ class TeamMemberUpdate(BaseModel):
 CREDENTIAL_KEYS = {"resend_api_key", "email_from", "email_reply_to", "smtp_host", "smtp_port",
                    "smtp_username", "smtp_password", "smtp_from", "openrouter_api_key",
                    "sarvam_api_key", "plivo_auth_id", "plivo_auth_token", "plivo_phone_number"}
+
+# A credential that is the wrong shape is only noticed later, as a provider error on a live call
+# ("Invalid auth_id supplied: <an email address>"), so reject the obvious mistakes at save time.
+CREDENTIAL_FORMATS = {
+    "plivo_auth_id": (r"^[A-Z]{2}[A-Z0-9]{18}$",
+                      "The Plivo Auth ID is 20 characters starting with MA or SA — find it on the Plivo console overview, not your email address."),
+    "plivo_phone_number": (r"^\+[1-9]\d{7,14}$",
+                           "Enter the Plivo number in international format, e.g. +919876543210."),
+    "openrouter_api_key": (r"^sk-or-\S+$", "An OpenRouter key starts with sk-or-."),
+    "resend_api_key": (r"^re_\S+$", "A Resend key starts with re_."),
+}
+
+
+def _check_credential(key: str, value: str):
+    rule = CREDENTIAL_FORMATS.get(key)
+    if not value or not rule:
+        return                                            # empty clears the override; unchecked keys pass
+    pattern, message = rule
+    if not re.match(pattern, value):
+        raise HTTPException(400, message)
 
 
 @router.get("/system/secrets", dependencies=[Depends(require_admin)])
@@ -229,6 +250,7 @@ async def update_secrets(body: dict):
         if value.startswith("*"):
             continue                                      # untouched masked field: keep what is stored
         if key in CREDENTIAL_KEYS:
+            _check_credential(key, value)
             credentials[key] = value                       # "" removes the override
             continue
         if value and key == "sarvam_credits" and plain.get(key) != value:
