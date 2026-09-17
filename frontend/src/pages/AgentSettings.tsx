@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookOpen, Bot, CalendarClock, Pause, Play, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
@@ -16,6 +16,16 @@ export default function AgentSettings() {
   const confirm = useConfirm()
   const [form, setForm] = useState({ name: '', description: '', color: '', phone_number: '' })
   const [confirmName, setConfirmName] = useState('')
+
+  const profileQ = useQuery({ queryKey: ['agent-profile', id], queryFn: () => api(`${base}/profile`) })
+  const [vaultPassword, setVaultPassword] = useState('')
+  useEffect(() => { if (profileQ.data) setVaultPassword((profileQ.data as any).profile?.agent_password || '') }, [profileQ.data])
+
+  const saveProfile = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api(`${base}/profile`, { method: 'PUT', json: body }),
+    onSuccess: () => toast.success('Vault password updated'),
+    onError: (e) => toast.error(e.message),
+  })
 
   useEffect(() => {
     if (agent) setForm({ name: agent.name, description: agent.description ?? '', color: agent.color, phone_number: agent.phone_number ?? '' })
@@ -93,6 +103,16 @@ export default function AgentSettings() {
           {agent.status === 'active'
             ? <Button loading={save.isPending} onClick={() => save.mutate({ status: 'paused' })}><Pause />Pause agent</Button>
             : <Button variant="primary" loading={save.isPending} onClick={() => save.mutate({ status: 'active' })}><Play />Resume agent</Button>}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader title="Vault password" description="Require team members to enter this password to open this workspace's CRM. Leave empty for open access." />
+        <div className="flex flex-wrap items-end gap-3 px-5 py-4">
+          <Field label="Password" className="min-w-60 flex-1">
+            <Input type="password" value={vaultPassword} onChange={(e) => setVaultPassword(e.target.value)} placeholder="No password required" />
+          </Field>
+          <Button variant="primary" disabled={profileQ.isPending || vaultPassword === ((profileQ.data as any)?.profile?.agent_password || '')} loading={saveProfile.isPending} onClick={() => saveProfile.mutate({ ...(profileQ.data as any).profile, agent_password: vaultPassword })}>Save password</Button>
         </div>
       </Card>
 

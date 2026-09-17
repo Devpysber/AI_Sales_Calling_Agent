@@ -118,7 +118,7 @@ export default function Calls() {
                     <tr key={c.id} onClick={() => setCallId(c.id)} className="cursor-pointer transition hover:bg-surface-2/70">
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
-                          <span className={cn('grid size-9 place-items-center rounded-full', c.status === 'Completed' ? 'bg-fg text-bg' : 'bg-surface-2 text-muted ring-1 ring-border')}>
+                          <span className={cn('grid size-9 place-items-center rounded-full', c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0) ? 'bg-fg text-bg' : 'bg-surface-2 text-muted ring-1 ring-border')}>
                             {c.direction === 'inbound' ? <PhoneIncoming className="size-4" /> : <PhoneOutgoing className="size-4" />}
                           </span>
                           <div className="min-w-0">

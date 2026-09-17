@@ -368,6 +368,26 @@ class CRMService:
         if changes and actor != "system":
             events.record(event_type, title or f"Updated {', '.join(changes)}", agent_id=result["agent_id"], lead_id=lead_id,
                           actor=actor, data={k: v["to"] for k, v in changes.items()})
+            if "callback_at" in changes and result.get("email"):
+                new_time = changes["callback_at"]["to"]
+                if new_time:
+                    import threading
+                    def _send_followup():
+                        from app.services.notification_service import send_email
+                        from app.services import agents
+                        # A workspace-wide CRMService has no agent_id: take the lead's own agent so the
+                        # mail is signed with the real company instead of the "Our Team" placeholder.
+                        agent_id = self.agent_id or result.get("agent_id")
+                        persona = agents.get_profile(agent_id) if agent_id else {}
+                        company = persona.get("company_name") or "Our Team"
+                        agent_name = persona.get("agent_name") or "Your Agent"
+                        subject = f"Follow-up call scheduled: {company}"
+                        body = f"Hi {result.get('name') or ''},\n\nThis is a quick note to confirm that we have scheduled a follow-up call with you on {new_time}.\n\nLooking forward to speaking with you.\n\nBest regards,\n{agent_name}\n{company}"
+                        try:
+                            send_email(result["email"], subject, body, lead_id=lead_id, agent_id=agent_id, actor="ai")
+                        except Exception:
+                            pass
+                    threading.Thread(target=_send_followup, daemon=True).start()
         return result
 
     def delete(self, lead_ids: list[int], actor: str = "admin") -> int:

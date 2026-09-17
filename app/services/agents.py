@@ -39,6 +39,7 @@ AUTOMATION_DEFAULTS = {
     "calling_hours_end": 21,
     "calling_days": [0, 1, 2, 3, 4, 5],
     "max_concurrent_calls": 3,
+    "ai_auto_emails": True,
     "meeting_reminder_enabled": False,
     "meeting_reminder_hour": 9,
     "daily_report_enabled": False,
@@ -91,6 +92,7 @@ PROFILE_DEFAULTS = {
     "inbound_collect": ["name", "requirement", "city"],  # details the agent asks new callers for, in order
     "record_calls": False,
     "detect_voicemail": False,
+    "agent_password": "",
 }
 
 DEFAULTS = {"profile": PROFILE_DEFAULTS, "automation": AUTOMATION_DEFAULTS}
@@ -345,7 +347,7 @@ def for_inbound(to_number: str, lead_agent_id: int | None = None) -> int | None:
 PIPELINE_STAGES = ["New", "Contacted", "Interested", "Follow Up", "Meeting Booked", "Closed Won"]
 
 
-def overview(days: int = 14) -> dict:
+def overview(days: int = 14, unlocked_ids: list[int] | None = None) -> dict:
     """Everything the all-agents home needs in one request: per-agent trends, setup health, live calls and recent activity."""
     today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
     start_utc = (today - timedelta(days=days - 1) - timedelta(hours=5, minutes=30)).replace(tzinfo=None)
@@ -369,10 +371,16 @@ def overview(days: int = 14) -> dict:
         inbound_today = dict(db.execute(select(Call.agent_id, func.count()).where(Call.direction == "inbound", Call.created_at >= today_utc)
                                         .group_by(Call.agent_id)).all())
         live = db.execute(select(Call, Lead.name).outerjoin(Lead, Lead.id == Call.lead_id)
-                          .where(Call.status.in_(ACTIVE_CALL)).order_by(Call.id.desc()).limit(20)).all()
+                          .where(Call.status.in_(ACTIVE_CALL)).order_by(Call.id.desc()).limit(50)).all()
         live_calls = [{**c.to_dict(n, with_transcript=False)} for c, n in live]
+        if unlocked_ids is not None:
+            live_calls = [c for c in live_calls if c["agent_id"] in unlocked_ids]
+            live_calls = live_calls[:20]
 
     agents_list = list_agents()
+    if unlocked_ids is not None:
+        agents_list = [a for a in agents_list if a["id"] in unlocked_ids]
+        
     series = {a["id"]: {d: {"date": d, "calls": 0, "connected": 0, "meetings": 0} for d in dates} for a in agents_list}
     talk = {a["id"]: 0 for a in agents_list}
     for agent_id, created, status, duration, outcome in rows:

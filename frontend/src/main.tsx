@@ -1,3 +1,10 @@
+
+window.addEventListener('error', (e) => {
+  if (e.message && e.message.includes('Failed to fetch dynamically imported module')) {
+    window.location.reload();
+  }
+});
+
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'

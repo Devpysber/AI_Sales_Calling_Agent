@@ -1,13 +1,16 @@
 import asyncio
+import time
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import text
 
+from app.api.deps import require_admin
 from app.core import store
 from app.core.config import settings
+from app.core.secrets import get_all_secrets_from_db, set_secrets_in_db
 from app.core.database import engine
 from app.services import tts
 from app.services.notification_service import email_configured, email_detail
@@ -167,4 +170,131 @@ async def snooze_alert(body: dict):
     if not key:
         raise HTTPException(400, "key is required")
     await asyncio.to_thread(alert_service.snooze, key, float(body.get("hours") or 4))
+    return {"ok": True}
+# ---------------- team members ----------------
+
+from app.services.settings_service import SettingsService
+from pydantic import BaseModel
+import hashlib
+import uuid
+import time
+
+class TeamMemberUpdate(BaseModel):
+    name: str
+    email: str
+    password: str | None = None
+    max_agents: int = 2
+
+# Credentials live in the encrypted AppSetting row that app/core/config.py reads; everything else
+# (pricing, credits) stays in SettingsService, where analytics and alerts read it.
+CREDENTIAL_KEYS = {"resend_api_key", "email_from", "email_reply_to", "smtp_host", "smtp_port",
+                   "smtp_username", "smtp_password", "smtp_from", "openrouter_api_key",
+                   "sarvam_api_key", "plivo_auth_id", "plivo_auth_token", "plivo_phone_number"}
+
+
+@router.get("/system/secrets", dependencies=[Depends(require_admin)])
+async def get_secrets():
+    # The encrypted AppSetting row is the one app.core.config actually reads; SettingsService held an
+    # older plaintext copy that nothing consumed, so edits saved there never took effect.
+    secrets = {**(SettingsService().get_state("secrets") or {}),
+               **{k: "********" for k, v in get_all_secrets_from_db().items() if v}}
+    sarvam_credits = secrets.get("sarvam_credits")
+    sarvam_credits_updated_at = secrets.get("sarvam_credits_updated_at")
+    
+    if sarvam_credits is not None and sarvam_credits_updated_at:
+        try:
+            from app.services.analytics import get_sarvam_usage_since
+            usage_cost = get_sarvam_usage_since(sarvam_credits_updated_at)
+            reduced = float(sarvam_credits) - usage_cost
+            secrets["sarvam_credits"] = f"{reduced:.2f}" if reduced > 0 else "0.00"
+        except Exception:
+            pass
+            
+    return secrets
+
+@router.post("/system/secrets", dependencies=[Depends(require_admin)])
+async def update_secrets(body: dict):
+    """
+    Credentials go to the encrypted row config reads; pricing and credits stay in SettingsService,
+    where analytics and the balance alerts read them. Masked fields keep their stored value.
+    """
+    stored = dict(get_all_secrets_from_db())
+    plain = SettingsService().get_state("secrets") or {}
+    credentials: dict[str, str] = {}
+    for key, raw in body.items():
+        value = "" if raw is None else str(raw).strip()   # numeric fields arrive as numbers, not strings
+        if value.startswith("*"):
+            continue                                      # untouched masked field: keep what is stored
+        if key in CREDENTIAL_KEYS:
+            credentials[key] = value                       # "" removes the override
+            continue
+        if value and key == "sarvam_credits" and plain.get(key) != value:
+            plain["sarvam_credits_updated_at"] = time.time()
+        if value:
+            plain[key] = value
+        else:
+            plain.pop(key, None)
+    if credentials:
+        try:
+            set_secrets_in_db(credentials)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    SettingsService().set_state("secrets", plain)
+    saved = sorted([k for k, v in credentials.items() if v] + [k for k in body if k in plain])
+    return {"ok": True, "saved": saved, "cleared": sorted(k for k, v in credentials.items() if not v)}
+
+@router.get("/system/team-members")
+async def get_team_members():
+    members = SettingsService().get_state("team_members") or []
+    for m in members:
+        m.pop("password_hash", None)
+    return {"members": members}
+
+@router.post("/system/team-members")
+async def add_team_member(body: TeamMemberUpdate):
+    members = SettingsService().get_state("team_members") or []
+    if any(m.get("email") == body.email for m in members):
+        raise HTTPException(400, "A team member with this email already exists.")
+        
+    salt = uuid.uuid4().hex
+    pwd = body.password or "12345678"
+    h = hashlib.pbkdf2_hmac("sha256", pwd.encode(), salt.encode(), 240_000).hex()
+    
+    new_member = {
+        "id": uuid.uuid4().hex,
+        "name": body.name,
+        "email": body.email,
+        "password_hash": f"{salt}${h}",
+        "max_agents": body.max_agents,
+        "created_agents": 0,
+        "created_at": int(time.time())
+    }
+    members.append(new_member)
+    SettingsService().set_state("team_members", members)
+    return {"ok": True}
+
+@router.delete("/system/team-members/{member_id}")
+async def delete_team_member(member_id: str):
+    members = SettingsService().get_state("team_members") or []
+    members = [m for m in members if m.get("id") != member_id]
+    SettingsService().set_state("team_members", members)
+    return {"ok": True}
+
+class TeamMemberPasswordUpdate(BaseModel):
+    password: str
+
+@router.put("/team-members/{member_id}/password")
+async def update_team_member_password(member_id: str, body: TeamMemberPasswordUpdate):
+    import uuid, hashlib
+    from fastapi import HTTPException
+    from app.services.settings_service import SettingsService
+    members = SettingsService().get_state("team_members") or []
+    member = next((m for m in members if m.get("id") == member_id), None)
+    if not member:
+        raise HTTPException(404, "Member not found.")
+    salt = uuid.uuid4().hex
+    pwd = body.password
+    h = hashlib.pbkdf2_hmac("sha256", pwd.encode(), salt.encode(), 240_000).hex()
+    member["password_hash"] = f"{salt}${h}"
+    SettingsService().set_state("team_members", members)
     return {"ok": True}

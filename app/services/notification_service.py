@@ -41,8 +41,22 @@ def sender(display_name: str | None = None) -> str:
     return formataddr((name, address)) if name else address
 
 
+def _html_template(body: str) -> str:
+    html_body = body.replace('\n', '<br>')
+    return f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eaeaea; border-radius: 12px; overflow: hidden; background: #ffffff;">
+        <div style="padding: 32px 40px; color: #333333; font-size: 16px; line-height: 1.6;">
+            {html_body}
+        </div>
+        <div style="background: #f9f9f9; padding: 24px 40px; text-align: center; border-top: 1px solid #eaeaea; font-size: 13px; color: #888888;">
+            Sent via Psyber Voice AI Caller<br>
+            <a href="https://aicaller.psyber.in" style="color: #5b4bf5; text-decoration: none;">aicaller.psyber.in</a>
+        </div>
+    </div>
+    """
+
 def _send_resend(to: str, subject: str, body: str, from_: str):
-    payload = {"from": from_, "to": [to], "subject": subject, "text": body}
+    payload = {"from": from_, "to": [to], "subject": subject, "text": body, "html": _html_template(body)}
     if settings.email_reply_to:
         payload["reply_to"] = settings.email_reply_to
     res = httpx.post("https://api.resend.com/emails", json=payload, timeout=20,
@@ -57,6 +71,7 @@ def _send_smtp(to: str, subject: str, body: str, from_: str):
     if settings.email_reply_to:
         message["Reply-To"] = settings.email_reply_to
     message.set_content(body)
+    message.add_alternative(_html_template(body), subtype='html')
     with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
         smtp.starttls()
         if settings.smtp_username:
@@ -64,8 +79,13 @@ def _send_smtp(to: str, subject: str, body: str, from_: str):
         smtp.send_message(message)
 
 
-def send_email(to: str, subject: str, body: str, lead_id: int | None = None, agent_id: int | None = None) -> str:
-    """agent_id: the email is sent in that agent's name (its company, else the agent name)."""
+def send_email(to: str, subject: str, body: str, lead_id: int | None = None, agent_id: int | None = None,
+               actor: str = "system") -> str:
+    """
+    agent_id: the email is sent in that agent's name (its company, else the agent name).
+    actor: who sent it — "ai" for AI follow-ups, "user" for a manual send, "system" for reports and
+    reminders. The Email Centre counts and filters by this, so it must be set by the caller.
+    """
     provider = email_provider()
     display = None
     if agent_id:
@@ -82,5 +102,10 @@ def send_email(to: str, subject: str, body: str, lead_id: int | None = None, age
         except Exception as e:
             status = f"failed: {e}"
     events.record("email", f"Email to {to}: {subject}", f"{status} · from {from_}", agent_id=agent_id, lead_id=lead_id,
-                  data={"body": body[:2000], "from": from_})
+                  actor=actor, data={"body": body[:2000], "from": from_})
     return status
+
+
+def email_sent(status: str) -> bool:
+    """True only when the provider actually accepted the message (send_email never raises, so callers check this)."""
+    return status.startswith("sent via")

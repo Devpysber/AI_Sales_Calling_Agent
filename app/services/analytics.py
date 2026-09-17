@@ -21,7 +21,7 @@ PIPELINE = ["New", "Contacted", "Interested", "Follow Up", "Meeting Booked", "Cl
 
 def _kpis(rows) -> dict:
     total = len(rows)
-    connected = [r for r in rows if r.status == ANSWERED]
+    connected = [r for r in rows if r.status == ANSWERED or (r.status == "Failed" and (r.duration or 0) > 0)]
     talk = sum(r.duration or 0 for r in connected)
     meetings = sum(r.outcome == "meeting_booked" for r in rows)
     latencies = [r.avg_latency_ms for r in rows if r.avg_latency_ms]
@@ -46,23 +46,30 @@ def usage(rows) -> dict:
     tts = sum(r.tts_chars or 0 for r in metered)
     stt = sum(r.stt_seconds or 0 for r in metered)
     llm = sum(r.llm_requests or 0 for r in metered)
-    connected_minutes = sum((r.duration or 0) for r in rows if r.status == ANSWERED) / 60
+    connected_minutes = sum((r.duration or 0) for r in rows if r.status == ANSWERED or (r.status == "Failed" and (r.duration or 0) > 0)) / 60
+    from app.services.settings_service import SettingsService
+    secrets = SettingsService().get_state("secrets") or {}
+    cost_per_call = float(secrets.get("cost_per_call_minute") or settings.cost_per_call_minute)
+    cost_per_tts = float(secrets.get("cost_per_10k_tts_chars") or settings.cost_per_10k_tts_chars)
+    cost_per_stt = float(secrets.get("cost_per_stt_hour") or settings.cost_per_stt_hour)
+    cost_per_llm = float(secrets.get("cost_per_llm_request") or settings.cost_per_llm_request)
+    currency = secrets.get("cost_currency") or settings.cost_currency
+
     cost = {
-        "telephony": connected_minutes * settings.cost_per_call_minute,
-        "tts": tts / 10_000 * settings.cost_per_10k_tts_chars,
-        "stt": stt / 3600 * settings.cost_per_stt_hour,
-        "llm": llm * settings.cost_per_llm_request,
+        "telephony": connected_minutes * cost_per_call,
+        "tts": tts / 10_000 * cost_per_tts,
+        "stt": stt / 3600 * cost_per_stt,
+        "llm": llm * cost_per_llm,
     }
-    answered = sum(r.status == ANSWERED for r in metered) or 0
+    answered = sum((r.status == ANSWERED or (r.status == "Failed" and (r.duration or 0) > 0)) for r in metered) or 0
     total = sum(cost.values())
     return {
         "metered_calls": len(metered), "tts_chars": tts, "stt_seconds": round(stt), "llm_requests": llm,
         "call_minutes": round(connected_minutes, 1),
         "cost": {k: round(v, 2) for k, v in cost.items()}, "total_cost": round(total, 2),
         "cost_per_connected_call": round(total / answered, 2) if answered else None,
-        "rates_configured": any((settings.cost_per_call_minute, settings.cost_per_10k_tts_chars,
-                                 settings.cost_per_stt_hour, settings.cost_per_llm_request)),
-        "currency": settings.cost_currency,
+        "rates_configured": any((cost_per_call, cost_per_tts, cost_per_stt, cost_per_llm)),
+        "currency": currency,
     }
 
 
@@ -102,7 +109,7 @@ def report(agent_id: int, days: int = 30) -> dict:
     for r in current:
         local = r.created_at + OFFSET
         day = series.get(local.strftime("%Y-%m-%d"))
-        ok = r.status == ANSWERED
+        ok = r.status == ANSWERED or (r.status == "Failed" and (r.duration or 0) > 0)
         if day:
             day["calls"] += 1
             day["connected"] += ok

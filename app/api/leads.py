@@ -76,6 +76,22 @@ def scheduled_time(value: str | None) -> str | None:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
+def meeting_time(value: str) -> str:
+    """Validate a meeting time typed on the lead form (IST): must be in the future and within a year."""
+    from datetime import datetime, timedelta
+    from app.services.call_service import IST
+    try:
+        dt = datetime.strptime(value.strip().replace("T", " ")[:16], "%Y-%m-%d %H:%M")
+    except ValueError:
+        raise HTTPException(400, "Meeting time must look like 2026-09-20 14:00.")
+    now = datetime.now(IST).replace(tzinfo=None)
+    if dt < now:
+        raise HTTPException(400, "That meeting time has already passed.")
+    if dt > now + timedelta(days=365):
+        raise HTTPException(400, "Book the meeting within the next year.")
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
 BOARD_STATUSES = ["New", "Contacted", "Interested", "Follow Up", "Meeting Booked", "Closed Won", "Closed Lost",
                   "Not Interested", "Do Not Call"]
 LEAD_STATUSES = set(BOARD_STATUSES)
@@ -123,8 +139,11 @@ def export(agent_id: int = Depends(workspace)):
 
 @router.post("")
 def create(body: LeadIn, request: Request, agent_id: int = Depends(workspace)):
+    data = body.model_dump()
+    if data.get("meeting_at"):
+        data["meeting_at"] = meeting_time(data["meeting_at"])
     try:
-        return CRMService(agent_id).create(body.model_dump(), actor=actor(request))
+        return CRMService(agent_id).create(data, actor=actor(request))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -287,6 +306,8 @@ def patch(lead_id: int, body: LeadPatch, request: Request, agent_id: int = Depen
         if at:  # a scheduled call is dialled by the callback job and keeps the follow-up date in sync
             data.setdefault("follow_up_date", at[:10])
             data.setdefault("call_status", "Pending")
+    if data.get("meeting_at"):
+        data["meeting_at"] = meeting_time(data["meeting_at"])
     try:
         return CRMService(agent_id).update(lead_id, data, actor=actor(request))
     except LookupError as e:
@@ -318,3 +339,77 @@ def _read(file: UploadFile, content: bytes, crm: CRMService):
         return crm.read_table(file.filename, content)
     except Exception as e:
         raise HTTPException(400, f"Could not read file: {e}")
+
+from pydantic import BaseModel
+class ManualEmail(BaseModel):
+    subject: str
+    body: str
+
+@router.get("/{lead_id}/draft_email")
+def draft_email(lead_id: int, agent_id: int = Depends(workspace)):
+    crm = CRMService(agent_id)
+    lead = crm.get(lead_id)
+    if not lead:
+        raise HTTPException(404, "Lead not found.")
+    
+    from app.services import agents
+    from app.services.llm import complete, parse_json
+    persona = agents.get_profile(agent_id)
+    
+    from app.models.call import Call
+    from app.core.database import SessionLocal
+    with SessionLocal() as db:
+        call = db.query(Call).filter_by(lead_id=lead_id).order_by(Call.started_at.desc()).first()
+        summary = call.summary if call else "No prior conversation."
+    
+    prompt = f"""You are {persona.get('agent_name', 'an agent')} from {persona.get('company_name', 'our company')}.
+Write a highly professional follow-up email to the prospect '{lead.get('name') or 'there'}'.
+Context of previous interaction: {summary}
+Lead Notes: {lead.get('notes') or 'None'}
+
+Return ONLY JSON:
+{{
+  "subject": "Clear, engaging subject line",
+  "body": "The professional email body"
+}}"""
+    try:
+        res = complete([{"role": "user", "content": prompt}], json_mode=True, max_tokens=400)
+        draft = parse_json(res.text) or {}
+    except Exception as e:
+        raise HTTPException(502, f"AI generation failed: {e}")
+    subject, text = str(draft.get("subject") or "").strip(), str(draft.get("body") or "").strip()
+    if not subject or not text:
+        # An empty draft silently blanked the compose form and looked like the button did nothing.
+        raise HTTPException(502, "The model returned an empty draft. Try again, or write the email yourself.")
+    return {"subject": subject, "body": text}
+
+@router.post("/{lead_id}/email")
+def send_manual_email(lead_id: int, body: ManualEmail, agent_id: int = Depends(workspace)):
+    crm = CRMService(agent_id)
+    lead = crm.get(lead_id)
+    if not lead:
+        raise HTTPException(404, "Lead not found.")
+    if not lead.get("email"):
+        raise HTTPException(400, "Lead has no email address.")
+        
+    from app.services.notification_service import email_configured, email_detail, email_sent, send_email
+    if not email_configured():
+        raise HTTPException(400, email_detail())
+    try:
+        status = send_email(lead["email"], body.subject, body.body, lead_id=lead_id, agent_id=agent_id, actor="user")
+        if not email_sent(status):
+            # The provider rejected it (unverified sending domain, bad key, bounce): don't report success.
+            raise HTTPException(502, f"Email not sent — {status.removeprefix('failed: ')}")
+        events.record(
+            "email.manual",
+            f"Email to {lead['email']}: {body.subject}",
+            f"sent manually · to {lead.get('name') or lead['email']}",
+            agent_id=agent_id,
+            lead_id=lead_id,
+            actor="user",
+        )
+        return {"ok": True, "status": status}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to send email: {e}")

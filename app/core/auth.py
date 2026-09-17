@@ -70,12 +70,12 @@ def _sign(payload: bytes) -> str:
     return hmac.new(_secret, payload, hashlib.sha256).hexdigest()
 
 
-def make_token(user: str) -> str:
-    payload = base64.urlsafe_b64encode(json.dumps({"u": user, "exp": int(time.time()) + TTL}).encode())
+def make_token(payload_dict: dict) -> str:
+    payload = base64.urlsafe_b64encode(json.dumps(payload_dict).encode())
     return f"{payload.decode()}.{_sign(payload)}"
 
 
-def read_token(token: str | None) -> str | None:
+def read_token(token: str | None) -> dict | None:
     if not token or "." not in token:
         return None
     payload, signature = token.rsplit(".", 1)
@@ -85,7 +85,7 @@ def read_token(token: str | None) -> str | None:
         data = json.loads(base64.urlsafe_b64decode(payload))
     except Exception:
         return None
-    return data["u"] if data.get("exp", 0) > time.time() else None
+    return data if data.get("exp", 0) > time.time() else None
 
 
 def current_user(request: Request) -> str | None:
@@ -94,7 +94,11 @@ def current_user(request: Request) -> str | None:
     header = request.headers.get("Authorization", "")
     if settings.api_token and header.startswith("Bearer ") and hmac.compare_digest(header[7:], settings.api_token):
         return "api"
-    return read_token(request.cookies.get(COOKIE))
+    payload = read_token(request.cookies.get(COOKIE))
+    if payload:
+        request.state.token_payload = payload
+        return payload["u"]
+    return None
 
 
 def actor(request: Request) -> str:
@@ -112,14 +116,12 @@ async def auth_middleware(request: Request, call_next):
 
 
 class Login(BaseModel):
+    username: str = ""
     email: str = ""
-    username: str = ""  # accepted only until a sign-in email is configured
     password: str
-
 
 def login_email() -> str:
     return (_profile().get("email") or settings.admin_email or "").strip().lower()
-
 
 @router.post("/login")
 def login(body: Login, request: Request, response: Response):
@@ -130,17 +132,44 @@ def login(body: Login, request: Request, response: Response):
         raise HTTPException(400, "Login is disabled: set ADMIN_PASSWORD on the server.")
     identifier = (body.email or body.username).strip().lower()
     expected = login_email()
-    # Before any email is configured, the ADMIN_USERNAME still works so nobody is locked out.
     known = hmac.compare_digest(identifier, expected) if expected else hmac.compare_digest(identifier, settings.admin_username.lower())
+    target_user = settings.admin_username
+    unlocked = []
+    
     if not (known and _password_ok(body.password)):
-        raise HTTPException(401, "Invalid email or password.")
-    profile = _profile()
-    profile["last_login_at"], profile["last_login_ip"] = int(time.time()), ip
-    _save_profile(profile)
+        # Check Multi-Member Team Logins
+        from app.services.settings_service import SettingsService
+        members = SettingsService().get_state("team_members") or []
+        team_ok = False
+        team_member = None
+        
+        for m in members:
+            m_email = (m.get("email") or "").strip().lower()
+            m_hash = m.get("password_hash")
+            if m_email and identifier == m_email and m_hash:
+                salt, h = m_hash.split("$")
+                if hmac.compare_digest(h, hashlib.pbkdf2_hmac("sha256", body.password.encode(), salt.encode(), PBKDF2_ROUNDS).hex()):
+                    team_ok = True
+                    team_member = m
+                    break
+                
+        if team_ok:
+            target_user = "team"
+            payload = {"u": target_user, "team_id": team_member["id"], "exp": int(time.time()) + TTL, "unlocked": []}
+            https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+            response.set_cookie(COOKIE, make_token(payload), max_age=TTL, httponly=True, samesite="lax", secure=https, path="/")
+            return {"user": target_user}
+        else:
+            raise HTTPException(401, "Invalid email or password.")
+    else:
+        profile = _profile()
+        profile["last_login_at"], profile["last_login_ip"] = int(time.time()), ip
+        _save_profile(profile)
+        
+    payload = {"u": target_user, "exp": int(time.time()) + TTL}
     https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
-    response.set_cookie(COOKIE, make_token(settings.admin_username), max_age=TTL, httponly=True, samesite="lax",
-                        secure=https, path="/")
-    return {"user": settings.admin_username}
+    response.set_cookie(COOKIE, make_token(payload), max_age=TTL, httponly=True, samesite="lax", secure=https, path="/")
+    return {"user": target_user}
 
 
 @router.post("/logout")
@@ -151,8 +180,22 @@ def logout(response: Response):
 
 @router.get("/me")
 def me(request: Request):
+    user = current_user(request)
+    # If this is a team member session, look up their own record — not the admin profile
+    if user == "team":
+        payload = getattr(request.state, "token_payload", {})
+        team_id = payload.get("team_id")
+        from app.services.settings_service import SettingsService
+        members = SettingsService().get_state("team_members") or []
+        member = next((m for m in members if m.get("id") == team_id), None)
+        return {
+            "user": user,
+            "auth_enabled": auth_enabled(),
+            "display_name": (member.get("name") or member.get("email") or "Team Member") if member else "Team Member",
+            "role": "Team Member",
+        }
     profile = _profile()
-    return {"user": current_user(request), "auth_enabled": auth_enabled(),
+    return {"user": user, "auth_enabled": auth_enabled(),
             "display_name": profile.get("display_name") or settings.admin_username, "role": profile.get("role") or "Administrator"}
 
 
@@ -185,12 +228,48 @@ def _public_profile(profile: dict) -> dict:
 
 
 @router.get("/profile")
-def get_profile():
+def get_profile(request: Request):
+    user = current_user(request)
+    if user == "team":
+        payload = getattr(request.state, "token_payload", {})
+        team_id = payload.get("team_id")
+        from app.services.settings_service import SettingsService
+        members = SettingsService().get_state("team_members") or []
+        member = next((m for m in members if m.get("id") == team_id), None)
+        if not member:
+            raise HTTPException(404)
+        return {
+            "username": member.get("name", ""),
+            "login_email": member.get("email", ""),
+            "display_name": member.get("name", ""),
+            "email": member.get("email", ""),
+            "phone": "",
+            "role": "Team Member",
+            "company": "",
+            "timezone": "Asia/Kolkata",
+            "password_source": "dashboard",
+            "password_changed_at": member.get("created_at"),
+            "last_login_at": None,
+            "last_login_ip": None,
+            "session_hours": 72,
+            "api_token_enabled": False
+        }
     return _public_profile(_profile())
 
 
 @router.put("/profile")
-def update_profile(body: ProfileUpdate):
+def update_profile(body: ProfileUpdate, request: Request):
+    user = current_user(request)
+    if user == "team":
+        payload = getattr(request.state, "token_payload", {})
+        team_id = payload.get("team_id")
+        from app.services.settings_service import SettingsService
+        members = SettingsService().get_state("team_members") or []
+        member = next((m for m in members if m.get("id") == team_id), None)
+        if member:
+            member["name"] = body.display_name
+            SettingsService().set_state("team_members", members)
+        return get_profile(request)
     email = body.email.strip()
     if email and ("@" not in email or "." not in email.split("@")[-1]):
         raise HTTPException(400, "Enter a valid email address.")
@@ -212,6 +291,25 @@ def change_password(body: PasswordChange, request: Request):
     ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0].strip()
     if store.rate_limited(f"password:{ip}", limit=5, window=900):
         raise HTTPException(429, "Too many attempts. Try again in 15 minutes.")
+        
+    if current_user(request) == "team":
+        payload = getattr(request.state, "token_payload", {})
+        team_id = payload.get("team_id")
+        from app.services.settings_service import SettingsService
+        members = SettingsService().get_state("team_members") or []
+        member = next((m for m in members if m.get("id") == team_id), None)
+        if not member: raise HTTPException(404)
+        h = hashlib.pbkdf2_hmac("sha256", body.current_password.encode(), member["password_hash"].split("$")[0].encode(), 240_000).hex()
+        if member["password_hash"] != f"{member['password_hash'].split('$')[0]}${h}":
+            raise HTTPException(400, "Current password is incorrect.")
+        new = body.new_password
+        if new.lower() == new or new.isalpha() or new.isdigit(): raise HTTPException(400, "Use at least 10 characters mixing upper and lower case letters with numbers or symbols.")
+        salt = __import__('uuid').uuid4().hex
+        new_h = hashlib.pbkdf2_hmac("sha256", new.encode(), salt.encode(), 240_000).hex()
+        member["password_hash"] = f"{salt}${new_h}"
+        SettingsService().set_state("team_members", members)
+        return {"ok": True}
+
     if auth_enabled() and not _password_ok(body.current_password):
         raise HTTPException(400, "Current password is incorrect.")
     new = body.new_password

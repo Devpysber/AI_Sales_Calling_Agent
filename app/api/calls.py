@@ -82,8 +82,9 @@ async def monitor_call(websocket: WebSocket, call_id: int, agent_id: int):
             with contextlib.suppress(WebSocketDisconnect, RuntimeError):
                 await live_bridge.relay(websocket, call_id)  # call runs on another replica
             return
-        await websocket.send_json({"type": "ended"})
-        await websocket.close(code=1000)
+        with contextlib.suppress(WebSocketDisconnect, RuntimeError):
+            await websocket.send_json({"type": "ended"})
+            await websocket.close(code=1000)
         return
 
     queue: asyncio.Queue = asyncio.Queue()

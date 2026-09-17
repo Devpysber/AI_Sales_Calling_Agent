@@ -54,6 +54,16 @@ SENTENCE_SPLIT = re.compile(r"(?<=[।.!?])\s+")
 SENTENCE_END = re.compile(r"[।!?]|\.(?=\s)")
 CLAUSE_END = re.compile(r"[,;:]\s")
 LANGUAGE_SWITCH_CONFIDENCE = 0.6   # Sarvam language_probability needed to follow the caller into another language
+ECHO_TAIL_SECONDS = 0.6            # audio still in flight at Plivo after the last chunk was queued
+ECHO_OVERLAP = 0.6                 # share of a transcript's words that must come from the agent's own speech
+ECHO_MEMORY = 6                    # how many recent agent utterances to compare against
+FAREWELL = re.compile(
+    r"take care|have a (great|good|nice) day|see you (at|then|soon|there)|goodbye|bye for now|"
+    r"thanks for your time|thank you for (calling|your time)|"
+    r"धन्यवाद|शुभ दिन|अच्छा दिन|फिर मिलते|अलविदा|ध्यान रखना", re.I)
+CALLER_CLOSING = re.compile(
+    r"\b(bye|goodbye|thanks|thank you|thank u|ok bye|okay bye|cut the call|hang up|that'?s all|nothing else|no thanks)\b|"
+    r"धन्यवाद|शुक्रिया|ठीक है|अलविदा|बस इतना|और कुछ नहीं|फ़ोन रखो|कॉल काटो", re.I)
 SPOKEN_ONLY = ("Answer out loud in 1-2 short sentences of plain speech. Do not call any tool. "
                "If a meeting or callback time was agreed, repeat the day and time back to confirm it.")
 
@@ -134,6 +144,28 @@ def spoken_email(text: str) -> str | None:
     email = re.sub(r"\s*(?:\bat the rate\b|\bat\b)\s*", "@", m.group(0), count=1, flags=re.I)
     email = re.sub(r"\s*\bdot\b\s*", ".", email, flags=re.I).replace(" ", "").lower()
     return email if re.fullmatch(r"[\w.+-]+@[\w-]+(\.[a-z]{2,})+", email) else None
+
+
+def echo_words(text: str) -> set[str]:
+    """Words of an utterance, lowercased and stripped of punctuation, for echo comparison."""
+    return {w for w in re.split(r"[^\wऀ-ॿঀ-෿]+", text.lower()) if len(w) > 2}
+
+
+def looks_like_echo(text: str, spoken: list[str]) -> bool:
+    """
+    True when a transcript is mostly the agent's own words coming back through the caller's line.
+
+    Phone echo re-transcribes what we just played, so the caller appears to say our own sentence.
+    Compared by word overlap, not equality: recognition mangles the echo ("CarsIndias" -> "Cars India").
+    """
+    words = echo_words(text)
+    if not words:
+        return False
+    for said in spoken:
+        mine = echo_words(said)
+        if mine and len(words & mine) / len(words) >= ECHO_OVERLAP:
+            return True
+    return False
 
 
 def split_sentences(text: str) -> list[str]:
@@ -437,6 +469,9 @@ class CallStream:
         self.quiet_since = time.monotonic()
         self.silent_prompts = 0
         self.closed = False
+        self.spoken_recent: list[str] = []   # what the agent actually played, to recognise its own echo
+        self.pending_bargein = False         # speech detected while we speak, not yet confirmed to be human
+        self.agent_quiet_at = 0.0            # when the last audio finished playing at Plivo
         self.usage = {"tts_chars": 0, "stt_seconds": 0.0, "llm_requests": 0, **((self.session or {}).get("usage") or {})}
         self.speech_ended_at: float | None = None
 
@@ -573,11 +608,24 @@ class CallStream:
         await self.send({"event": "checkpoint", "streamId": self.stream_id, "name": name})
         return name
 
+    def note_spoken(self, text: str):
+        """Remember an utterance the caller's line will echo back at us for the next second or so."""
+        if text.strip():
+            self.spoken_recent = (self.spoken_recent + [text])[-ECHO_MEMORY:]
+
+    def is_echo(self, text: str) -> bool:
+        """Drop a transcript that arrives while (or just after) we speak and repeats our own words."""
+        if not (self.agent_speaking or time.monotonic() - self.agent_quiet_at < ECHO_TAIL_SECONDS):
+            return False
+        return looks_like_echo(text, self.spoken_recent)
+
     async def clear_audio(self):
         self.agent_speaking = False
+        self.agent_quiet_at = time.monotonic()
         await self.send({"event": "clearAudio", "streamId": self.stream_id})
 
     async def say_fixed(self, text: str, hangup: bool = False):
+        self.note_spoken(text)
         language = tts.detect_language(text, self.session.get("language") or "en-IN")
         pcm = await asyncio.to_thread(tts.cached_pcm, text, language, self.persona.get("voice_speaker"), self.usage)
         await self.play_pcm(pcm)
@@ -670,6 +718,7 @@ class CallStream:
                 elif event == "playedStream":
                     if msg.get("name") == f"m{self.mark}":
                         self.agent_speaking = False
+                        self.agent_quiet_at = time.monotonic()
                         self.quiet_since = time.monotonic()
                         self.publish_state()
                     if msg.get("name") and msg.get("name") == self.hangup_on_mark:
@@ -743,7 +792,12 @@ class CallStream:
                 if self.commit_task and not self.commit_task.done():
                     self.commit_task.cancel()
                 if self.mode == "ai" and (self.agent_speaking or (self.reply_task and not self.reply_task.done())):
-                    await self.interrupt()
+                    if self.agent_speaking:
+                        # Could be our own audio echoing back. Hold the barge-in until a transcript
+                        # proves a human is talking, otherwise the agent cuts itself off mid-sentence.
+                        self.pending_bargein = True
+                    else:
+                        await self.interrupt()
                 self.publish_state()
             elif signal == "END_SPEECH":
                 self.caller_speaking = False
@@ -751,6 +805,16 @@ class CallStream:
                 self.publish_state()
         elif kind == "data":
             text = (data.get("transcript") or "").strip()
+            if text and self.is_echo(text):
+                # Our own voice looping back through the caller's line: answering it makes the agent
+                # talk to itself and repeat the question it just asked.
+                log.info("Dropped echo on session %s: %s", self.session_id[:8], text)
+                self.publish({"type": "echo", "text": text})
+                self.pending_bargein = False
+                return
+            if text and self.pending_bargein:
+                self.pending_bargein = False
+                await self.interrupt()
             spoken = data.get("language_code")
             if (text and spoken in tts.LANGUAGES and spoken != self.session.get("language")
                     and (data.get("language_probability") or 0) >= LANGUAGE_SWITCH_CONFIDENCE and len(text.split()) >= 2):
@@ -883,6 +947,7 @@ class CallStream:
                     ready = unsent[:cut]
                     if ready.strip() and re.search(r"[^\W\d_]|[ऀ-෿]", ready):
                         spoken.append(ready)
+                        self.note_spoken(ready)
                         self.meter("tts_chars", len(ready))
                         await tts_ws.send(json.dumps({"type": "text", "data": {"text": ready}}))
                         unsent = unsent[cut:]
@@ -948,6 +1013,7 @@ class CallStream:
                 reply = " ".join((retry.feed(raw) + retry.flush()).split())
                 cleaner.end_call = retry.end_call
                 if reply:
+                    self.note_spoken(reply)
                     language = tts.detect_language(reply, self.session.get("language") or "en-IN")
                     await self.play_pcm(await asyncio.to_thread(tts.synthesize_pcm, reply, language, self.persona.get("voice_speaker")))
                     self.meter("tts_chars", len(reply))
@@ -956,6 +1022,12 @@ class CallStream:
             from app.api.plivo import PROMPTS
             reply = PROMPTS["goodbye" if cleaner.end_call else "repeat"][self.lang_key()]
             await self.say_fixed(reply)
+        self.note_spoken(reply)
+        if not cleaner.end_call and text and FAREWELL.search(reply) and "?" not in reply and CALLER_CLOSING.search(text):
+            # Both sides said goodbye but the model left out the end marker: hang up anyway, so the
+            # caller never has to ask us to cut the call.
+            log.info("Ending call on mutual farewell without end marker, session=%s", self.session_id[:8])
+            cleaner.end_call = True
         if text is not None:
             self.turn("customer", text)
         self.turn("assistant", reply, by="ai-guided" if supervised else None)

@@ -11,15 +11,25 @@ import { cn, LANGUAGES } from '@/lib/utils'
 
 export const AGENT_COLORS = ['#5b4bf5', '#0e8a5e', '#d9480f', '#1f6feb', '#c2255c', '#7048e8', '#0b7285', '#b36b00']
 
+// Each template carries how the call should actually be run, not just its goal: without `talk` every
+// new agent started from the same outbound-sales script whatever job it was created for.
 const TEMPLATES = [
-  { id: 'sales', label: 'Outbound sales', objective: 'Understand the prospect\'s business, explain how our services help, and book a discovery meeting with our team.', cta: 'Book a 30-minute discovery call with our solutions team.' },
-  { id: 'support', label: 'Customer support', objective: 'Resolve the caller\'s question using the knowledge base, confirm the issue is solved, and log anything that needs a human follow-up.', cta: 'Create a follow-up for our support team if the issue is not solved on the call.' },
-  { id: 'reminder', label: 'Appointments & reminders', objective: 'Confirm, reschedule or cancel the customer\'s upcoming appointment and answer simple questions about it.', cta: 'Confirm the appointment date and time.' },
-  { id: 'website', label: 'Website enquiries', objective: 'Call people who filled a form on our website, understand what they need, answer from the knowledge base and book the next step.', cta: 'Book a callback or visit with our team.' },
-  { id: 'realestate', label: 'Real estate site visits', objective: 'Qualify property enquiries on budget, location and timeline, share project details from the knowledge base, and book a site visit.', cta: 'Book a site visit this week.' },
-  { id: 'collections', label: 'Payment reminders', objective: 'Politely remind the customer about a due payment, confirm when they will pay, and note any issue that needs our team.', cta: 'Get a promised payment date.' },
-  { id: 'onboarding', label: 'Customer onboarding', objective: 'Welcome new customers, confirm their details, explain the next steps and answer setup questions from the knowledge base.', cta: 'Confirm the customer is ready for the next step.' },
-  { id: 'survey', label: 'Feedback survey', objective: 'Collect short feedback about the customer\'s recent experience with a few friendly questions.', cta: 'Thank the customer and note their rating and comments.' },
+  { id: 'sales', label: 'Outbound sales', objective: 'Understand the prospect\'s business, explain how our services help, and book a discovery meeting with our team.', cta: 'Book a 30-minute discovery call with our solutions team.',
+    talk: 'Open by checking it is a good time. Ask what they do and what problem they are trying to solve before explaining anything. Give one short, relevant example, not a feature list. Ask for the meeting once you know it fits; if they say no twice, thank them warmly and end the call.' },
+  { id: 'support', label: 'Customer support', objective: 'Resolve the caller\'s question using the knowledge base, confirm the issue is solved, and log anything that needs a human follow-up.', cta: 'Create a follow-up for our support team if the issue is not solved on the call.',
+    talk: 'Let them finish describing the problem before answering. Repeat the issue back in one line so they know you understood. Give the fix in plain steps. If you cannot solve it, say so honestly, tell them someone will call back, and take down anything the team will need. Never sell anything on a support call.' },
+  { id: 'reminder', label: 'Appointments & reminders', objective: 'Confirm, reschedule or cancel the customer\'s upcoming appointment and answer simple questions about it.', cta: 'Confirm the appointment date and time.',
+    talk: 'Keep it under a minute. Say the day and time you are calling about, ask if it still works, and accept the answer. If they want to move it, agree a new time and repeat it back. If they want to cancel, accept it politely without persuading. Do not pitch anything.' },
+  { id: 'website', label: 'Website enquiries', objective: 'Call people who filled a form on our website, understand what they need, answer from the knowledge base and book the next step.', cta: 'Book a callback or visit with our team.',
+    talk: 'Mention they enquired on our website so the call is not a surprise. Ask what they were looking for, answer their question first, then offer the next step. They reached out to us, so stay helpful rather than pushy.' },
+  { id: 'realestate', label: 'Real estate site visits', objective: 'Qualify property enquiries on budget, location and timeline, share project details from the knowledge base, and book a site visit.', cta: 'Book a site visit this week.',
+    talk: 'Ask budget, preferred location and when they want to move in, one question at a time. Share only details you actually have. Offer a weekend visit slot first, since most people prefer it. If the budget does not fit, say so plainly instead of pushing.' },
+  { id: 'collections', label: 'Payment reminders', objective: 'Politely remind the customer about a due payment, confirm when they will pay, and note any issue that needs our team.', cta: 'Get a promised payment date.',
+    talk: 'Be respectful and never threatening. State what is due and ask when they can pay. If they are facing a problem, listen, note it, and say the team will look at it. Accept whatever date they give and repeat it back. Never argue, never raise your voice, never imply consequences.' },
+  { id: 'onboarding', label: 'Customer onboarding', objective: 'Welcome new customers, confirm their details, explain the next steps and answer setup questions from the knowledge base.', cta: 'Confirm the customer is ready for the next step.',
+    talk: 'Welcome them warmly and thank them for choosing us. Confirm their details one at a time. Explain what happens next in two or three plain steps. Ask if anything is unclear and answer it before finishing.' },
+  { id: 'survey', label: 'Feedback survey', objective: 'Collect short feedback about the customer\'s recent experience with a few friendly questions.', cta: 'Thank the customer and note their rating and comments.',
+    talk: 'Say up front that it will take a minute. Ask two or three short questions and let them talk. Never argue with criticism or defend the company: thank them for it and note it. If they are unhappy, say someone will follow up. Do not sell anything.' },
 ]
 
 export function ColorPicker({ value, onChange }: { value: string; onChange: (c: string) => void }) {
@@ -74,6 +84,7 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
     if (!copyFrom) {
       profile.objective ??= t.objective
       profile.call_to_action ??= t.cta
+      profile.instructions ??= t.talk
     }
     create.mutate({
       name: f.name, description: f.description || undefined, phone_number: f.phone_number || undefined, color,
@@ -155,8 +166,9 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
             <Input name="call_to_action" key={`c-${template}-${copyFrom}`} placeholder={copyFrom ? 'Keep the copied call to action' : undefined}
               defaultValue={copyFrom ? '' : TEMPLATES.find((t) => t.id === template)!.cta} />
           </Field>
-          <Field label="How should it talk?" hint="Optional: tone, questions to ask, what to avoid. You can refine the full playbook after creating.">
-            <Textarea name="instructions" rows={3} placeholder="e.g. Friendly and brief. Ask budget, preferred location and move-in timeline. Offer a Saturday site visit." />
+          <Field label="How should it talk?" hint="Pre-filled from the template. Edit it to match how your team speaks to customers.">
+            <Textarea name="instructions" rows={4} key={`i-${template}-${copyFrom}`} placeholder={copyFrom ? 'Keep the copied playbook' : undefined}
+              defaultValue={copyFrom ? '' : TEMPLATES.find((t) => t.id === template)!.talk} />
           </Field>
         </section>
       </form>

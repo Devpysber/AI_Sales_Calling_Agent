@@ -1,4 +1,4 @@
-﻿"""
+"""
 Application configuration, loaded from environment / .env.
 
 Import with: from app.core.config import settings
@@ -111,6 +111,30 @@ class Settings(BaseSettings):
     @property
     def base_url(self) -> str:
         return self.public_base_url.rstrip("/")
+
+    def __getattribute__(self, name: str):
+        # We define the keys that are allowed to be overridden by the database
+        secret_keys = {
+            "resend_api_key", "email_from", "email_reply_to", 
+            "smtp_host", "smtp_port", "smtp_username", "smtp_password", "smtp_from",
+            "openrouter_api_key", "sarvam_api_key",
+            "plivo_auth_id", "plivo_auth_token", "plivo_phone_number"
+        }
+        
+        # We need to bypass our own override for inner Pydantic operations and `secret_key` itself
+        if name in secret_keys:
+            try:
+                from app.core.secrets import get_secret_from_db
+                db_val = get_secret_from_db(name)
+                if db_val:
+                    # If the property is an int (like smtp_port), cast it
+                    if name == "smtp_port":
+                        return int(db_val)
+                    return db_val
+            except Exception:
+                pass
+                
+        return super().__getattribute__(name)
 
 
 @lru_cache

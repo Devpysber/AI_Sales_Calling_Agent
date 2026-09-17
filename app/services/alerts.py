@@ -89,6 +89,13 @@ def _openrouter() -> dict | None:
 def _sarvam() -> dict | None:
     if not settings.sarvam_api_key:
         return None
+    from app.services.settings_service import SettingsService
+    secrets = SettingsService().get_state("secrets") or {}
+    currency = secrets.get("cost_currency") or settings.cost_currency
+    cost_per_tts = float(secrets.get("cost_per_10k_tts_chars") or settings.cost_per_10k_tts_chars)
+    cost_per_stt = float(secrets.get("cost_per_stt_hour") or settings.cost_per_stt_hour)
+    cost_per_llm = float(secrets.get("cost_per_llm_request") or settings.cost_per_llm_request)
+    
     since_day = datetime.utcnow() - timedelta(days=1)
     since_week = datetime.utcnow() - timedelta(days=7)
     with get_db() as db:
@@ -96,11 +103,31 @@ def _sarvam() -> dict | None:
             return db.execute(select(func.coalesce(func.sum(Call.tts_chars), 0), func.coalesce(func.sum(Call.stt_seconds), 0),
                                      func.coalesce(func.sum(Call.llm_requests), 0)).where(Call.created_at >= since)).one()
         day, week = totals(since_day), totals(since_week)
-    fmt = lambda t: f"{int(t[0]):,} chars · {int(t[1]) // 60}m {int(t[1]) % 60}s speech · {int(t[2])} replies"
+        
+        balance = None
+        unit = None
+        value = "Measured usage"
+        level = "ok"
+        detail = "Sarvam has no balance API: usage below is measured by this app"
+        
+        if "sarvam_credits" in secrets and "sarvam_credits_updated_at" in secrets:
+            updated_at = datetime.utcfromtimestamp(secrets["sarvam_credits_updated_at"])
+            since_update = totals(updated_at)
+            used = (since_update[0] / 10000 * cost_per_tts) + (since_update[1] / 3600 * cost_per_stt) + (since_update[2] * cost_per_llm)
+            left = float(secrets["sarvam_credits"]) - used
+            balance = round(left, 2)
+            unit = currency
+            value = f"{currency}{balance:,.2f}"
+            level = "ok" if left > 10 else ("low" if left > 0 else "critical")
+            detail = f"Estimated balance based on usage since it was set to {secrets['sarvam_credits']}"
+
+    def fmt(t):
+        cost = (t[0] / 10000) * cost_per_tts + (t[1] / 3600) * cost_per_stt + t[2] * cost_per_llm
+        return f"{currency}{cost:.2f} ({int(t[0]):,} chars · {int(t[1]) // 60}m {int(t[1]) % 60}s speech · {int(t[2])} replies)"
     return {
-        "provider": "Sarvam", "label": "Live voice, speech & LLM", "balance": None, "unit": None,
-        "value": "Measured usage", "level": "ok",
-        "detail": "Sarvam has no balance API: usage below is measured by this app",
+        "provider": "Sarvam", "label": "Live voice, speech & LLM", "balance": balance, "unit": unit,
+        "value": value, "level": level,
+        "detail": detail,
         "facts": [["Last 24 hours", fmt(day)], ["Last 7 days", fmt(week)]],
         "action": {"label": "Open Sarvam dashboard", "url": "https://dashboard.sarvam.ai/"},
     }

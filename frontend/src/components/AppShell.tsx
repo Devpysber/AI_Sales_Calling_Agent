@@ -1,15 +1,16 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Activity, AudioWaveform, BarChart3, BookOpen, Bot, CalendarClock, Check, ChevronsLeft, ChevronsRight, ChevronsUpDown, Columns3,
-  Download, Keyboard, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Menu, MessageSquareText, Moon, Pause, PhoneCall, Plus, Search, Settings,
+  Download, Keyboard, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Lock, Mail, Menu, MessageSquareText, Moon, Pause, PhoneCall, Plus, Search, Settings,
   SlidersHorizontal, Sparkles, Sun, Upload, UserPlus, Users, X,
 } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { toast } from 'sonner'
 import AlertsBell from '@/components/AlertsBell'
 import { CommandPalette, type Command } from '@/components/CommandPalette'
 import NewAgentSheet from '@/components/NewAgentSheet'
-import { Button, Dialog, Spinner } from '@/components/ui'
+import { Button, Spinner, Input, Dialog } from '@/components/ui'
 import { api } from '@/lib/api'
 import { AgentProvider, useAgents } from '@/lib/agent'
 import type { AgentSummary } from '@/lib/types'
@@ -31,6 +32,7 @@ const AGENT_NAV: { section: string; items: NavItem[] }[] = [
     section: 'Insights', items: [
       { to: '/analytics', label: 'Analytics', icon: BarChart3, key: 'a' },
       { to: '/activity', label: 'History', icon: Activity, key: 'h' },
+      { to: '/emails', label: 'Email service', icon: Mail, key: 'm' },
     ],
   },
   {
@@ -90,7 +92,7 @@ export function LiveDot({ on, className }: { on: boolean; className?: string }) 
 
 /* ---------------- Agent switcher ---------------- */
 
-function AgentSwitcher({ agents, current, compact, onNew }: { agents: AgentSummary[]; current?: AgentSummary; compact: boolean; onNew: () => void }) {
+function AgentSwitcher({ agents, current, compact, onNew, role }: { agents: AgentSummary[]; current?: AgentSummary; compact: boolean; onNew: () => void; role: string }) {
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
   const ref = useRef<HTMLDivElement>(null)
@@ -104,8 +106,6 @@ function AgentSwitcher({ agents, current, compact, onNew }: { agents: AgentSumma
     document.addEventListener('keydown', esc)
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', esc) }
   }, [open])
-
-  const shown = agents.filter((a) => a.name.toLowerCase().includes(q.toLowerCase().trim()))
 
   return (
     <div ref={ref} className="relative">
@@ -131,32 +131,28 @@ function AgentSwitcher({ agents, current, compact, onNew }: { agents: AgentSumma
           </div>
           <div className="max-h-80 overflow-y-auto p-1.5">
             <Link to="/" className={cn('flex items-center gap-3 rounded-xl px-2.5 py-2 text-sm hover:bg-surface-2', !current && 'bg-surface-2')}>
-              <span className="grid size-8 place-items-center rounded-lg bg-surface-2 ring-1 ring-border"><LayoutGrid className="size-4 text-muted" /></span>
-              <span className="flex-1 font-semibold">All agents</span>
-              {!current && <Check className="size-4 text-brand" />}
+              <div className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-elevated shadow-sm"><LayoutDashboard className="size-4" /></div>
+              <span className="font-semibold">All agents</span>
+              {current && <Check className="ml-auto size-4 text-brand" />}
             </Link>
-            <div className="px-2.5 pt-2 pb-1 text-[10.5px] font-bold tracking-wider text-muted uppercase">Agents</div>
-            {shown.map((a, i) => (
+            <div className="my-1.5 px-3 text-[10px] font-bold tracking-wider text-muted uppercase">Agents</div>
+            {agents.filter(a => !q || a.name.toLowerCase().includes(q.toLowerCase()) || a.persona.company_name.toLowerCase().includes(q.toLowerCase())).map((a) => (
               <Link key={a.id} to={`/a/${a.id}`} className={cn('flex items-center gap-3 rounded-xl px-2.5 py-2 hover:bg-surface-2', a.id === current?.id && 'bg-surface-2')}>
-                <span className="relative">
-                  <AgentMark agent={a} className={cn('size-8 rounded-lg text-[11px]', a.status === 'paused' && 'grayscale')} />
-                  {a.stats.live > 0 && <span className="absolute -right-1 -bottom-1 size-3 rounded-full bg-success ring-2 ring-elevated" />}
-                </span>
+                <AgentMark agent={a} className="size-8 shrink-0 rounded-lg text-xs" />
                 <div className="min-w-0 flex-1 leading-tight">
-                  <div className="truncate text-sm font-semibold">{a.name}</div>
-                  <div className="truncate text-[11.5px] text-muted">
-                    {a.status === 'paused' ? 'Paused' : a.stats.live ? `${a.stats.live} live now` : `${a.stats.leads} leads · ${a.stats.calls_today} calls today`}
-                  </div>
+                  <div className="truncate text-[13px] font-semibold">{a.name}</div>
+                  <div className="truncate text-[11px] text-muted">{a.stats.leads} leads · {a.stats.calls_today} calls today</div>
                 </div>
-                {a.id === current?.id ? <Check className="size-4 text-brand" /> : i < 9 && <kbd>{i + 1}</kbd>}
+                {a.id === current?.id ? <Check className="size-4 text-brand" /> : <div className="grid size-5 place-items-center rounded bg-surface text-[10px] font-bold tabular-nums text-muted">{a.id}</div>}
               </Link>
             ))}
-            {!shown.length && <p className="px-3 py-4 text-center text-sm text-muted">No match</p>}
           </div>
-          <button type="button" onClick={() => { setOpen(false); onNew() }}
-            className="flex w-full items-center gap-2 border-t border-border px-4 py-3 text-sm font-semibold text-brand hover:bg-surface-2">
-            <Plus className="size-4" />Create new agent
-          </button>
+          {role !== 'team' && (
+            <button type="button" onClick={() => { setOpen(false); onNew() }}
+              className="flex w-full items-center gap-2 border-t border-border px-4 py-3 text-sm font-semibold text-brand hover:bg-surface-2">
+              <Plus className="size-4" />Create new agent
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -165,9 +161,10 @@ function AgentSwitcher({ agents, current, compact, onNew }: { agents: AgentSumma
 
 /* ---------------- Sidebar ---------------- */
 
-function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp, onLogout, dark, setDark, user, mobile }: {
-  agents: AgentSummary[]; agent?: AgentSummary; compact: boolean; setCompact: (v: boolean) => void; onNew: () => void; onPalette: () => void
-  onHelp: () => void; onLogout: () => void; dark: boolean; setDark: (v: boolean) => void; user: string; mobile?: boolean
+function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp, onLogout, dark, setDark, user, role, mobile }: {
+  agents: AgentSummary[]; agent?: AgentSummary; compact: boolean; setCompact: (c: boolean) => void
+  onNew: () => void; onPalette: () => void; onHelp: () => void; onLogout: () => void
+  dark: boolean; setDark: (d: boolean) => void; user: string; role: string; mobile?: boolean
 }) {
   const location = useLocation()
   const path = (to: string) => agent ? `/a/${agent.id}${to === '/' ? '' : to}` : to
@@ -205,7 +202,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
       </div>
 
       <div className={cn('pb-3', compact ? 'px-2' : 'px-3')}>
-        <AgentSwitcher agents={agents} current={agent} compact={compact} onNew={onNew} />
+        <AgentSwitcher agents={agents} current={agent} compact={compact} onNew={onNew} role={role} />
       </div>
 
       <div className={cn('min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-4', compact ? 'px-2' : 'px-3')}>
@@ -248,32 +245,44 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
             </div>
           )}
 
-          {AGENT_NAV.map((group) => (
-            <div key={group.section}>
-              {!compact ? <div className="px-3 pb-1.5 text-[10.5px] font-bold tracking-[0.12em] text-ink-muted/80 uppercase">{group.section}</div> : <div className="mx-auto mb-2 h-px w-6 bg-ink-fg/10" />}
-              <div className="space-y-0.5">{group.items.map((i) => navLink(path(i.to), i.label, i.icon, i.to === '/', i.count?.(agent)))}</div>
-            </div>
-          ))}
+          {AGENT_NAV.map((group) => {
+            const items = group.items
+            if (!items.length) return null
+            return (
+              <div key={group.section} className="mb-4">
+                {!compact && <div className="mb-1 px-3 text-[10.5px] font-bold tracking-wider text-ink-muted/70 uppercase">{group.section}</div>}
+                <div className="space-y-0.5">
+                  {items.map((i) => navLink(path(i.to), i.label, i.icon, i.to === '/', i.count?.(agent)))}
+                </div>
+              </div>
+            )
+          })}
 
           {/* One-click switch between company workspaces */}
           {agents.length > 1 && (
-            <div>
-              {!compact ? <div className="flex items-center px-3 pb-1.5 text-[10.5px] font-bold tracking-[0.12em] text-ink-muted/80 uppercase">
-                <span className="flex-1">Companies</span>
-                <Link to="/" className="normal-case tracking-normal hover:text-ink-fg">All</Link>
-              </div> : <div className="mx-auto mb-2 h-px w-6 bg-ink-fg/10" />}
+            <div className={cn('mb-4 rounded-xl border border-border/50 bg-surface-2 p-1', !compact && 'px-2 pb-2.5 pt-2')}>
+              {!compact ? <div className="mb-2.5 px-1.5 pt-1 text-[10.5px] font-bold tracking-[0.12em] text-ink-muted/80 uppercase">Switch workspace</div>
+                : <div className="mx-auto mb-2 mt-1 h-px w-6 bg-ink-fg/10" />}
               <div className="space-y-0.5">
                 {agents.filter((a) => a.id !== agent.id).slice(0, 8).map((a) => (
                   <Link key={a.id} to={`/a/${a.id}${section}`} title={compact ? a.name : `${a.name} · ${a.persona.company_name}`}
                     className={cn('flex h-9 items-center gap-2.5 rounded-xl text-[13px] font-semibold text-ink-muted transition hover:bg-ink-fg/[0.04] hover:text-ink-fg', compact ? 'justify-center' : 'px-2')}>
                     <span className="relative"><AgentMark agent={a} className={cn('size-6 rounded-md bg-ink-fg text-[9px] text-ink', a.status === 'paused' && 'opacity-60')} />
                       {a.stats.live > 0 && <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full bg-success ring-2 ring-ink" />}</span>
-                    {!compact && <><span className="flex-1 truncate">{a.persona.company_name || a.name}</span>
-                      <span className="text-[11px] tabular-nums">{a.stats.live ? <span className="text-success">{a.stats.live} live</span> : a.status === 'paused' ? 'Paused' : a.stats.calls_today || ''}</span></>}
+                    {!compact && <span className="flex-1 truncate">{a.name}</span>}
                   </Link>
                 ))}
               </div>
             </div>
+          )}
+
+          {role !== 'team' && (
+            <button type="button" onClick={onNew}
+              className={cn('group flex items-center justify-center gap-2 rounded-2xl border border-dashed border-ink-fg/20 font-bold text-ink-fg/70 transition hover:border-ink-fg/40 hover:bg-ink-fg/[0.03] hover:text-ink-fg',
+                compact ? 'size-10' : 'h-auto w-full py-3')}>
+              <Plus className="size-4" />
+              {!compact && <div className="flex flex-col items-start"><span className="text-[13px] leading-tight">New agent</span><span className="mt-0.5 text-[10px] font-normal leading-tight opacity-70">For another product, campaign, city or client</span></div>}
+            </button>
           )}
 
           {/* Setup progress */}
@@ -282,18 +291,19 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
               <div className="flex items-center justify-between text-[12px] font-bold"><span className="flex items-center gap-1.5"><Sparkles className="size-3.5 text-ink-fg" />Setup {done}/{SETUP_STEPS.length}</span><span className="text-ink-muted">{Math.round((100 * done) / SETUP_STEPS.length)}%</span></div>
               <div className="mt-2 flex gap-1">{SETUP_STEPS.map((s) => <span key={s.key} className={cn('h-1 flex-1 rounded-full', agent.setup?.[s.key] ? 'bg-ink-fg' : 'bg-ink-fg/10')} />)}</div>
               <div className="mt-2 text-[12px] text-ink-muted">Next: <span className="font-semibold text-ink-fg">{next.label}</span> →</div>
+
             </Link>
           )}
         </> : <>
           <div>
             {!compact && <div className="px-3 pb-1.5 text-[10.5px] font-bold tracking-[0.12em] text-ink-muted/80 uppercase">Workspace</div>}
             <div className="space-y-0.5">
-              {navLink('/', 'All agents', LayoutGrid, true, agents.length)}
-              {navLink('/settings', 'Integrations & system', Settings, false)}
+              {navLink('/', role === 'team' ? 'My agent' : 'All agents', LayoutGrid, true, agents.length)}
+              {role !== 'team' && navLink('/settings', 'Integrations & system', Settings, false)}
             </div>
           </div>
           <div>
-            {!compact && <div className="px-3 pb-1.5 text-[10.5px] font-bold tracking-[0.12em] text-ink-muted/80 uppercase">Agents</div>}
+            {!compact && <div className="px-3 pb-1.5 text-[10.5px] font-bold tracking-[0.12em] text-ink-muted/80 uppercase">{role === 'team' ? 'My Workspace' : 'Agents'}</div>}
             <div className="space-y-0.5">
               {agents.map((a) => (
                 <Link key={a.id} to={`/a/${a.id}`} title={compact ? a.name : undefined}
@@ -303,10 +313,12 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
                   {!compact && <><span className="flex-1 truncate">{a.name}</span><span className="text-[11px] tabular-nums">{a.stats.live ? <span className="text-success">{a.stats.live} live</span> : a.stats.leads}</span></>}
                 </Link>
               ))}
-              <button type="button" onClick={onNew} title="New agent"
-                className={cn('flex h-10 w-full items-center gap-3 rounded-xl text-[13.5px] font-semibold text-ink-muted transition hover:bg-ink-fg/[0.04] hover:text-ink-fg', compact ? 'justify-center' : 'px-2')}>
-                <span className="grid size-7 place-items-center rounded-lg border border-dashed border-ink-fg/20"><Plus className="size-3.5" /></span>{!compact && 'New agent'}
-              </button>
+              {role !== 'team' && (
+                <button type="button" onClick={onNew} title="New agent"
+                  className={cn('flex h-10 w-full items-center gap-3 rounded-xl text-[13.5px] font-semibold text-ink-muted transition hover:bg-ink-fg/[0.04] hover:text-ink-fg', compact ? 'justify-center' : 'px-2')}>
+                  <span className="grid size-7 place-items-center rounded-lg border border-dashed border-ink-fg/20"><Plus className="size-3.5" /></span>{!compact && 'New agent'}
+                </button>
+              )}
             </div>
           </div>
         </>}
@@ -317,15 +329,15 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
           <button type="button" onClick={onPalette} title="Search (Ctrl K)" className={cn('flex h-9 items-center gap-2 rounded-xl text-[13px] text-ink-muted transition hover:bg-ink-fg/5 hover:text-ink-fg', compact ? 'w-10 justify-center' : 'flex-1 px-3')}>
             <Search className="size-4" />{!compact && <><span className="flex-1 text-left">Search</span><kbd className="!border-ink-fg/10 !bg-ink-fg/5 whitespace-nowrap !text-ink-muted">Ctrl K</kbd></>}
           </button>
-          {agent && <Link to="/settings" title="Integrations & system" className={cn('grid size-9 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg', location.pathname === '/settings' && 'text-ink-fg')}><Settings className="size-4" /></Link>}
+          {agent && role !== 'team' && <Link to="/settings" title="Integrations & system" className={cn('grid size-9 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg', location.pathname === '/settings' && 'text-ink-fg')}><Settings className="size-4" /></Link>}
           <AlertsBell compact={compact} />
           <button type="button" onClick={onHelp} title="Keyboard shortcuts (?)" className="grid size-9 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg"><Keyboard className="size-4" /></button>
           <button type="button" onClick={() => setDark(!dark)} title="Toggle theme" className="grid size-9 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg">{dark ? <Sun className="size-4" /> : <Moon className="size-4" />}</button>
         </div>
         <div className={cn('mt-2 flex items-center gap-2.5 rounded-xl bg-ink-fg/[0.04] p-2', compact && 'justify-center')}>
-          <Link to="/profile" title="Admin profile" className={cn('flex min-w-0 items-center gap-2.5 rounded-lg transition hover:opacity-80', !compact && 'flex-1')}>
+          <Link to={role === 'team' ? '#' : '/profile'} title={role === 'team' ? 'Team Member' : 'Admin profile'} className={cn('flex min-w-0 items-center gap-2.5 rounded-lg transition hover:opacity-80', !compact && 'flex-1')}>
             <span className="grid size-8 shrink-0 place-items-center rounded-full bg-ink-fg text-xs font-bold text-ink uppercase">{user[0]}</span>
-            {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="truncate text-[13px] font-bold">{user}</div><div className="text-[11px] text-ink-muted">Administrator · Profile</div></div>}
+            {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="truncate text-[13px] font-bold">{user}</div><div className="text-[11px] text-ink-muted">{role === 'team' ? 'Team Member' : 'Administrator · Profile'}</div></div>}
           </Link>
           {!compact && <button type="button" onClick={onLogout} title="Sign out" className="grid size-8 place-items-center rounded-lg text-ink-muted hover:bg-ink-fg/5 hover:text-danger"><LogOut className="size-4" /></button>}
         </div>
@@ -336,7 +348,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
 
 /* ---------------- Shell ---------------- */
 
-export default function AppShell({ user }: { user: string }) {
+export default function AppShell({ user, role }: { user: string; role: string }) {
   const [mobile, setMobile] = useState(false)
   const [compact, setCompact] = useStoredBoolean('sidebar-compact', false)
   const [palette, setPalette] = useState(false)
@@ -372,19 +384,19 @@ export default function AppShell({ user }: { user: string }) {
 
   const commands = useMemo<Command[]>(() => [
     ...agents.map((a) => ({ id: `agent-${a.id}`, group: 'Switch agent', label: a.name, icon: Bot, keywords: `${a.persona.company_name} ${a.description ?? ''}`, run: () => navigate(`/a/${a.id}`) })),
-    { id: 'new-agent', group: 'Actions', label: 'Create a new agent', icon: Plus, keywords: 'add workspace', run: () => setCreating(true) },
+    ...(role === 'team' ? [] : [{ id: 'new-agent', group: 'Actions', label: 'Create a new agent', icon: Plus, keywords: 'add workspace', run: () => setCreating(true) }]),
     ...(id ? [
       ...AGENT_NAV.flatMap((g) => g.items.map((i) => ({ id: i.to, group: 'Go to', label: i.label, icon: i.icon, hint: `G ${i.key.toUpperCase()}`, run: () => go(i.to) }))),
       { id: 'new-lead', group: 'Actions', label: 'Add lead', icon: Plus, hint: 'N', keywords: 'create prospect', run: () => go('/leads?new=1') },
       { id: 'import', group: 'Actions', label: 'Import leads from CSV / Excel', icon: Upload, keywords: 'upload spreadsheet', run: () => go('/import') },
-      { id: 'export', group: 'Actions', label: 'Export this agent\'s leads (CSV)', icon: Download, keywords: 'download', run: () => { window.location.href = `/api/agents/${id}/leads/export` } },
+      { id: 'export', group: 'Actions', label: "Export this agent's leads (CSV)", icon: Download, keywords: 'download', run: () => { window.location.href = `/api/agents/${id}/leads/export` } },
     ] : []),
-    { id: 'home', group: 'Go to', label: 'All agents', icon: LayoutGrid, run: () => navigate('/') },
-    { id: 'system', group: 'Go to', label: 'Integrations & system', icon: Settings, run: () => navigate('/settings') },
-    { id: 'profile', group: 'Go to', label: 'Admin profile & password', icon: UserPlus, keywords: 'account security', run: () => navigate('/profile') },
+    { id: 'home', group: 'Go to', label: role === 'team' ? 'My agent' : 'All agents', icon: LayoutGrid, run: () => navigate('/') },
+    ...(role === 'team' ? [] : [{ id: 'system', group: 'Go to', label: 'Integrations & system', icon: Settings, run: () => navigate('/settings') }]),
+    ...(role === 'team' ? [] : [{ id: 'profile', group: 'Go to', label: 'Admin profile & password', icon: UserPlus, keywords: 'account security', run: () => navigate('/profile') }]),
     { id: 'theme', group: 'Preferences', label: dark ? 'Switch to light theme' : 'Switch to dark theme', icon: dark ? Sun : Moon, keywords: 'dark mode', run: () => setDark(!dark) },
     { id: 'logout', group: 'Preferences', label: 'Sign out', icon: LogOut, run: logout },
-  ], [agents, id, go, navigate, dark, setDark, logout])
+  ], [agents, id, go, navigate, dark, setDark, logout, role])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -412,12 +424,12 @@ export default function AppShell({ user }: { user: string }) {
 
   const sidebarProps = {
     agents, agent, onNew: () => setCreating(true), onPalette: () => setPalette(true), onHelp: () => setHelp(true),
-    onLogout: logout, dark, setDark, user,
+    onLogout: logout, dark, setDark, user, role,
   }
 
   const frame = (children: ReactNode) => (
     <div className="flex min-h-full">
-      <aside className="sticky top-0 hidden h-screen shrink-0 lg:block">
+      <aside className="sticky top-0 z-40 hidden h-screen shrink-0 lg:block">
         <Sidebar {...sidebarProps} compact={compact} setCompact={setCompact} />
       </aside>
 
@@ -460,6 +472,36 @@ export default function AppShell({ user }: { user: string }) {
 
   if (!id) return frame(<Outlet />)
   if (!agent) return frame(<div className="grid h-64 place-items-center"><Spinner className="size-6" /></div>)
+  if (agent.locked) return frame(<UnlockModal agent={agent} />)
+  
   // key: remount the whole workspace on switch so no state from the previous agent survives
   return <AgentProvider key={id} id={id} agent={agent}>{frame(<Outlet />)}</AgentProvider>
 }
+
+function UnlockModal({ agent }: { agent: { id: number; name: string; persona: { company_name: string } } }) {
+  const qc = useQueryClient()
+  const [pwd, setPwd] = useState('')
+  const { mutate, isPending } = useMutation({
+    mutationFn: () => api(`/api/agents/${agent.id}/unlock`, { method: 'POST', json: { password: pwd } }),
+    onSuccess: () => {
+      toast.success('Agent unlocked')
+      qc.invalidateQueries({ queryKey: ['agents'] })
+    },
+    onError: (e) => toast.error(e.message)
+  })
+  
+  return (
+    <div className="flex h-[80vh] items-center justify-center p-4">
+      <form onSubmit={(e) => { e.preventDefault(); mutate() }} className="w-full max-w-sm space-y-5 rounded-2xl border border-border bg-surface-2 p-6 shadow-xl">
+        <div className="space-y-1 text-center">
+          <div className="mx-auto mb-4 grid size-12 place-items-center rounded-full bg-fg text-bg"><Lock className="size-5" /></div>
+          <h2 className="text-xl font-bold">Unlock {agent.name}</h2>
+          <p className="text-sm text-muted">Enter the vault password to access {agent.persona.company_name}'s CRM.</p>
+        </div>
+        <Input type="password" autoFocus required placeholder="Password" value={pwd} onChange={(e) => setPwd(e.target.value)} />
+        <Button type="submit" className="w-full" loading={isPending}>Unlock Workspace</Button>
+      </form>
+    </div>
+  )
+}
+

@@ -69,7 +69,7 @@ export default function ProfilePage() {
 
   return (
     <>
-      <PageHeader eyebrow={<><UserRound className="size-3.5" />Account</>} title="Admin profile"
+      <PageHeader eyebrow={<><UserRound className="size-3.5" />Account</>} title={p?.role === 'Team Member' ? 'My profile' : 'Admin profile'}
         description="Your identity in the dashboard, sign-in security and session details."
         actions={<Button onClick={logout}><LogOut />Sign out</Button>} />
 
@@ -83,7 +83,7 @@ export default function ProfilePage() {
                   <div className="truncate text-xl font-extrabold tracking-tight">{name}</div>
                   <div className="truncate text-sm text-muted">{form.role || 'Administrator'}{form.company ? ` · ${form.company}` : ''}</div>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    <Badge tone="success" dot>Full access</Badge>
+                    <Badge tone="success" dot>{p.role === 'Team Member' ? 'Limited access' : 'Full access'}</Badge>
                     {p.login_email && <Badge>{p.login_email}</Badge>}
                   </div>
                 </div>
@@ -91,9 +91,9 @@ export default function ProfilePage() {
               <form onSubmit={submitProfile} className="space-y-4 px-5 py-5">
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Display name"><Input value={form.display_name ?? ''} onChange={set('display_name')} placeholder="Ashish Sharma" maxLength={80} /></Field>
-                  <Field label="Role / title"><Input value={form.role ?? ''} onChange={set('role')} placeholder="Sales operations lead" maxLength={60} /></Field>
+                  <Field label="Role / title"><Input value={form.role ?? ''} onChange={set('role')} disabled={p.role === 'Team Member'} placeholder="Sales operations lead" maxLength={60} /></Field>
                   <Field label="Sign-in email *" hint={p.login_email ? 'You sign in with this email and your password.' : 'Set this now: you will sign in with email instead of a username.'}>
-                    <div className="relative"><Mail className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" /><Input type="email" required className="pl-9" value={form.email ?? ''} onChange={set('email')} placeholder="you@company.com" maxLength={160} /></div>
+                    <div className="relative"><Mail className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" /><Input type="email" required className="pl-9" value={form.email ?? ''} onChange={set('email')} disabled={p.role === 'Team Member'} placeholder="you@company.com" maxLength={160} /></div>
                   </Field>
                   {emailChanged && (
                     <Field label="Current password" hint="Required to set or change the sign-in email.">
@@ -101,11 +101,11 @@ export default function ProfilePage() {
                     </Field>
                   )}
                   <Field label="Phone">
-                    <div className="relative"><Phone className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" /><Input type="tel" className="pl-9" value={form.phone ?? ''} onChange={set('phone')} placeholder="+91 98765 43210" maxLength={32} /></div>
+                    <div className="relative"><Phone className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" /><Input type="tel" className="pl-9" value={form.phone ?? ''} onChange={set('phone')} disabled={p.role === 'Team Member'} placeholder="+91 98765 43210" maxLength={32} /></div>
                   </Field>
-                  <Field label="Organisation"><Input value={form.company ?? ''} onChange={set('company')} placeholder="Psyber Technologies" maxLength={120} /></Field>
+                  <Field label="Organisation"><Input value={form.company ?? ''} onChange={set('company')} disabled={p.role === 'Team Member'} placeholder="Psyber Technologies" maxLength={120} /></Field>
                   <Field label="Time zone" hint="Calling hours and schedules run in IST.">
-                    <Select value={form.timezone ?? 'Asia/Kolkata'} onChange={set('timezone')}>{TIMEZONES.map((t) => <option key={t}>{t}</option>)}</Select>
+                    <Select value={form.timezone ?? 'Asia/Kolkata'} onChange={set('timezone')} disabled={p.role === 'Team Member'}>{TIMEZONES.map((t) => <option key={t}>{t}</option>)}</Select>
                   </Field>
                 </div>
                 <div className="flex justify-end gap-2 border-t border-border pt-4">

@@ -1,4 +1,4 @@
-import { Loader2, X } from 'lucide-react'
+import { Eye, EyeOff, Loader2, X } from 'lucide-react'
 import {
   createContext, forwardRef, useCallback, useContext, useEffect, useId, useRef, useState,
   type ButtonHTMLAttributes, type HTMLAttributes, type InputHTMLAttributes, type ReactNode,
@@ -44,9 +44,24 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
 
 const fieldBase = 'w-full rounded-xl border border-border bg-surface px-3.5 text-sm text-fg placeholder:text-muted shadow-xs transition focus:border-brand focus:outline-none focus:ring-3 focus:ring-brand/15 disabled:opacity-60'
 
-export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(({ className, ...p }, ref) => (
-  <input ref={ref} className={cn(fieldBase, 'h-10', className)} {...p} />
-))
+export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(({ className, type, ...p }, ref) => {
+  const [show, setShow] = useState(false)
+  const isPassword = type === 'password'
+  
+  if (isPassword) {
+    return (
+      <div className="relative">
+        <input ref={ref} type={show ? 'text' : 'password'} className={cn(fieldBase, 'h-10 pr-10', className)} {...p} />
+        <button type="button" onClick={() => setShow(!show)} tabIndex={-1}
+          className="absolute inset-y-0 right-0 flex items-center pr-3 text-muted hover:text-fg-2">
+          {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+        </button>
+      </div>
+    )
+  }
+  
+  return <input ref={ref} type={type} className={cn(fieldBase, 'h-10', className)} {...p} />
+})
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(({ className, ...p }, ref) => (
   <textarea ref={ref} className={cn(fieldBase, 'py-2 leading-relaxed', className)} {...p} />
@@ -74,7 +89,7 @@ export function Switch({ checked, onChange, disabled, label }: { checked: boolea
       className={cn('relative inline-flex h-5.5 w-10 shrink-0 items-center rounded-full transition disabled:opacity-50',
         checked ? 'bg-brand' : 'bg-border-strong')}
     >
-      <span className={cn('inline-block size-4 rounded-full bg-white shadow transition', checked ? 'translate-x-5' : 'translate-x-1')} />
+      <span className={cn('inline-block size-4 rounded-full shadow transition', checked ? 'translate-x-5 bg-brand-fg' : 'translate-x-1 bg-white')} />
     </button>
   )
 }

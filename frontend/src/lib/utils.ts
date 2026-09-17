@@ -1,5 +1,5 @@
 import { clsx, type ClassValue } from 'clsx'
-import { format, formatDistanceToNowStrict, isToday, isYesterday } from 'date-fns'
+import { formatDistanceToNowStrict } from 'date-fns'
 import { twMerge } from 'tailwind-merge'
 
 export const cn = (...inputs: ClassValue[]) => twMerge(clsx(inputs))
@@ -15,12 +15,22 @@ export const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 export function formatDate(iso: string | null | undefined, withTime = true) {
   if (!iso) return '—'
-  const d = new Date(iso)
+  // If it's a UTC date from the database missing the Z (has T), make it explicit
+  const isUtc = iso.includes('T') && !iso.endsWith('Z') && !iso.includes('+')
+  const d = new Date(isUtc ? iso + 'Z' : iso)
   if (Number.isNaN(d.getTime())) return iso
-  const time = format(d, 'h:mm a')
-  if (isToday(d)) return withTime ? `Today, ${time}` : 'Today'
-  if (isYesterday(d)) return withTime ? `Yesterday, ${time}` : 'Yesterday'
-  return format(d, withTime ? 'd MMM, h:mm a' : 'd MMM yyyy')
+
+  const opts: Intl.DateTimeFormatOptions = {
+    timeZone: 'Asia/Kolkata',
+    month: 'short',
+    day: 'numeric',
+    year: withTime ? undefined : 'numeric',
+    hour: withTime ? 'numeric' : undefined,
+    minute: withTime ? '2-digit' : undefined,
+    hour12: true,
+  }
+  const formatter = new Intl.DateTimeFormat('en-IN', opts)
+  return formatter.format(d) + (withTime ? " IST" : "")
 }
 
 export const timeAgo = (iso: string | null | undefined) =>

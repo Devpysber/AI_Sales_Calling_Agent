@@ -1,10 +1,24 @@
-from fastapi import HTTPException, Path
+from fastapi import HTTPException, Path, Request
 
 from app.services import agents
 
+def require_admin(request: Request):
+    user = getattr(request.state, "user", "")
+    if user != "admin" and user != "api":
+        raise HTTPException(403, "Administrator access required.")
 
-def workspace(agent_id: int = Path(..., ge=1)) -> int:
+def workspace(request: Request, agent_id: int = Path(..., ge=1)) -> int:
     """Path dependency for /api/agents/{agent_id}/...: 404 unless the agent exists."""
     if not agents.exists(agent_id):
         raise HTTPException(404, "Agent not found.")
+        
+    user = getattr(request.state, "user", "")
+    if user != "admin" and user != "api":
+        if user == "team":
+            payload = getattr(request.state, "token_payload", {})
+            if agent_id not in payload.get("unlocked", []):
+                raise HTTPException(403, "LOCKED")
+        else:
+            raise HTTPException(403, "You do not have access to this agent workspace.")
+            
     return agent_id

@@ -131,12 +131,22 @@ def hangup_with(r, session: dict, text: str):
 TRANSFER_LINES = {"en": "Please hold, I am connecting you to our team.", "hi": "कृपया लाइन पर बने रहिए, मैं आपको हमारी टीम से जोड़ रहा हूँ।"}
 
 
-def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = None):
+def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = None, idx: int = 0):
     """<Dial> the agent's transfer number; if nobody picks up the caller hears a short message instead of silence."""
-    number = agents.phone_digits(persona.get("transfer_number", ""))
+    raw_numbers = persona.get("transfer_number", "")
+    numbers = [agents.phone_digits(n) for n in raw_numbers.replace(" ", "").split(",")]
+    numbers = [n for n in numbers if n]
+    
+    if idx >= len(numbers):
+        return r
+        
+    number = numbers[idx]
+    action_url = f"{settings.base_url}/api/plivo/transfer-done?idx={idx + 1}"
+    if session:
+        action_url += f"&cid={session['call_id']}&sid={session['id']}"
+        
     dial = plivoxml.DialElement(caller_id=caller_id or None, timeout=30,
-                                action=f"{settings.base_url}/api/plivo/transfer-done" + (f"?cid={session['call_id']}&sid={session['id']}" if session else ""),
-                                method="POST", redirect=True)
+                                action=action_url, method="POST", redirect=True)
     dial.add(plivoxml.NumberElement(number))
     r.add(dial)
     return r
@@ -145,11 +155,21 @@ def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = N
 def inbound_route(persona: dict, agent_id: int, caller: str | None = None) -> str:
     """ai | forward | message for an incoming call right now."""
     from app.services.call_service import within_calling_hours
-    has_number = bool("".join(c for c in persona.get("transfer_number", "") if c.isdigit()))
+    raw_numbers = persona.get("transfer_number", "")
+    transfer_numbers = [agents.phone_digits(n) for n in raw_numbers.replace(" ", "").split(",")]
+    transfer_numbers = [n for n in transfer_numbers if n]
+    
+    has_number = len(transfer_numbers) > 0
     open_now = within_calling_hours(agents.get_automation(agent_id))
     mode = persona.get("inbound_mode", "ai") if open_now else persona.get("after_hours_mode", "ai")
-    if mode == "forward" and (not has_number or (caller and agents.phone_digits(caller) == agents.phone_digits(persona.get("transfer_number")))):
-        return "ai"  # no number, or the team's own phone is calling: forwarding would ring the caller back
+    
+    # If forwarding to human, don't forward if the team is calling their own agent number to test/use it.
+    if mode == "forward":
+        if not has_number:
+            return "ai"
+        if caller and agents.phone_digits(caller) in transfer_numbers:
+            return "ai"
+            
     return mode if mode in ("ai", "forward", "message") else "ai"
 
 
@@ -173,6 +193,14 @@ async def answer(request: Request):
         route = inbound_route(persona, agent_id, p.get("From"))
         if route == "forward":
             await asyncio.to_thread(calls.mark_transferred, session["call_id"], "Forwarded to " + persona["transfer_number"], "forward")
+            
+            key = lang_key(session)
+            text = TRANSFER_LINES[key]
+            call_session.add_turn(session, "assistant", text)
+            call_session.save(session)
+            audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
+            speak(r, session, text, audio_id=audio_id)
+            
             if persona["record_calls"]:
                 r.add(plivoxml.RecordElement(action=f"{settings.base_url}/api/plivo/recording?cid={session['call_id']}",
                                              record_session=True, redirect=False, max_length=3600, file_format="mp3"))
@@ -180,13 +208,14 @@ async def answer(request: Request):
         if route == "message":
             key = lang_key(session)
             text = persona.get("after_hours_message") or (
-                "We are closed right now. Please call again during business hours. Thank you." if key == "en"
-                else "हम अभी बंद हैं। कृपया काम के घंटों के दौरान फिर से कॉल करें। धन्यवाद।")
+                "We are closed right now. Please leave a message after the beep." if key == "en"
+                else "हम अभी बंद हैं। कृपया बीप के बाद अपना संदेश छोड़ें।")
             call_session.add_turn(session, "assistant", text)
             call_session.save(session)
             audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
             speak(r, session, text, audio_id=audio_id)
-            r.add(plivoxml.HangupElement())
+            r.add(plivoxml.RecordElement(action=f"{settings.base_url}/api/plivo/voicemail?cid={session['call_id']}",
+                                         method="POST", maxLength=120, playBeep=True))
             return xml(r)
     if persona["record_calls"]:
         r.add(plivoxml.RecordElement(action=f"{settings.base_url}/api/plivo/recording?cid={session['call_id']}",
@@ -396,29 +425,50 @@ async def transfer_done(request: Request):
     session = call_session.get(p.get("sid") or "") or {}
     agent_id = session_agent(session) if session else None
     persona = agents.get_profile(agent_id) if agent_id else {}
+    
+    idx = int(request.query_params.get("idx", "1"))
+    raw_numbers = persona.get("transfer_number", "")
+    numbers = [agents.phone_digits(n) for n in raw_numbers.replace(" ", "").split(",")]
+    numbers = [n for n in numbers if n]
+    
+    if idx < len(numbers):
+        dial_human(r, persona, agents.caller_id(agent_id), session, idx=idx)
+        return xml(r)
+
     if p.get("cid"):
         await asyncio.to_thread(CallService().mark_transferred, int(p["cid"]), f"Team did not answer ({status})", None)
     if session:
         asyncio.get_running_loop().run_in_executor(None, _notify_missed, session, persona, status)
 
     key = lang_key(session)
-    if session and persona.get("forward_fallback", "ai") == "ai" and settings.voice_mode == "stream":
-        # The AI picks the caller back up on a fresh audio stream, with the conversation so far.
-        line = FALLBACK_LINES[key]
-        call_session.add_turn(session, "assistant", line)
-        session["transferred"] = False
-        call_session.save(session)
-        stream_url = settings.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1) + f"/api/plivo/stream?sid={session['id']}"
-        r.add(plivoxml.StreamElement(stream_url, bidirectional=True, keepCallAlive=True, contentType="audio/x-mulaw;rate=8000"))
-        return xml(r)
-
-    text = ("Sorry, our team is not available right now. We will call you back soon." if key == "en"
-            else "हम क्षमा चाहते हैं, हमारी टीम अभी उपलब्ध नहीं है। हम आपको जल्द ही वापस कॉल करेंगे।")
+    text = ("Sorry, our team is not available right now. Please leave a message after the beep." if key == "en"
+            else "माफ़ करना, हमारी टीम अभी व्यस्त है। कृपया बीप के बाद अपना संदेश छोड़ें।")
     if session:
         audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
         speak(r, session, text, audio_id=audio_id)
-        r.add(plivoxml.HangupElement())
+        # Record voicemail up to 2 minutes
+        r.add(plivoxml.RecordElement(action=f"{settings.base_url}/api/plivo/voicemail?cid={session['call_id']}",
+                                     method="POST", maxLength=120, playBeep=True))
     else:
         r.add(plivoxml.SpeakElement(text, voice="WOMAN", language="en-IN"))
         r.add(plivoxml.HangupElement())
     return xml(r)
+
+@router.post("/voicemail")
+async def voicemail(request: Request):
+    p = await verified(request)
+    cid = request.query_params.get("cid")
+    url = p.get("RecordUrl")
+    if cid and url:
+        from app.services.call_service import CallService, call_session
+        from app.db.core import get_db
+        await asyncio.to_thread(CallService().on_recording, int(cid), url)
+        with get_db() as db:
+            from app.db.models import Call
+            call = db.get(Call, int(cid))
+            if call:
+                session = call_session.get(call.session_id)
+                if session:
+                    call_session.add_turn(session, "user", f"[Left a Voicemail: {url}]")
+                    call_session.save(session)
+    return {"ok": True}

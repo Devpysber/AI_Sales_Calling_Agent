@@ -3,6 +3,8 @@ import { CheckCircle2, CircleAlert, Copy, PlugZap, RefreshCw, Server } from 'luc
 import type { ReactNode } from 'react'
 import { toast } from 'sonner'
 import InboundSetup from '@/components/InboundSetup'
+import SecretsForm from '@/components/SecretsForm'
+import TeamMembers from '@/components/TeamMembers'
 import { Badge, Button, Card, CardHeader, PageHeader, Skeleton } from '@/components/ui'
 import { api } from '@/lib/api'
 
@@ -91,6 +93,8 @@ export default function Settings() {
           </Card>
         </div>
       )}
+      {s && <SecretsForm />}
+      {s && <TeamMembers />}
     </>
   )
 }

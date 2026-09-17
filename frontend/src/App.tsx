@@ -22,6 +22,7 @@ const AgentSettings = lazy(() => import('@/pages/AgentSettings'))
 const SettingsPage = lazy(() => import('@/pages/Settings'))
 const ProfilePage = lazy(() => import('@/pages/Profile'))
 const Inbound = lazy(() => import('@/pages/Inbound'))
+const Emails = lazy(() => import('@/pages/Emails'))
 
 const Loading = () => <div className="grid h-64 place-items-center"><Spinner className="size-6" /></div>
 
@@ -31,8 +32,9 @@ export default function App() {
   const qc = useQueryClient()
   const { data: me, isLoading } = useQuery({
     queryKey: ['me'],
-    queryFn: () => api<{ user: string | null; auth_enabled: boolean; display_name?: string }>('/api/auth/me'),
-    staleTime: 60_000,
+    queryFn: () => api<{ user: string | null; auth_enabled: boolean; display_name?: string; role?: string }>('/api/auth/me'),
+    staleTime: 0,         // always re-fetch on mount so session changes (team↔admin) are detected immediately
+    refetchOnWindowFocus: true,
   })
 
   useEffect(() => {
@@ -58,14 +60,14 @@ export default function App() {
     )
   }
 
-  const shell = <AppShell user={me.display_name || me.user} />
+  const shell = <AppShell user={me.display_name || me.user} role={me.user} />
   return (
     <Suspense fallback={<Loading />}>
       <Routes>
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route element={shell}>
           <Route index element={<Home />} />
-          <Route path="settings" element={<SettingsPage />} />
+          <Route path="settings" element={me.user === 'team' ? <Navigate to="/" replace /> : <SettingsPage />} />
           <Route path="profile" element={<ProfilePage />} />
         </Route>
         <Route path="a/:agentId" element={shell}>
@@ -77,6 +79,7 @@ export default function App() {
           <Route path="import" element={<Import />} />
           <Route path="calls" element={<Calls />} />
           <Route path="inbound" element={<Inbound />} />
+          <Route path="emails" element={<Emails />} />
           <Route path="activity" element={<ActivityPage />} />
           <Route path="agent" element={<Agent />} />
           <Route path="knowledge" element={<Knowledge />} />

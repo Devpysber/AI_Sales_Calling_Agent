@@ -44,3 +44,11 @@ ref_audio.wav
 data/*.xlsx
 data/*.csv
 backups/
+
+# Local database and scratch files (contain customer data / one-off edits)
+*.db
+data.db
+temp.txt
+script.py
+fix_unicode.py
+venv/

@@ -27,11 +27,47 @@ from app.services import events, llm
 
 log = get_logger(__name__)
 
-CHUNK_CHARS = 900
+CHUNK_CHARS = 400
 CHUNK_OVERLAP = 150
 MAX_DOC_CHARS = 2_000_000
 TOKEN_RE = re.compile(r"[\wऀ-ॿ]+", re.UNICODE)
 STOPWORDS = set("a an and are as at be by for from has have i in is it its of on or our that the this to we what with you your".split())
+
+# Callers speak Hindi and Hinglish; knowledge bases are almost always written in English, so keyword
+# search finds nothing and the agent answers "a specialist will confirm". Embeddings bridge languages
+# but need a network round trip that can time out mid-call, so the query is also expanded locally:
+# every Hindi/romanised term here adds its English equivalent before BM25 runs. Purely additive —
+# the original words are kept, so an English query is unaffected.
+QUERY_GLOSS = {
+    # price and money
+    "कीमत": "price cost", "दाम": "price cost", "कितने": "how much price", "कितनी": "how much price",
+    "रुपये": "price rupees", "लाख": "lakh price budget", "बजट": "budget", "सस्ता": "cheap low price",
+    "महंगा": "expensive price", "छूट": "discount offer", "किस्त": "emi instalment finance",
+    "kitna": "how much price", "kitni": "how much price", "kimat": "price cost", "daam": "price cost",
+    "paisa": "price money", "budget": "budget", "sasta": "cheap low price", "emi": "emi finance loan",
+    # product and service
+    "गाड़ी": "car vehicle", "कार": "car vehicle", "गाडी": "car vehicle", "डीजल": "diesel",
+    "पेट्रोल": "petrol", "पुरानी": "used second hand", "नई": "new", "सेवा": "service",
+    "सुविधा": "service feature", "गारंटी": "warranty guarantee", "बीमा": "insurance",
+    "gaadi": "car vehicle", "gadi": "car vehicle", "purani": "used second hand", "nayi": "new",
+    "service": "service", "warranty": "warranty guarantee", "bima": "insurance",
+    # process
+    "मीटिंग": "meeting appointment", "अपॉइंटमेंट": "meeting appointment", "टेस्ट": "test drive",
+    "शोरूम": "showroom branch office", "जगह": "location address city", "पता": "address location",
+    "समय": "time timing hours", "दस्तावेज": "documents paperwork", "कागज": "documents paperwork",
+    "भुगतान": "payment", "वापसी": "refund return", "शिकायत": "complaint support",
+    "meeting": "meeting appointment", "showroom": "showroom branch office", "pata": "address location",
+    "samay": "time timing hours", "kagaz": "documents paperwork", "kagzat": "documents paperwork",
+    # question words that hint at intent
+    "कैसे": "how process", "क्या": "what", "कहाँ": "where location", "कब": "when time",
+    "kaise": "how process", "kahan": "where location", "kab": "when time",
+}
+
+
+def expand_query(query: str) -> str:
+    """Add English equivalents for Hindi/Hinglish terms so keyword search works on an English corpus."""
+    extra = [gloss for token in tokenize(query) if (gloss := QUERY_GLOSS.get(token))]
+    return f"{query} {' '.join(extra)}" if extra else query
 
 
 # ---------------- extraction ----------------
@@ -258,7 +294,7 @@ def search(agent_id: int, query: str, top_k: int = 4, use_embeddings: bool = Tru
     n = len(index.ids)
     avg_len = float(index.lengths.mean()) or 1.0
     k1, b = 1.5, 0.75
-    terms = tokenize(query)
+    terms = tokenize(expand_query(query))
     bm25 = np.zeros(n, dtype=np.float32)
     for term in set(terms):
         df = index.df.get(term)
@@ -273,6 +309,13 @@ def search(agent_id: int, query: str, top_k: int = 4, use_embeddings: bool = Tru
         bm25 = bm25 / bm25.max()
 
     scores = bm25
+    # Keyword search is language-bound: a Hindi question never overlaps an English knowledge base, so
+    # BM25 alone returns nothing on Hindi calls. Embeddings match across languages, so pay for them
+    # when keywords found nothing — the live path skips them only as a latency optimisation.
+    if not use_embeddings and bm25.max() <= 0 and index.vectors is not None and index.has_vector.any():
+        use_embeddings = True
+        # Nothing to lose: without this the turn has no knowledge at all, so allow a longer round trip.
+        embed_timeout = max(embed_timeout, 1.5)
     if use_embeddings and index.vectors is not None and index.has_vector.any():
         qv = llm.embed([query], timeout=embed_timeout)
         if qv:

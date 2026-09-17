@@ -245,6 +245,7 @@ export interface AgentSummary {
   within_calling_hours: boolean
   automation_on: boolean
   setup: { persona: boolean; knowledge: boolean; leads: boolean; number: boolean; automation: boolean }
+  locked?: boolean
 }
 
 export interface AgentOverviewItem extends AgentSummary {

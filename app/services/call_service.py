@@ -71,6 +71,18 @@ def _valid_callback(value) -> str | None:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
+def _valid_meeting(value) -> str | None:
+    """Normalise an LLM-extracted meeting time; drop anything unparsable, in the past, or more than a year out."""
+    try:
+        dt = datetime.strptime(str(value or "").strip()[:16], "%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
+    now = datetime.now(IST).replace(tzinfo=None)
+    if dt < now or dt > now + timedelta(days=365):
+        return None
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
 def within_calling_hours(cfg: dict, now: datetime | None = None) -> bool:
     now = now or datetime.now(IST)
     return now.weekday() in cfg["calling_days"] and cfg["calling_hours_start"] <= now.hour < cfg["calling_hours_end"]
@@ -150,6 +162,10 @@ class CallService:
         persona = agents.get_profile(self.agent_id)
         caller = agents.caller_id(self.agent_id)
         language = lead["language"] or persona["default_language"]
+        # We rang and they could not take it: greet like a person picking the thread back up, rather
+        # than opening with the same pitch as if the earlier attempt never happened.
+        if purpose is None and lead.get("call_status") in RETRIABLE and (lead.get("retry_count") or 0) > 0:
+            purpose = "missed_previous"
         goal = agent.call_goal(lead, purpose)
         if goal:
             lead = {**lead, "call_purpose": purpose, "call_goal": goal}
@@ -263,6 +279,8 @@ class CallService:
             if call is None:
                 return
             session_id, lead_id, agent_id, answered = call.session_id, call.lead_id, call.agent_id, call.answered_at is not None
+            answered_at = call.answered_at
+            trigger = call.trigger
         session = call_session.get(session_id) or {}
         history = session.get("history", [])
         latencies = session.get("latencies") or []
@@ -272,6 +290,8 @@ class CallService:
             status = "No Answer"
         if status == "Completed" and not answered:
             status = "No Answer"
+        if duration == 0 and answered and answered_at:
+            duration = int((_utcnow() - answered_at).total_seconds())
 
         self._set(call_id, status=status, duration=duration, hangup_cause=cause, call_uuid=call_uuid,
                   ended_at=_utcnow(), transcript=json.dumps(history, ensure_ascii=False),
@@ -280,11 +300,26 @@ class CallService:
         if session:
             call_session.update(session_id, ended=True)
 
+        customer_turns = sum(1 for m in history if m["role"] == "user")
+        if (status == "Completed" or status == "Failed") and customer_turns > 0:
+            import threading
+            threading.Thread(target=self._summarize, args=(call_id, lead_id, history)).start()
+
         if lead_id:
             lead = self.crm.get(lead_id) or {}
             updates = {"call_status": status}
             if status in RETRIABLE:
                 updates["retry_count"] = (lead.get("retry_count") or 0) + 1
+                if trigger in ("callback", "nurture", "auto_dial", "queue", "retry"):
+                    from app.api import agents
+                    cfg = agents.get_automation(agent_id)
+                    if cfg.get("retry_enabled") and updates["retry_count"] <= cfg.get("max_retries", 3):
+                        delay = cfg.get("retry_interval_minutes", 60)
+                        next_at = (_utcnow() + timedelta(minutes=delay) + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M")
+                        updates["callback_at"] = next_at
+                        # A time the customer was promised and we could not keep: tell them in writing.
+                        if trigger == "callback":
+                            self._missed_call_email(lead_id, lead, next_at)
             elif status == "Completed":
                 updates["retry_count"] = 0
                 if lead.get("status") == "New":
@@ -295,8 +330,89 @@ class CallService:
                       agent_id=agent_id, lead_id=lead_id, call_id=call_id, data={"status": status, "duration": duration})
 
         customer_turns = sum(1 for t in history if t["role"] == "customer")
-        if status == "Completed" and customer_turns:
+        if (status == "Completed" or status == "Failed") and customer_turns:
             _turn_pool.submit(self._summarize, call_id, lead_id, history)
+
+    def _team_handover(self, call_id: int, lead_id: int | None, summary: dict):
+        """
+        Deliver what the caller asked a human to do.
+
+        The agent cannot phone a colleague mid-call, so "I'll tell the team right now" is only true if
+        something actually sends it afterwards. This is that something: it always fires when the model
+        reports a team_action, independent of whether it remembered to draft an email.
+        """
+        action = str(summary.get("team_action") or "").strip()
+        if not action:
+            return
+        urgent = str(summary.get("urgent") or "").lower() in ("true", "yes", "1")
+        lead = (self.crm.get(lead_id) or {}) if lead_id else {}
+        who = lead.get("name") or lead.get("phone") or "A caller"
+        from app.core.auth import login_email
+        from app.services.notification_service import send_email
+        recipient = login_email()
+        events.record("call.handover", f"Action for the team: {action}", f"from {who}" + (" · urgent" if urgent else ""),
+                      lead_id=lead_id, call_id=call_id, actor="ai")
+        if not recipient:
+            return
+        persona = agents.get_profile(self.agent_id)
+        lines = [f"{who} asked for someone on the team to act.", "", f"What they need: {action}", ""]
+        for label, key in (("Phone", "phone"), ("Email", "email"), ("City", "city"), ("Company", "company")):
+            if lead.get(key):
+                lines.append(f"{label}: {lead[key]}")
+        if summary.get("summary"):
+            lines += ["", f"Call summary: {summary['summary']}"]
+        subject = ("URGENT: " if urgent else "") + f"{who} needs a callback - {persona['company_name']}"
+        with contextlib.suppress(Exception):
+            send_email(recipient, subject, "\n".join(lines), lead_id=lead_id, agent_id=self.agent_id, actor="ai")
+
+    def _missed_call_email(self, lead_id: int, lead: dict, next_at: str):
+        """Tell a lead we rang at the time they asked for, missed them, and when we will try again."""
+        if not agents.get_automation(self.agent_id).get("ai_auto_emails", True):
+            return
+        to = (lead.get("email") or "").strip()
+        if not to:
+            return
+        from app.services.notification_service import send_email
+        persona = agents.get_profile(self.agent_id)
+        body = (f"Hi {lead.get('name') or 'there'},\n\n"
+                f"We called at the time you asked for but could not reach you. No problem at all.\n\n"
+                f"We will try again on {next_at} IST. If another time suits you better, just reply to this "
+                f"email or call us back and we will fit around you.\n\nRegards,\n"
+                f"{persona['agent_name']}\n{persona['company_name']}")
+        with contextlib.suppress(Exception):
+            send_email(to, f"We tried to reach you - {persona['company_name']}", body,
+                       lead_id=lead_id, agent_id=self.agent_id, actor="ai")
+
+    def _confirm_meeting_email(self, lead_id: int, meeting_at: str, summary: dict):
+        """
+        A booked meeting always gets a written confirmation, whether or not the model asked for one.
+
+        Callers ask for "follow-up email ke through" mid-call and the model often forgets to put it in
+        send_email; the meeting itself is the promise, so the email is sent from the booking.
+        """
+        if not agents.get_automation(self.agent_id).get("ai_auto_emails", True):
+            return
+        lead = self.crm.get(lead_id) or {}
+        to = (lead.get("email") or "").strip()
+        if not to:
+            return
+        # The model already listed a mail to the lead: leave it to that one instead of sending twice.
+        planned = summary.get("send_email") or []
+        planned = [planned] if isinstance(planned, dict) else (planned if isinstance(planned, list) else [])
+        if any(isinstance(e, dict) and "lead" in str(e.get("to", "")).lower() for e in planned):
+            return
+        from app.services.notification_service import send_email
+        persona = agents.get_profile(self.agent_id)
+        when = meeting_at.replace(" ", " at ")
+        body = (f"Hi {lead.get('name') or 'there'},\n\n"
+                f"Thanks for speaking with us. Your meeting with {persona['company_name']} is confirmed for {when} IST.\n\n"
+                + (f"What we noted: {summary['requirements']}\n\n" if summary.get("requirements") else "")
+                + f"If anything changes, just reply to this email or call us back.\n\nRegards,\n"
+                  f"{persona['agent_name']}\n{persona['company_name']}")
+        with contextlib.suppress(Exception):
+            status = send_email(to, f"Your meeting with {persona['company_name']} on {meeting_at[:10]}",
+                                body, lead_id=lead_id, agent_id=self.agent_id, actor="ai")
+            log.info("Meeting confirmation to %s: %s", to, status)
 
     def _summarize(self, call_id: int, lead_id: int | None, history: list[dict]):
         try:
@@ -307,19 +423,39 @@ class CallService:
         qualification = s.get("qualification") if s.get("qualification") in ("Hot", "Warm", "Cold") else None
         self._set(call_id, summary=s.get("summary"), qualification=qualification,
                   sentiment=s.get("sentiment"), outcome=s.get("outcome"))
+        self._team_handover(call_id, lead_id, s)
         if lead_id:
-            updates = {k: s.get(k) for k in ("summary", "requirements", "objections", "meeting_at", "follow_up_date", "email")
+            updates = {k: s.get(k) for k in ("summary", "requirements", "objections", "follow_up_date", "email")
                        if s.get(k)}
+            meeting_at = _valid_meeting(s.get("meeting_at"))
+            if meeting_at:
+                updates["meeting_at"] = meeting_at
             # Details the caller gave about themselves fill in empty fields (a known lead's data is never overwritten)
             current = self.crm.get(lead_id) or {}
             for key in ("name", "company", "city"):
                 value = str(s.get(key) or "").strip()
                 if value and not current.get(key) and len(value) <= 120:
                     updates[key] = value
-            extra = [f"{label}: {s[key]}" for key, label in (("budget", "Budget"), ("timeline", "Timeline")) if str(s.get(key) or "").strip()]
-            if extra and not all(e in (current.get("notes") or "") for e in extra):
-                updates["notes"] = "\n".join(x for x in (current.get("notes"), " · ".join(extra)) if x)
+            # Budget and timeline are restated on most calls: keep one current line each instead of
+            # appending a near-duplicate after every conversation.
+            notes_lines = [ln for ln in (current.get("notes") or "").splitlines() if ln.strip()]
+            for key, label in (("budget", "Budget"), ("timeline", "Timeline")):
+                value = str(s.get(key) or "").strip()
+                if not value:
+                    continue
+                line = f"{label}: {value}"
+                notes_lines = [ln for ln in notes_lines if not ln.strip().startswith(f"{label}:")
+                               and f"{label}:" not in ln]
+                notes_lines.append(line)
+            merged = "\n".join(notes_lines)
+            if merged != (current.get("notes") or ""):
+                updates["notes"] = merged
             callback_at = _valid_callback(s.get("callback_at"))
+            if not callback_at and str(s.get("team_action") or "").strip():
+                # They asked the team to act and to be told the outcome, but named no time. Without a
+                # slot nothing dials them back and the promise is silently dropped.
+                soon = 15 if str(s.get("urgent") or "").lower() in ("true", "yes", "1") else 60
+                callback_at = (datetime.now(IST) + timedelta(minutes=soon)).strftime("%Y-%m-%d %H:%M")
             if callback_at:
                 updates["callback_at"] = callback_at
                 updates.setdefault("follow_up_date", callback_at[:10])
@@ -333,8 +469,34 @@ class CallService:
                 updates["do_not_call"] = True
             self.crm.update(lead_id, updates, actor="ai", event_type="ai.summary",
                             title=f"AI call summary · {qualification or 'unqualified'} · {s.get('outcome', '')}".strip(" ·"))
-            if s.get("meeting_at"):
-                events.record("meeting.booked", f"Meeting booked for {s['meeting_at']}", lead_id=lead_id, call_id=call_id, actor="ai")
+            if meeting_at:
+                events.record("meeting.booked", f"Meeting booked for {meeting_at}", lead_id=lead_id, call_id=call_id, actor="ai")
+                self._confirm_meeting_email(lead_id, meeting_at, s)
+            if agents.get_automation(self.agent_id).get("ai_auto_emails", True):
+                emails = s.get("send_email") or []
+                if isinstance(emails, dict):
+                    emails = [emails]
+                if isinstance(emails, list):
+                    for e in emails:
+                        if not isinstance(e, dict) or not e.get("to") or not e.get("body"):
+                            continue
+                        target = str(e["to"]).lower()
+                        subject = e.get("subject", f"Update regarding call with {updates.get('name') or current.get('name') or current.get('phone')}")
+                        recipient = None
+                        if "lead" in target:
+                            recipient = updates.get("email") or current.get("email")
+                        else:
+                            from app.core.auth import login_email
+                            recipient = login_email()  # team/admin default to the system owner's email
+                        
+                        if recipient:
+                            try:
+                                from app.services.notification_service import send_email
+                                send_email(recipient, subject, e["body"], lead_id=lead_id, agent_id=self.agent_id, actor="ai")
+                                events.record("email.sent", f"Sent email to {target} ({recipient})", lead_id=lead_id, call_id=call_id, actor="ai")
+                            except Exception as err:
+                                log.error("Failed to send post-call email to %s: %s", recipient, err)
+                                events.record("email.failed", f"Failed to send email to {target}: {err}", lead_id=lead_id, call_id=call_id, actor="system")
             if callback_at:
                 events.record("callback.scheduled", f"Callback scheduled for {callback_at}", lead_id=lead_id, call_id=call_id, actor="ai")
 
@@ -398,7 +560,10 @@ class CallService:
         if not lead_id:
             return
         crm = result["crm_update"]
-        updates = {k: crm[k] for k in ("requirements", "objections", "meeting_at", "follow_up_date", "email") if crm.get(k)}
+        updates = {k: crm[k] for k in ("requirements", "objections", "follow_up_date", "email") if crm.get(k)}
+        meeting_at = _valid_meeting(crm.get("meeting_at"))
+        if meeting_at:
+            updates["meeting_at"] = meeting_at
         if result["qualification"]:
             updates["qualification"] = result["qualification"]
         if result["intent"] == "do_not_call":
@@ -406,7 +571,7 @@ class CallService:
             updates["status"] = "Do Not Call"
         elif result["intent"] == "not_interested":
             updates["status"] = "Not Interested"
-        elif crm.get("meeting_at"):
+        elif meeting_at:
             updates["status"] = "Meeting Booked"
         elif result["intent"] in ("interested", "pricing", "meeting"):
             updates["status"] = "Interested"

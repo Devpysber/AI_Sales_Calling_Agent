@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+﻿import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Ban, Bot, Building2, CalendarClock, Check, ChevronRight, Clock, Copy, Gauge, Lightbulb, ListPlus, Mail, MapPin,
   MessageSquareQuote, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOutgoing, Play, ShieldAlert, Sparkles, Target, Trash2, User,
@@ -21,13 +21,17 @@ const LIVE_STATUSES = ['Queued', 'Ringing', 'In Progress']
 const TEMP_SCORE: Record<string, number> = { Cold: 1, Warm: 2, Hot: 3 }
 
 function nextAction(lead: Lead, calls: Call[]): { title: string; detail: string; kind: 'call' | 'meeting' | 'stop' | 'followup' } {
-  const connected = calls.filter((c) => c.status === 'Completed')
+  const connected = calls.filter((c) => c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0))
   if (lead.do_not_call) return { title: 'Do not contact', detail: 'This lead asked not to be called. It is excluded from every call and campaign.', kind: 'stop' }
-  if (lead.callback_at) return { title: `Callback at ${lead.callback_at}`, detail: 'The customer asked to be called back. The agent will dial automatically at that time (inside calling hours).', kind: 'followup' }
-  if (lead.meeting_at) return { title: `Prepare for the meeting on ${lead.meeting_at}`, detail: 'Review the requirements and objections before the meeting.', kind: 'meeting' }
+  if (lead.callback_at) return { title: `Callback at ${formatDate(lead.callback_at.replace(' ', 'T') + '+05:30')}`, detail: 'The customer asked to be called back. The agent will dial automatically at that time (inside calling hours).', kind: 'followup' }
+  if (lead.status === 'Not Interested') return { title: 'Nurture later', detail: 'Not interested right now. Revisit in a few months with a new offer.', kind: 'stop' }
+  if (lead.meeting_at) {
+    const at = new Date(lead.meeting_at.replace(' ', 'T') + '+05:30')
+    if (at.getTime() > Date.now()) return { title: `Prepare for the meeting on ${formatDate(lead.meeting_at.replace(' ', 'T') + '+05:30')}`, detail: 'Review the requirements and objections before the meeting.', kind: 'meeting' }
+    return { title: 'Meeting time has passed', detail: `It was set for ${formatDate(lead.meeting_at.replace(' ', 'T') + '+05:30')} IST. Call to confirm the outcome or rebook.`, kind: 'call' }
+  }
   if (!calls.length) return { title: 'Place the first call', detail: 'No conversation yet. Call now or queue the lead for auto-dial.', kind: 'call' }
   if (!connected.length) return { title: 'Retry at a different time', detail: `${calls.length} attempt(s), none answered. Try another hour of the day.`, kind: 'call' }
-  if (lead.status === 'Not Interested') return { title: 'Nurture later', detail: 'Not interested right now. Revisit in a few months with a new offer.', kind: 'stop' }
   if (lead.follow_up_date) {
     const today = new Date().toLocaleDateString('en-CA')
     return lead.follow_up_date < today
@@ -43,7 +47,7 @@ function leadScore(lead: Lead, calls: Call[]) {
   if (lead.do_not_call) return 0
   const temp = { Hot: 45, Warm: 28, Cold: 8 }[lead.qualification ?? ''] ?? 12
   const stage = Math.max(0, JOURNEY.indexOf(lead.status)) * 6
-  const connected = calls.filter((c) => c.status === 'Completed').length
+  const connected = calls.filter((c) => c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0)).length
   const reach = calls.length ? Math.round((15 * connected) / calls.length) : 0
   const recent = lead.last_contacted_at && Date.now() - Date.parse(lead.last_contacted_at) < 7 * 86_400_000 ? 10 : 0
   return Math.min(100, temp + stage + reach + recent)
@@ -99,7 +103,7 @@ export default function LeadDetail() {
 
   const items = useMemo(() => calls.data?.items ?? [], [calls.data])
   // A conversation = the customer said something (greeting-only calls have 1 turn)
-  const talked = useMemo(() => items.filter((c) => c.status === 'Completed' && (c.turns ?? 0) > 1), [items])
+  const talked = useMemo(() => items.filter((c) => (c.status === 'Completed' || c.status === 'Failed') && (c.turns ?? 0) > 1), [items])
   const analyzed = talked.find((c) => c.outcome || c.summary) ?? talked[0]
   const liveCall = items.find((c) => LIVE_STATUSES.includes(c.status))
   const shownCallId = transcriptOf ?? liveCall?.id ?? talked[0]?.id ?? null
@@ -111,7 +115,7 @@ export default function LeadDetail() {
     refetchInterval: (q) => {
       const c = q.state.data
       if (!c) return false
-      return LIVE_STATUSES.includes(c.status) || (c.status === 'Completed' && !c.summary && (c.transcript?.length ?? 0) > 1) ? 2000 : false
+      return LIVE_STATUSES.includes(c.status) || ((c.status === 'Completed' || c.status === 'Failed') && !c.summary && (c.transcript?.length ?? 0) > 1) ? 2000 : false
     },
   })
 
@@ -137,7 +141,7 @@ export default function LeadDetail() {
   })
 
   const stats = useMemo(() => {
-    const connected = items.filter((c) => c.status === 'Completed')
+    const connected = items.filter((c) => c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0))
     const talk = connected.reduce((a, c) => a + (c.duration || 0), 0)
     const lat = connected.map((c) => c.avg_latency_ms).filter((v): v is number => !!v)
     const hours = new Map<number, { calls: number; connected: number }>()
@@ -145,7 +149,7 @@ export default function LeadDetail() {
       const h = new Date(c.created_at).getHours()
       const cur = hours.get(h) ?? { calls: 0, connected: 0 }
       cur.calls += 1
-      cur.connected += c.status === 'Completed' ? 1 : 0
+      cur.connected += c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0) ? 1 : 0
       hours.set(h, cur)
     }
     const bestHour = [...hours.entries()].filter(([, v]) => v.connected).sort((a, b) => b[1].connected / b[1].calls - a[1].connected / a[1].calls)[0]
@@ -194,6 +198,7 @@ export default function LeadDetail() {
             if (await confirm({ title: `Delete ${l.name ?? 'this lead'}?`, description: 'The lead and its activity are removed permanently. Call records are kept.', confirmLabel: 'Delete', danger: true })) remove.mutate()
           }}><Trash2 /></Button>
           <Button onClick={() => setEditing(true)}><Pencil />Edit</Button>
+          <Button onClick={() => navigate(path(`/emails?lead=${l.id}`))}><Mail />Email</Button>
           <QueueButton disabled={l.do_not_call} loading={queue.isPending} onQueue={(at) => queue.mutate(at)} />
           <Button variant="primary" disabled={l.do_not_call} loading={startCall.isPending} onClick={() => startCall.mutate(l.id)}><PhoneCall />Call now</Button>
         </>}>
@@ -308,7 +313,8 @@ export default function LeadDetail() {
                         <div className="space-y-3">
                           {conversation.data?.summary && <div className="rounded-xl bg-surface-2 p-3 text-[13px] text-fg-2"><b className="text-fg">Call summary:</b> {conversation.data.summary}</div>}
                           {conversation.data?.recording_url && <audio controls src={conversation.data.recording_url} className="w-full" />}
-                          {transcript.map((t, i) => {
+                          <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-2">
+                            {transcript.map((t, i) => {
                             const agentTurn = t.role === 'assistant'
                             return (
                               <div key={i} className={cn('flex gap-2.5', !agentTurn && 'flex-row-reverse')}>
@@ -322,6 +328,7 @@ export default function LeadDetail() {
                               </div>
                             )
                           })}
+                          </div>
                           <p className="flex items-center gap-1.5 pt-2 text-xs text-muted"><MessageSquareQuote className="size-3.5" />Customer lines come from phone speech recognition and may contain mistakes.</p>
                         </div>
                       )
@@ -333,7 +340,7 @@ export default function LeadDetail() {
                     {items.map((c) => (
                       <li key={c.id}>
                         <button onClick={() => setCallId(c.id)} className="relative flex w-full items-start gap-3 rounded-xl p-2 text-left hover:bg-surface-2">
-                          <span className={cn('z-10 grid size-[38px] shrink-0 place-items-center rounded-full border border-border bg-surface', c.status === 'Completed' && 'border-fg bg-fg text-bg')}>
+                          <span className={cn('z-10 grid size-[38px] shrink-0 place-items-center rounded-full border border-border bg-surface', (c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0)) && 'border-fg bg-fg text-bg')}>
                             {c.direction === 'inbound' ? <PhoneIncoming className="size-4" /> : <PhoneOutgoing className="size-4" />}
                           </span>
                           <div className="min-w-0 flex-1">
@@ -345,7 +352,7 @@ export default function LeadDetail() {
                             </div>
                             <div className="mt-0.5 line-clamp-2 text-[13px] text-muted">{c.summary ?? c.error ?? c.hangup_cause ?? `${c.turns ?? 0} turns`}</div>
                           </div>
-                          {c.status === 'Completed' && (c.turns ?? 0) > 0 && (
+                          {(c.status === 'Completed' || c.status === 'Failed') && (c.turns ?? 0) > 0 && (
                             <span role="button" tabIndex={0} title="Show transcript" onClick={(e) => { e.stopPropagation(); setTranscriptOf(c.id); setTab('conversation') }}
                               className="grid size-8 shrink-0 place-items-center rounded-lg text-muted hover:bg-surface hover:text-fg"><Play className="size-3.5" /></span>
                           )}
@@ -450,7 +457,7 @@ export default function LeadDetail() {
 
 const toLocalInput = (v?: string | null) => (v ? v.replace(' ', 'T').slice(0, 16) : '')
 const inMinutes = (m: number) => {
-  const d = new Date(Date.now() + m * 60_000)
+  const d = new Date(new Date(Date.now() + m * 60_000).toLocaleString("en-US", {timeZone: "Asia/Kolkata"}))
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
@@ -470,7 +477,7 @@ function FollowUpScheduler({ lead, saving, onSave }: { lead: Lead; saving: boole
       <div className="flex flex-wrap gap-1.5">
         {[['In 1 hour', 60], ['Tomorrow 11 AM', -1], ['In 3 days', 3 * 24 * 60]].map(([label, m]) => (
           <button key={label as string} type="button" onClick={() => {
-            if (m === -1) { const d = new Date(Date.now() + 86_400_000); d.setHours(11, 0, 0, 0); setAt(inMinutes(Math.round((d.getTime() - Date.now()) / 60_000))) } else setAt(inMinutes(m as number))
+            if (m === -1) { const tomorrow = new Date(new Date(Date.now() + 86_400_000).toLocaleString("en-US", {timeZone: "Asia/Kolkata"})); const pad = (n: number) => String(n).padStart(2, '0'); setAt(`${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}T11:00`) } else setAt(inMinutes(m as number))
           }} className="rounded-lg border border-border px-2 py-1 text-xs font-semibold text-fg-2 hover:border-border-strong hover:text-fg">{label}</button>
         ))}
       </div>
@@ -478,6 +485,7 @@ function FollowUpScheduler({ lead, saving, onSave }: { lead: Lead; saving: boole
         <Input type="datetime-local" value={at} min={inMinutes(1)} onChange={(e) => setAt(e.target.value)} className="flex-1" />
         <Button variant="primary" disabled={!at || !changed} loading={saving} onClick={() => onSave({ callback_at: at })}>Schedule</Button>
       </div>
+      <p className="text-xs text-muted">Times are IST. The agent dials at this time only inside your calling hours — a time outside them waits for the next open hour.</p>
     </div>
   )
 }
@@ -499,7 +507,7 @@ function QueueButton({ disabled, loading, onQueue }: { disabled: boolean; loadin
           <div className="flex flex-wrap gap-1.5">
             {[['In 30 min', 30], ['In 2 hours', 120], ['Tomorrow 11 AM', -1]].map(([label, m]) => (
               <button key={label as string} type="button" onClick={() => {
-                if (m === -1) { const d = new Date(Date.now() + 86_400_000); d.setHours(11, 0, 0, 0); setAt(inMinutes(Math.round((d.getTime() - Date.now()) / 60_000))) } else setAt(inMinutes(m as number))
+                if (m === -1) { const tomorrow = new Date(new Date(Date.now() + 86_400_000).toLocaleString("en-US", {timeZone: "Asia/Kolkata"})); const pad = (n: number) => String(n).padStart(2, '0'); setAt(`${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}T11:00`) } else setAt(inMinutes(m as number))
               }} className="rounded-lg border border-border px-2 py-1 text-xs font-semibold text-fg-2 hover:border-border-strong hover:text-fg">{label}</button>
             ))}
           </div>
@@ -510,3 +518,4 @@ function QueueButton({ disabled, loading, onQueue }: { disabled: boolean; loadin
     </>
   )
 }
+

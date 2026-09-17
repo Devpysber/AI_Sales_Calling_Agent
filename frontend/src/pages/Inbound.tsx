@@ -53,9 +53,9 @@ export default function Inbound() {
 
   const items = useMemo(() => calls.data?.items ?? [], [calls.data])
   const stats = useMemo(() => {
-    const answered = items.filter((c) => c.status === 'Completed').length
+    const answered = items.filter((c) => c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0)).length
     const forwarded = items.filter((c) => c.trigger === 'forwarded').length
-    return { total: calls.data?.total ?? 0, answered, forwarded, missed: items.filter((c) => ['No Answer', 'Busy', 'Failed'].includes(c.status)).length }
+    return { total: calls.data?.total ?? 0, answered, forwarded, missed: items.filter((c) => ['No Answer', 'Busy'].includes(c.status) || (c.status === 'Failed' && c.duration === 0)).length }
   }, [items, calls.data])
 
   if (!form || !data) return <><PageHeader title="Inbound & transfer" /><div className="grid gap-4 lg:grid-cols-2"><Skeleton className="h-80" /><Skeleton className="h-80" /></div></>
@@ -146,7 +146,7 @@ export default function Inbound() {
             <CardHeader title="3 · New callers" description="When an unknown number calls, the agent saves them as a lead, asks for these details one at a time (in this order), then helps. Names are saved the moment they're said." />
             <div className="space-y-3 px-5 pb-5">
               <div className="flex flex-wrap gap-2">
-                {([['name', 'Name'], ['requirement', 'What they need'], ['city', 'City'], ['company', 'Company'], ['email', 'Email'], ['budget', 'Budget'], ['timeline', 'Timeline']] as const).map(([k, l]) => {
+                {([['name', 'Name'], ['requirement', 'What they need'], ['city', 'City'], ['company', 'Company'], ['email', 'Email'], ['budget', 'Budget'], ['timeline', 'Timeline'], ['callback_time', 'Best time to call back'], ['source', 'How they heard about us']] as const).map(([k, l]) => {
                   const list = form.inbound_collect ?? []
                   const idx = list.indexOf(k)
                   return (

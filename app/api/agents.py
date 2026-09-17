@@ -5,11 +5,11 @@ playground, automation, analytics and activity.
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Path
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from app.api.deps import workspace
+from app.api.deps import workspace, require_admin, require_admin
 from app.core.auth import actor
 from app.services import agent, agents, analytics, events, scheduler, tts
 from app.services.call_service import within_calling_hours
@@ -37,24 +37,49 @@ class AgentPatch(BaseModel):
 
 
 @router.get("")
-def list_agents():
-    return {"agents": agents.list_agents(), "voices": tts.SPEAKERS, "languages": tts.LANGUAGES}
+def list_agents(request: Request):
+    user = getattr(request.state, "user", "admin")
+    all_a = agents.list_agents()
+    payload = getattr(request.state, "token_payload", {})
+    if user == "team":
+        unlocked = payload.get("unlocked", [])
+        for a in all_a:
+            a["locked"] = a["id"] not in unlocked
+    return {"agents": all_a, "voices": tts.SPEAKERS, "languages": tts.LANGUAGES}
 
 
 @router.post("")
-def create_agent(body: AgentIn, request: Request):
+def create_agent(body: AgentIn, request: Request, response: Response):
+    user = getattr(request.state, "user", "")
+    payload = getattr(request.state, "token_payload", {})
+    team_id = payload.get("team_id")
+    
     if body.copy_from and not agents.exists(body.copy_from):
         raise HTTPException(400, "The agent to copy from does not exist.")
     data = body.model_dump(exclude_none=True)
     try:
-        return agents.create(data, actor=actor(request))
+        from app.core.auth import actor
+        result = agents.create(data, actor=actor(request))
+        
+        unlocked = payload.get("unlocked", [])
+        if result["id"] not in unlocked:
+            unlocked.append(result["id"])
+            payload["unlocked"] = unlocked
+            from app.core.auth import COOKIE, TTL, make_token
+            https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+            response.set_cookie(COOKIE, make_token(payload), max_age=TTL, httponly=True, samesite="lax", secure=https, path="/")
+                
+        return result
     except (ValueError, TypeError) as e:
         raise HTTPException(400, str(e))
 
 
 @router.get("/overview")
-def overview(days: int = Query(14, ge=7, le=60)):
-    return agents.overview(days)
+def overview(request: Request, days: int = Query(14, ge=7, le=60)):
+    user = getattr(request.state, "user", "admin")
+    payload = getattr(request.state, "token_payload", {})
+    unlocked = payload.get("unlocked", []) if user == "team" else None
+    return agents.overview(days, unlocked)
 
 
 @router.get("/{agent_id}")
@@ -70,7 +95,39 @@ def update_agent(body: AgentPatch, request: Request, agent_id: int = Depends(wor
         raise HTTPException(400, str(e))
 
 
-@router.delete("/{agent_id}")
+class Unlock(BaseModel):
+    password: str
+
+@router.post("/{agent_id}/unlock")
+def unlock_agent(body: Unlock, request: Request, response: Response, agent_id: int = Path(..., ge=1)):
+    if not agents.exists(agent_id):
+        raise HTTPException(404, "Agent not found.")
+        
+    user = getattr(request.state, "user", "")
+    if user == "admin" or user == "api":
+        return {"ok": True}
+        
+    if user == "team":
+        p = agents.get_profile(agent_id)
+        t_pass = (p.get("agent_password") or "").strip()
+        if not t_pass:
+            raise HTTPException(400, "This agent does not have a password set.")
+        import hmac
+        if hmac.compare_digest(body.password, t_pass):
+            payload = getattr(request.state, "token_payload", {})
+            unlocked = payload.get("unlocked", [])
+            if agent_id not in unlocked:
+                unlocked.append(agent_id)
+                payload["unlocked"] = unlocked
+                from app.core.auth import COOKIE, TTL, make_token
+                https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+                response.set_cookie(COOKIE, make_token(payload), max_age=TTL, httponly=True, samesite="lax", secure=https, path="/")
+            return {"ok": True}
+            
+    raise HTTPException(403, "Invalid password.")
+
+
+@router.delete("/{agent_id}", dependencies=[Depends(require_admin)])
 def delete_agent(request: Request, agent_id: int = Depends(workspace)):
     agents.delete(agent_id, actor=actor(request))
     return {"ok": True}
@@ -92,7 +149,7 @@ def update_profile(values: dict, request: Request, agent_id: int = Depends(works
 
 
 class Preview(BaseModel):
-    text: str = Field(min_length=1, max_length=600)
+    text: str = Field(..., max_length=1000)
     language: str | None = None
     speaker: str | None = None
 
@@ -107,17 +164,10 @@ async def voice_preview(body: Preview, agent_id: int = Depends(workspace)):
     return Response(audio, media_type="audio/wav")
 
 
-class Turn(BaseModel):
-    role: str
-    text: str
-
-
 class PlaygroundMessage(BaseModel):
-    message: str = Field(min_length=1, max_length=1000)
-    history: list[Turn] = []
+    purpose: str | None = None
     lead_id: int | None = None
-    speak: bool = True
-    purpose: str | None = None  # "inbound" rehearses a customer calling in
+    history: list[dict] = Field(default_factory=list)
 
 
 @router.post("/{agent_id}/playground")
@@ -129,19 +179,9 @@ async def playground(body: PlaygroundMessage, agent_id: int = Depends(workspace)
         lead = {**lead, "call_purpose": body.purpose, "call_goal": goal}
     history = [t.model_dump() for t in body.history]
     try:
-        # Same retrieval as live calls (keyword search, no embedding request per turn)
-        result = await asyncio.to_thread(agent.respond, agent_id, history, body.message, lead, False)
+        return await agent.turn(agent_id, history, lead)
     except LLMError as e:
         raise HTTPException(502, str(e))
-    if body.speak:
-        persona = agents.get_profile(agent_id)
-        try:
-            language = result["language"] or tts.detect_language(result["reply"])
-            audio = await asyncio.to_thread(tts.synthesize, result["reply"], language, persona["voice_speaker"])
-            result["audio_url"] = f"/api/media/audio/{tts.store_audio(audio)}.wav"
-        except Exception as e:
-            result["audio_error"] = str(e)
-    return result
 
 
 @router.get("/{agent_id}/greeting")

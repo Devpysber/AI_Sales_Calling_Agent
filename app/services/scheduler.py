@@ -68,12 +68,14 @@ def job_callbacks(agent_id, cfg, force=False):
             calls.start(lead["id"], trigger="website" if first and (lead.get("source") or "").startswith("website") else "callback",
                         actor="scheduler", purpose=None if first else "follow_up")
             placed += 1
+            # One attempt per promised time: a no-answer is picked up by the normal retry job.
+            crm.update(lead["id"], {"callback_at": None}, actor="system")
         except CallError as e:
             skipped.append(str(e))
-            if "limit" in str(e).lower() or "in progress" in str(e).lower():
-                continue  # try again next tick
-        # One attempt per promised time: a no-answer is picked up by the normal retry job.
-        crm.update(lead["id"], {"callback_at": None}, actor="system")
+            if "do not call" in str(e).lower() or "not a complete phone number" in str(e).lower():
+                # Nothing to retry: the lead can never be dialled, so stop promising a callback.
+                crm.update(lead["id"], {"callback_at": None}, actor="system")
+            # Anything else (busy slot, paused agent, tunnel down) keeps the time so the next tick retries it.
     if not placed and not skipped:
         return "no callbacks due"
     return f"{placed} callback(s) placed" + (f", {len(skipped)} skipped ({skipped[0]})" if skipped else "")
@@ -160,6 +162,16 @@ def _state_key(agent_id: int, job: str) -> str:
     return f"last_run.{agent_id}.{job}"
 
 
+QUIET_RESULTS = ("outside calling hours", "no pending leads", "no leads to retry", "no callbacks due",
+                 "queue empty", "all call slots busy", "nothing to do", "no leads due", "0 reminder")
+
+
+def _did_nothing(result: str) -> bool:
+    """True for a routine run with no outcome: kept out of the history feed, still shown as "Last run"."""
+    text = (result or "").lower()
+    return any(text.startswith(q) or q in text for q in QUIET_RESULTS)
+
+
 def run_job(agent_id: int, name: str, force: bool = False, actor: str = "scheduler") -> str:
     cfg = agents.get_automation(agent_id)
     try:
@@ -168,8 +180,11 @@ def run_job(agent_id: int, name: str, force: bool = False, actor: str = "schedul
         log.exception("Job %s failed for agent %s", name, agent_id)
         result = f"error: {e}"
     SettingsService().set_state(_state_key(agent_id, name), {"at": datetime.now(IST).isoformat(timespec="seconds"), "result": result})
-    events.record("automation.run", f"{LABELS[name]}: {result}", agent_id=agent_id, actor=actor,
-                  data={"job": name, "manual": force})
+    # A job that ran every minute and did nothing buried the real history under hundreds of identical
+    # lines. The "Last run" state above still shows it ran; only outcomes worth reading are recorded.
+    if force or not _did_nothing(result):
+        events.record("automation.run", f"{LABELS[name]}: {result}", agent_id=agent_id, actor=actor,
+                      data={"job": name, "manual": force})
     return result
 
 

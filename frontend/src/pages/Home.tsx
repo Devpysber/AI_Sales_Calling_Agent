@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import {
-  AlertTriangle, ArrowUpRight, AudioWaveform, BookOpen, CalendarCheck, CalendarClock, Flame, LayoutGrid, List, ListOrdered, MessageSquareText, Pause, Phone,
-  PhoneCall, PhoneIncoming, Play, Plus, Radio, Search, Sparkles, Timer, TrendingUp, Upload, Users,
+  AlertTriangle, ArrowUpRight, AudioWaveform, ChartBar, BookOpen, CalendarCheck, CalendarClock, Cpu, Flame, LayoutGrid, List, ListOrdered, Mail, MessageSquareText, Pause, Phone,
+  PhoneCall, PhoneIncoming, Play, Plus, Radio, Search, Settings, Sparkles, Timer, TrendingUp, Upload, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useMemo, useState } from 'react'
@@ -53,7 +53,7 @@ function setupScore(a: AgentOverviewItem) {
   return values.filter(Boolean).length / values.length
 }
 
-function AgentCard({ agent }: { agent: AgentOverviewItem }) {
+function AgentCard({ agent, role }: { agent: AgentOverviewItem; role?: string }) {
   const s = agent.stats
   const p = agent.period
   const o = agent.ops
@@ -82,13 +82,15 @@ function AgentCard({ agent }: { agent: AgentOverviewItem }) {
             </div>
             <p className="truncate text-xs text-muted">{agent.persona.agent_name} · {agent.persona.company_name} · {LANGUAGES[agent.persona.default_language] ?? agent.persona.default_language}</p>
           </div>
-          <div className="relative z-10 flex shrink-0 flex-col items-end gap-1.5">
+          <div className="relative z-10 flex flex-col items-end gap-1.5 shrink-0">
             <Ring value={setupScore(agent)} size={40} stroke={4}>{Math.round(setupScore(agent) * 5)}/5</Ring>
-            <button type="button" onClick={() => toggle.mutate()} disabled={toggle.isPending}
-              className={cn('inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold transition disabled:opacity-60',
-                paused ? 'bg-success text-white hover:opacity-90' : 'border border-border text-fg-2 hover:border-border-strong hover:text-fg')}>
-              {paused ? <><Play className="size-3" />Resume</> : <><Pause className="size-3" />Pause</>}
-            </button>
+            {role !== 'team' && (
+              <button type="button" onClick={() => toggle.mutate()} disabled={toggle.isPending}
+                className={cn('inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold transition disabled:opacity-60',
+                  paused ? 'bg-success text-white hover:opacity-90' : 'border border-border text-fg-2 hover:border-border-strong hover:text-fg')}>
+                {paused ? <><Play className="size-3" />Resume</> : <><Pause className="size-3" />Pause</>}
+              </button>
+            )}
           </div>
         </div>
         <p className="mt-3 line-clamp-2 min-h-10 text-[13px] break-words text-fg-2">{agent.description || <span className="text-muted">No description yet.</span>}</p>
@@ -149,15 +151,29 @@ function AgentCard({ agent }: { agent: AgentOverviewItem }) {
         )}
       </div>
 
-      <div className="relative z-10 mt-auto grid grid-cols-4 border-t border-border text-[11.5px] font-semibold text-muted">
-        {[[TrendingUp, 'Overview', ''], [Users, 'Leads', '/leads'], [BookOpen, 'Knowledge', '/knowledge'], [MessageSquareText, 'Test', '/agent?tab=playground']].map(([Icon, l, to]) => {
-          const I = Icon as typeof Users
-          return (
-            <Link key={l as string} to={`${base}${to}`} className="flex flex-col items-center gap-1 py-2.5 transition hover:bg-surface-2 hover:text-fg">
-              <I className="size-3.5" />{l as string}
-            </Link>
-          )
-        })}
+      <div className="relative z-10 mt-auto border-t border-border text-[11.5px] font-semibold text-muted">
+        <div className="grid grid-cols-4">
+          {[[TrendingUp, 'Overview', ''], [Users, 'Leads', '/leads'], [BookOpen, 'Knowledge', '/knowledge'], [MessageSquareText, 'Test', '/agent?tab=playground']].map(([Icon, l, to]) => {
+            const I = Icon as typeof Users
+            return (
+              <Link key={l as string} to={`${base}${to}`} className="flex flex-col items-center gap-1 py-2.5 transition hover:bg-surface-2 hover:text-fg">
+                <I className="size-3.5" />{l as string}
+              </Link>
+            )
+          })}
+        </div>
+        {role !== 'team' && (
+          <div className="grid grid-cols-4 border-t border-border/50 bg-surface-2/30">
+            {[[ChartBar, 'Analytics', '/analytics'], [Mail, 'Emails', '/emails'], [Cpu, 'Automation', '/automation'], [Settings, 'Settings', '/settings']].map(([Icon, l, to]) => {
+              const I = Icon as typeof Users
+              return (
+                <Link key={l as string} to={`${base}${to}`} className="flex flex-col items-center gap-1 py-2 transition hover:bg-surface-2 hover:text-fg">
+                  <I className="size-3.5" />{l as string}
+                </Link>
+              )
+            })}
+          </div>
+        )}
       </div>
     </Card>
   )
@@ -204,12 +220,31 @@ function AgentTable({ agents }: { agents: AgentOverviewItem[] }) {
 }
 
 export default function Home() {
+  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api<{ user: string }>('/api/auth/me'), staleTime: 0 })
+  const role = me?.user
+
   const [creating, setCreating] = useState(false)
   const [q, setQ] = useState('')
   const [status, setStatus] = useState<Status>('all')
   const [sort, setSort] = useState<Sort>('activity')
   const [view, setView] = useState<'grid' | 'table'>(() => { try { return (localStorage.getItem('agents-view') as 'grid' | 'table') || 'grid' } catch { return 'grid' } })
-  const { data, isLoading } = useQuery({ queryKey: ['agents', 'overview'], queryFn: () => api<AgentsOverview>('/api/agents/overview'), refetchInterval: 8000 })
+  const { data, isLoading, dataUpdatedAt, isFetching } = useQuery({
+    queryKey: ['agents', 'overview'],
+    queryFn: () => api<AgentsOverview>('/api/agents/overview'),
+    refetchInterval: 6000,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
+  })
+  // Live-calls poll separately faster — updates the header badge and live-calls panel every 3s
+  const livePoll = useQuery({
+    queryKey: ['agents', 'live'],
+    queryFn: () => api<{ live_calls: AgentsOverview['live_calls'] }>('/api/agents/overview'),
+    refetchInterval: 3000,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
+    select: (d) => d.live_calls,
+  })
+  const liveCalls = livePoll.data ?? data?.live_calls ?? []
   const agents = useMemo(() => data?.agents ?? [], [data])
 
   const setViewStored = (v: 'grid' | 'table') => { setView(v); try { localStorage.setItem('agents-view', v) } catch { /* storage unavailable */ } }
@@ -220,8 +255,9 @@ export default function Home() {
       meetings: acc.meetings + a.stats.meetings, leads: acc.leads + a.stats.leads, hot: acc.hot + a.stats.hot, talk: acc.talk + a.period.talk_seconds,
       today: acc.today + a.stats.calls_today,
     }), { live: 0, calls: 0, connected: 0, meetings: 0, leads: 0, hot: 0, talk: 0, today: 0 })
-    return { ...t, rate: t.calls ? Math.round((100 * t.connected) / t.calls) : null }
-  }, [agents])
+    // Use the faster live-calls poll for the live count so it's always up-to-date
+    return { ...t, live: liveCalls.length || t.live, rate: t.calls ? Math.round((100 * t.connected) / t.calls) : null }
+  }, [agents, liveCalls])
 
   const shown = useMemo(() => {
     const needle = q.toLowerCase().trim()
@@ -289,7 +325,16 @@ export default function Home() {
         eyebrow={<><Radio className="size-3.5" />Command center · {new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</>}
         title={`${greeting}.`}
         description={`${agents.length} agent${agents.length > 1 ? 's' : ''} · ${totals.live ? `${totals.live} call${totals.live > 1 ? 's' : ''} live right now` : 'no calls live right now'} · ${totals.today} call${totals.today === 1 ? '' : 's'} today`}
-        actions={<Button variant="primary" onClick={() => setCreating(true)}><Plus />New agent</Button>}
+        actions={
+          <div className="flex items-center gap-2">
+            <span className={cn('flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold transition-all',
+              isFetching ? 'bg-success/10 text-success' : 'bg-surface-2 text-muted')}>
+              <span className={cn('size-1.5 rounded-full', isFetching ? 'animate-pulse bg-success' : 'bg-border')} />
+              {isFetching ? 'Updating…' : `Updated ${dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}`}
+            </span>
+            {role !== 'team' && <Button variant="primary" onClick={() => setCreating(true)}><Plus />New agent</Button>}
+          </div>
+        }
       />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
@@ -353,13 +398,15 @@ export default function Home() {
 
           {view === 'table' ? (shown.length ? <AgentTable agents={shown} /> : null) : (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {shown.map((a) => <AgentCard key={a.id} agent={a} />)}
-              {!q && status !== 'paused' && (
+              {shown.map((a) => <AgentCard key={a.id} agent={a} role={role} />)}
+              {!q && status !== 'paused' && role !== 'team' && (
                 <button type="button" onClick={() => setCreating(true)}
                   className="dot-grid flex min-h-[420px] flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border-2 border-dashed border-border text-muted transition hover:border-brand hover:text-brand">
                   <span className="grid size-12 place-items-center rounded-2xl bg-surface shadow-card ring-1 ring-border"><Plus className="size-6" /></span>
-                  <span className="text-sm font-bold">New agent</span>
-                  <span className="max-w-52 text-center text-xs">For another product, campaign, city or client</span>
+                  <div className="text-center font-bold">
+                    New agent
+                    <div className="mt-1 max-w-[200px] text-xs font-normal opacity-70">For another product, campaign, city or client</div>
+                  </div>
                 </button>
               )}
             </div>
@@ -387,10 +434,10 @@ export default function Home() {
 
         <div className="space-y-4">
           <Card>
-            <CardHeader title={<span className="flex items-center gap-2"><LiveDot on={!!data?.live_calls.length} />Live calls</span>}
-              description={data?.live_calls.length ? 'In progress across every agent' : 'Nothing on the line right now'} />
+            <CardHeader title={<span className="flex items-center gap-2"><LiveDot on={!!liveCalls.length} />Live calls</span>}
+              description={liveCalls.length ? 'In progress across every agent' : 'Nothing on the line right now'} />
             <div className="px-3 pb-3">
-              {data?.live_calls.length ? data.live_calls.map((c) => {
+              {liveCalls.length ? liveCalls.map((c) => {
                 const a = agents.find((x) => x.id === c.agent_id)
                 return (
                   <Link key={c.id} to={`/a/${c.agent_id}/calls?status=active`} className="flex items-center gap-3 rounded-xl px-2 py-2.5 hover:bg-surface-2">
