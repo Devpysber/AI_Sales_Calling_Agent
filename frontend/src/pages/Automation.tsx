@@ -120,7 +120,8 @@ export default function Automation() {
                 {DAYS.map((d, i) => {
                   const on = form.calling_days.includes(i)
                   return <button key={d} type="button" onClick={() => set('calling_days', on ? form.calling_days.filter((x) => x !== i) : [...form.calling_days, i].sort())}
-                    className={cn('h-9 w-14 rounded-xl border text-sm font-bold transition', on ? 'border-fg bg-fg text-bg' : 'border-border text-muted hover:border-border-strong')}>{d}</button>
+                    className={cn('h-9 min-w-10 flex-1 rounded-xl border px-2 text-sm font-bold transition sm:max-w-14',
+                      on ? 'border-fg bg-fg text-bg' : 'border-border text-muted hover:border-border-strong')}>{d}</button>
                 })}
               </div>
             </div>

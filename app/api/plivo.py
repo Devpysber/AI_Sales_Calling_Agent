@@ -30,6 +30,10 @@ HINTS = "yes,no,haan,nahi,hello,price,pricing,demo,meeting,interested,busy,callb
 PROMPTS = {
     "repeat": {"en": "Sorry, I didn't catch that. Could you say that again?",
                "hi": "माफ़ कीजिए, मैं सुन नहीं पाया। क्या आप दोबारा बोल सकते हैं?"},
+    # Used when the caller DID speak but we failed to produce a reply: blaming their audio ("I didn't
+    # catch that") for our own failure is what made the agent feel deaf.
+    "continue": {"en": "Sorry, go on — I'm listening.",
+                 "hi": "जी बोलिए, मैं सुन रहा हूँ।"},
     "goodbye": {"en": "Thanks for your time. Have a great day!",
                 "hi": "आपके समय के लिए धन्यवाद। आपका दिन शुभ हो!"},
     "error": {"en": "Sorry, I'm having a technical issue. Our team will call you back shortly. Goodbye.",

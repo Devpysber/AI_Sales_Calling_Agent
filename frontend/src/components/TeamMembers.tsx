@@ -5,7 +5,9 @@ import { toast } from 'sonner'
 import { Button, Card, CardHeader, Input } from '@/components/ui'
 import { api } from '@/lib/api'
 
-type TeamMember = { id: string; email: string; name: string }
+type TeamMember = { id: string; email: string; name: string; phone?: string; role?: string; notes?: string }
+
+const ROLES = ['Sales', 'Support', 'Manager', 'Operations']
 
 export default function TeamMembers() {
   const qc = useQueryClient()
@@ -16,14 +18,18 @@ export default function TeamMembers() {
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
+  const [phone, setPhone] = useState('')
+  const [role, setRole] = useState('Sales')
+  const [notes, setNotes] = useState('')
   const [changePwId, setChangePwId] = useState<string | null>(null)
   const [newPassword, setNewPassword] = useState('')
   
   const add = useMutation({
-    mutationFn: () => api('/api/system/team-members', { method: 'POST', json: { email, name, password } }),
+    mutationFn: () => api('/api/system/team-members', { method: 'POST', json: { email, name, password, phone, role, notes } }),
     onSuccess: () => {
       toast.success('Team member added')
       setOpen(false)
+      setName(''); setEmail(''); setPassword(''); setPhone(''); setRole('Sales'); setNotes('')
       qc.invalidateQueries({ queryKey: ['team-members'] })
     },
     onError: (e: Error) => toast.error(e.message)
@@ -59,6 +65,8 @@ export default function TeamMembers() {
             <thead className="border-y border-border bg-surface-2 text-xs uppercase text-muted">
               <tr>
                 <th className="px-5 py-3 font-semibold">Name</th>
+                <th className="px-5 py-3 font-semibold">Role</th>
+                <th className="px-5 py-3 font-semibold">Phone</th>
                 <th className="px-5 py-3 font-semibold">Email</th>
                 <th className="px-5 py-3 font-semibold text-right">Actions</th>
               </tr>
@@ -66,8 +74,10 @@ export default function TeamMembers() {
             <tbody className="divide-y divide-border">
               {members.map(m => (
                 <tr key={m.id} className="transition hover:bg-surface-2/50">
-                  <td className="px-5 py-3 font-medium">{m.name}</td>
-                  <td className="px-5 py-3 text-muted">{m.email}</td>
+                  <td className="px-5 py-3 font-medium">{m.name}{m.notes ? <span className="block text-xs font-normal text-muted">{m.notes}</span> : null}</td>
+                  <td className="px-5 py-3 text-muted">{m.role || 'Sales'}</td>
+                  <td className="px-5 py-3 text-muted">{m.phone ? <a href={`tel:${m.phone}`} className="hover:underline">{m.phone}</a> : '—'}</td>
+                  <td className="px-5 py-3 text-muted break-all">{m.email}</td>
                   <td className="px-5 py-3 text-right">
                     <div className="flex justify-end gap-2">
                       <Button variant="ghost" size="sm" onClick={() => setChangePwId(m.id)}>
@@ -89,7 +99,7 @@ export default function TeamMembers() {
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <Card className="w-full max-w-sm">
+          <Card className="max-h-[90vh] w-full max-w-md overflow-y-auto">
             <CardHeader title="Add team member" />
             <form className="p-5 pt-0 space-y-4" onSubmit={(e) => { e.preventDefault(); add.mutate() }}>
               <div>
@@ -99,6 +109,24 @@ export default function TeamMembers() {
               <div>
                 <label className="mb-1.5 block text-sm font-semibold">Email</label>
                 <Input required type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="ashish@example.com" />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-sm font-semibold">Phone</label>
+                  <Input value={phone} onChange={e => setPhone(e.target.value)} inputMode="tel" placeholder="+91 98765 43210" />
+                  <p className="mt-1 text-xs text-muted">Rings when a call is transferred to them.</p>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-semibold">Role</label>
+                  <select value={role} onChange={e => setRole(e.target.value)}
+                    className="h-9 w-full rounded-xl border border-border bg-surface px-3 text-sm outline-none focus:border-border-strong">
+                    {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-semibold">What they handle</label>
+                <Input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Bhopal showroom, used cars" />
               </div>
               <div>
                 <label className="mb-1.5 block text-sm font-semibold">Password</label>

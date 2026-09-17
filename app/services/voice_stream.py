@@ -1018,9 +1018,11 @@ class CallStream:
                     await self.play_pcm(await asyncio.to_thread(tts.synthesize_pcm, reply, language, self.persona.get("voice_speaker")))
                     self.meter("tts_chars", len(reply))
         if not reply:
-            # Still nothing to say: goodbye if the model ended the call, otherwise ask the caller to repeat (never hang up).
+            # Still nothing to say (never hang up). "I didn't catch that" is only honest when they said
+            # nothing: after a caller has spoken, the failure is ours, so invite them to carry on instead.
             from app.api.plivo import PROMPTS
-            reply = PROMPTS["goodbye" if cleaner.end_call else "repeat"][self.lang_key()]
+            fallback = "goodbye" if cleaner.end_call else ("continue" if (text or "").strip() else "repeat")
+            reply = PROMPTS[fallback][self.lang_key()]
             await self.say_fixed(reply)
         self.note_spoken(reply)
         if not cleaner.end_call and text and FAREWELL.search(reply) and "?" not in reply and CALLER_CLOSING.search(text):

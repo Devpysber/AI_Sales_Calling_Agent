@@ -184,6 +184,9 @@ class TeamMemberUpdate(BaseModel):
     email: str
     password: str | None = None
     max_agents: int = 2
+    phone: str = ""          # the line a transferred call rings, and where the team is reached
+    role: str = "Sales"      # what they handle, shown on the team list
+    notes: str = ""
 
 # Credentials live in the encrypted AppSetting row that app/core/config.py reads; everything else
 # (pricing, credits) stays in SettingsService, where analytics and alerts read it.
@@ -243,14 +246,14 @@ async def update_secrets(body: dict):
     saved = sorted([k for k, v in credentials.items() if v] + [k for k in body if k in plain])
     return {"ok": True, "saved": saved, "cleared": sorted(k for k, v in credentials.items() if not v)}
 
-@router.get("/system/team-members")
+@router.get("/system/team-members", dependencies=[Depends(require_admin)])
 async def get_team_members():
     members = SettingsService().get_state("team_members") or []
     for m in members:
         m.pop("password_hash", None)
     return {"members": members}
 
-@router.post("/system/team-members")
+@router.post("/system/team-members", dependencies=[Depends(require_admin)])
 async def add_team_member(body: TeamMemberUpdate):
     members = SettingsService().get_state("team_members") or []
     if any(m.get("email") == body.email for m in members):
@@ -262,8 +265,11 @@ async def add_team_member(body: TeamMemberUpdate):
     
     new_member = {
         "id": uuid.uuid4().hex,
-        "name": body.name,
-        "email": body.email,
+        "name": body.name.strip(),
+        "email": body.email.strip().lower(),
+        "phone": body.phone.strip(),
+        "role": body.role.strip() or "Sales",
+        "notes": body.notes.strip(),
         "password_hash": f"{salt}${h}",
         "max_agents": body.max_agents,
         "created_agents": 0,
@@ -273,7 +279,7 @@ async def add_team_member(body: TeamMemberUpdate):
     SettingsService().set_state("team_members", members)
     return {"ok": True}
 
-@router.delete("/system/team-members/{member_id}")
+@router.delete("/system/team-members/{member_id}", dependencies=[Depends(require_admin)])
 async def delete_team_member(member_id: str):
     members = SettingsService().get_state("team_members") or []
     members = [m for m in members if m.get("id") != member_id]
@@ -283,7 +289,9 @@ async def delete_team_member(member_id: str):
 class TeamMemberPasswordUpdate(BaseModel):
     password: str
 
-@router.put("/team-members/{member_id}/password")
+# Path must match the client: it calls /api/system/team-members/<id>/password, so the previous
+# /api/team-members/... route 404'd and the Change Password button never did anything.
+@router.put("/system/team-members/{member_id}/password", dependencies=[Depends(require_admin)])
 async def update_team_member_password(member_id: str, body: TeamMemberPasswordUpdate):
     import uuid, hashlib
     from fastapi import HTTPException
