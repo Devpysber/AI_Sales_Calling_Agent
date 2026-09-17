@@ -28,13 +28,7 @@ export default function Inbound() {
     queryFn: () => api<Page<Call>>(`${base}/calls`, { params: { direction: 'inbound', page_size: 25 } }),
     refetchInterval: (q) => (q.state.data?.items.some((c) => ['Ringing', 'In Progress'].includes(c.status)) ? 2000 : 6000),
   })
-  // Forwarded calls hunt the agent's number first, then the team's own lines, so show who is in that
-  // queue here. The endpoint is admin-only: a team member sees nothing rather than an error.
-  const team = useQuery({
-    queryKey: ['team-members'],
-    queryFn: () => api<{ members: { id: string; name: string; role?: string; phone?: string }[] }>('/api/system/team-members'),
-    retry: false,
-  })
+
   const [form, setForm] = useState<Routing | null>(null)
   const [callId, setCallId] = useState<number | null>(null)
   useEffect(() => { if (data && !form) setForm(Object.fromEntries(KEYS.map((k) => [k, data.profile[k]])) as Routing) }, [data, form])
