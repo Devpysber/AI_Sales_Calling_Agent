@@ -106,6 +106,36 @@ def send_email(to: str, subject: str, body: str, lead_id: int | None = None, age
     return status
 
 
+def team_recipients(role: str | None = None) -> list[str]:
+    """
+    Everyone who should hear when a caller needs a person: the account owner plus the team members.
+
+    Without this only the admin login address was told, so a message a caller left for "the team"
+    never reached the people who could act on it.
+    """
+    from app.core.auth import login_email
+    from app.services.settings_service import SettingsService
+
+    seen: list[str] = []
+    for address in [login_email()] + [
+            m.get("email", "") for m in (SettingsService().get_state("team_members") or [])
+            if not role or (m.get("role") or "").lower() == role.lower()]:
+        address = (address or "").strip().lower()
+        if address and address not in seen:
+            seen.append(address)
+    return seen
+
+
+def notify_team(subject: str, body: str, lead_id: int | None = None, agent_id: int | None = None,
+                role: str | None = None) -> list[str]:
+    """Send one message to every team recipient. Returns the addresses that accepted it."""
+    delivered = []
+    for address in team_recipients(role):
+        if email_sent(send_email(address, subject, body, lead_id=lead_id, agent_id=agent_id, actor="ai")):
+            delivered.append(address)
+    return delivered
+
+
 def email_sent(status: str) -> bool:
     """True only when the provider actually accepted the message (send_email never raises, so callers check this)."""
     return status.startswith("sent via")

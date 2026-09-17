@@ -398,12 +398,10 @@ FALLBACK_LINES = {"en": "Sorry, our team is busy right now. I can help you, what
 
 
 def _notify_missed(session: dict, persona: dict, status: str):
-    """Email the admin about a forwarded call nobody answered, with the caller's CRM context."""
-    from app.core.auth import login_email
-    from app.services.notification_service import send_email
+    """Tell the whole team about a forwarded call nobody answered, with the caller's details."""
+    from app.services.notification_service import notify_team
 
-    to = login_email()
-    if not to or not persona.get("notify_missed_calls", True):
+    if not persona.get("notify_missed_calls", True):
         return
     lead = session.get("lead") or {}
     who = lead.get("name") or lead.get("phone") or "Unknown caller"
@@ -413,7 +411,7 @@ def _notify_missed(session: dict, persona: dict, status: str):
         if lead.get(key):
             lines.append(f"{label}: {lead[key]}")
     lines += ["", "Call them back soon."]
-    send_email(to, f"Missed call: {who}", "\n".join(lines), lead_id=session.get("lead_id"), agent_id=session.get("agent_id"))
+    notify_team(f"Missed call: {who}", "\n".join(lines), lead_id=session.get("lead_id"), agent_id=session.get("agent_id"))
 
 
 @router.post("/transfer-done")

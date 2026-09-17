@@ -347,13 +347,9 @@ class CallService:
         urgent = str(summary.get("urgent") or "").lower() in ("true", "yes", "1")
         lead = (self.crm.get(lead_id) or {}) if lead_id else {}
         who = lead.get("name") or lead.get("phone") or "A caller"
-        from app.core.auth import login_email
-        from app.services.notification_service import send_email
-        recipient = login_email()
+        from app.services.notification_service import notify_team
         events.record("call.handover", f"Action for the team: {action}", f"from {who}" + (" · urgent" if urgent else ""),
                       lead_id=lead_id, call_id=call_id, actor="ai")
-        if not recipient:
-            return
         persona = agents.get_profile(self.agent_id)
         lines = [f"{who} asked for someone on the team to act.", "", f"What they need: {action}", ""]
         for label, key in (("Phone", "phone"), ("Email", "email"), ("City", "city"), ("Company", "company")):
@@ -363,7 +359,7 @@ class CallService:
             lines += ["", f"Call summary: {summary['summary']}"]
         subject = ("URGENT: " if urgent else "") + f"{who} needs a callback - {persona['company_name']}"
         with contextlib.suppress(Exception):
-            send_email(recipient, subject, "\n".join(lines), lead_id=lead_id, agent_id=self.agent_id, actor="ai")
+            notify_team(subject, "\n".join(lines), lead_id=lead_id, agent_id=self.agent_id)
 
     def _missed_call_email(self, lead_id: int, lead: dict, next_at: str):
         """Tell a lead we rang at the time they asked for, missed them, and when we will try again."""

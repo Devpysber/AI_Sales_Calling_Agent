@@ -48,7 +48,13 @@ function NextStep({ l }: { l: Lead }) {
   if (l.do_not_call) return <span className="text-muted">—</span>
   if (l.phone_valid === false) return <span className="inline-flex items-center gap-1 text-danger"><AlertTriangle className="size-3.5" />Fix number</span>
   if (l.callback_at) return <span className="inline-flex items-center gap-1 text-fg"><Clock className="size-3.5" />Callback {l.callback_at.slice(5)}</span>
-  if (l.meeting_at) return <span className="inline-flex items-center gap-1 text-success"><CalendarCheck className="size-3.5" />Meeting {l.meeting_at.slice(5)}</span>
+  if (l.meeting_at) {
+    // A meeting that has already happened is not a next step: it needs confirming, not preparing.
+    const past = new Date(l.meeting_at.replace(' ', 'T') + '+05:30').getTime() < Date.now()
+    return past
+      ? <span className="inline-flex items-center gap-1 text-warning"><AlertTriangle className="size-3.5" />Meeting passed {l.meeting_at.slice(5)}</span>
+      : <span className="inline-flex items-center gap-1 text-success"><CalendarCheck className="size-3.5" />Meeting {l.meeting_at.slice(5)}</span>
+  }
   if (l.retry_count >= 3) return <span className="text-warning">Unreachable ×{l.retry_count}</span>
   if (!l.last_contacted_at) return <span className="text-fg-2">First call</span>
   if (['Interested', 'Follow Up'].includes(l.status)) return <span className="text-fg-2">Follow up</span>
