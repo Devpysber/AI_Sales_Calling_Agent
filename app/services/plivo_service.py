@@ -30,12 +30,12 @@ class PlivoService:
         return f"{settings.base_url}/api/plivo/{path}" + (f"?{query}" if query else "")
 
     def dial(self, phone: str, session_id: str, call_id: int, max_minutes: int, detect_voicemail: bool = False,
-             from_number: str | None = None) -> str:
+             from_number: str | None = None, endpoint: str = "answer") -> str:
         params = {"sid": session_id, "cid": call_id}
         response = self.client.calls.create(
             from_=from_number or self.caller_id(),
             to_="".join(c for c in phone if c.isdigit()),
-            answer_url=self.webhook("answer", **params),
+            answer_url=self.webhook(endpoint, **params),
             answer_method="POST",
             ring_url=self.webhook("ring", **params),
             hangup_url=self.webhook("hangup", **params),

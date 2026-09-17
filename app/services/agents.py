@@ -298,10 +298,16 @@ def get_profile(agent_id: int) -> dict:
 def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
     values = dict(values)
     if "transfer_number" in values:
-        digits = phone_digits(str(values["transfer_number"] or ""))
-        if digits and not 11 <= len(digits) <= 15:
-            raise ValueError("Transfer number must be a full phone number with country code, e.g. +91 98765 43210.")
-        values["transfer_number"] = f"+{digits}" if digits else ""
+        raw_val = str(values["transfer_number"] or "")
+        parts = [p.strip() for p in raw_val.split(",")]
+        valid_parts = []
+        for p in parts:
+            digits = phone_digits(p)
+            if digits:
+                if not 11 <= len(digits) <= 15:
+                    raise ValueError("Each transfer number must be a full phone number with country code, e.g. +91 98765 43210.")
+                valid_parts.append(f"+{digits}")
+        values["transfer_number"] = ",".join(valid_parts)
     for key, allowed in (("inbound_mode", ("ai", "forward")), ("after_hours_mode", ("ai", "forward", "message")),
                          ("forward_fallback", ("ai", "message"))):
         if key in values and values[key] not in allowed:

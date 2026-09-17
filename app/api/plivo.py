@@ -11,7 +11,7 @@ ring / hangup / recording -> lifecycle updates
 import asyncio
 
 import plivo.utils
-from fastapi import APIRouter, HTTPException, Request, Response, WebSocket
+from fastapi import APIRouter, HTTPException, Query, Request, Response, WebSocket
 from plivo import plivoxml
 
 from app.core.config import settings
@@ -504,3 +504,55 @@ async def voicemail(request: Request):
                     call_session.add_turn(session, "user", f"[Left a Voicemail: {url}]")
                     call_session.save(session)
     return {"ok": True}
+
+
+@router.post("/team-alert")
+async def plivo_team_alert(sid: str = Query(None)):
+    session = call_session.get(sid)
+    if not session:
+        return xml(plivoxml.ResponseElement())
+    
+    text = f"Urgent alert from AI Sales Agent. A customer needs immediate attention. They said: {session.get('team_action')}. Press any key to accept, or hang up."
+    
+    r = plivoxml.ResponseElement()
+    audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
+    speak(r, session, text, audio_id=audio_id)
+    
+    # Redirect to team-alert-done so the next action fires when the message finishes or they hang up
+    r.add(plivoxml.RedirectElement(f"{settings.base_url}/api/plivo/team-alert-done?sid={sid}", method="POST"))
+    return xml(r)
+
+@router.post("/team-alert-done")
+async def plivo_team_alert_done(sid: str = Query(None)):
+    session = call_session.get(sid)
+    if not session:
+        return xml(plivoxml.ResponseElement())
+        
+    customer_phone = session.get("customer_phone")
+    if customer_phone:
+        backcall_session = call_session.create(session["agent_id"], session["lead_id"], session.get("lead") or {}, "en-IN")
+        call_session.save(backcall_session)
+        
+        from app.services.plivo_service import PlivoService
+        try:
+            PlivoService().dial(customer_phone, backcall_session["id"], session.get("original_call_id"), max_minutes=2, endpoint="customer-alert")
+        except Exception as e:
+            from app.core.logging import get_logger
+            get_logger(__name__).error("Failed to dial customer back call: %s", e)
+            
+    r = plivoxml.ResponseElement()
+    r.add(plivoxml.HangupElement())
+    return xml(r)
+
+@router.post("/customer-alert")
+async def plivo_customer_alert(sid: str = Query(None)):
+    session = call_session.get(sid)
+    if not session:
+        return xml(plivoxml.ResponseElement())
+        
+    text = "Hi, this is the AI assistant calling back. I have informed the team about your urgent request, and they are acting on it now. Thank you."
+    r = plivoxml.ResponseElement()
+    audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
+    speak(r, session, text, audio_id=audio_id)
+    r.add(plivoxml.HangupElement())
+    return xml(r)

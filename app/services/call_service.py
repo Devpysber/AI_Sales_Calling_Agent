@@ -452,6 +452,8 @@ class CallService:
                 # slot nothing dials them back and the promise is silently dropped.
                 soon = 15 if str(s.get("urgent") or "").lower() in ("true", "yes", "1") else 60
                 callback_at = (datetime.now(IST) + timedelta(minutes=soon)).strftime("%Y-%m-%d %H:%M")
+                if soon == 15 and str(s.get("team_action") or "").strip():
+                    self._urgent_team_alert(lead_id, call_id, str(s.get("team_action")))
             if callback_at:
                 updates["callback_at"] = callback_at
                 updates.setdefault("follow_up_date", callback_at[:10])
@@ -495,6 +497,33 @@ class CallService:
                                 events.record("email.failed", f"Failed to send email to {target}: {err}", lead_id=lead_id, call_id=call_id, actor="system")
             if callback_at:
                 events.record("callback.scheduled", f"Callback scheduled for {callback_at}", lead_id=lead_id, call_id=call_id, actor="ai")
+
+    def _urgent_team_alert(self, lead_id: int, original_call_id: int, team_action: str):
+        from app.services.plivo_service import PlivoService
+        from app.services import agents, call_session
+        
+        profile = agents.get_profile(self.agent_id)
+        raw_numbers = profile.get("transfer_number", "")
+        transfer_numbers = [agents.phone_digits(n) for n in raw_numbers.replace(" ", "").split(",")]
+        transfer_numbers = [n for n in transfer_numbers if n]
+        if not transfer_numbers:
+            return
+            
+        team_number = f"+{transfer_numbers[0]}"
+        lead = self.crm.get(lead_id) or {}
+        
+        # Create a session for the outbound alert call
+        alert_session = call_session.create(agent_id=self.agent_id, lead_id=lead_id, lead=lead, language="en-IN")
+        alert_session["team_action"] = team_action
+        alert_session["original_call_id"] = original_call_id
+        alert_session["customer_phone"] = lead.get("phone")
+        call_session.save(alert_session)
+        
+        try:
+            PlivoService().dial(team_number, alert_session["id"], original_call_id, max_minutes=3, endpoint="team-alert")
+            log.info("Initiated urgent team alert to %s for call %s", team_number, original_call_id)
+        except Exception as e:
+            log.error("Failed to dial urgent team alert: %s", e)
 
     def _prewarm_audio(self, lead: dict, language: str, persona: dict):
         from app.api.plivo import PROMPTS  # local import: api layer imports this module

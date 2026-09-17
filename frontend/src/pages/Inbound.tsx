@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bot, Clock, MoonStar, PhoneForwarded, PhoneIncoming, PhoneMissed, Save, UserRound } from 'lucide-react'
+import { Bot, Clock, MoonStar, PhoneForwarded, PhoneIncoming, PhoneMissed, Save, UserRound, X } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -68,12 +68,10 @@ export default function Inbound() {
   if (!form || !data) return <><PageHeader title="Inbound & transfer" /><div className="grid gap-4 lg:grid-cols-2"><Skeleton className="h-80" /><Skeleton className="h-80" /></div></>
 
   const set = <K extends keyof Routing>(k: K, v: Routing[K]) => setForm((f) => (f ? { ...f, [k]: v } : f))
-  // The server stores 11-15 digits, i.e. a country code and then the line. Accepting 10 here let a
-  // bare Indian mobile through the form and the save came back rejected with the field still empty.
-  const transferDigits = form.transfer_number.replace(/\D/g, '').length
-  const hasNumber = transferDigits >= 11 && transferDigits <= 15
+  const tNums = (form.transfer_number || '').split(',').map(n => n.trim()).filter(n => n)
+  const hasNumber = tNums.length > 0 && tNums.every(n => { const d = n.replace(/\D/g, ''); return d.length >= 11 && d.length <= 15 })
   const numberError = form.transfer_number && !hasNumber
-    ? (transferDigits > 15 ? 'That is too long for a phone number.' : 'Include the country code, e.g. +91 98765 43210.')
+    ? 'All numbers must include the country code and be valid length, e.g. +91 98765 43210.'
     : undefined
   // Only a full international number can be dialled, so only those count as a backup line.
   const backups = (team.data?.members ?? []).filter((m) => {
@@ -139,9 +137,23 @@ export default function Inbound() {
             <CardHeader title="2 · Your team's number" description="Where calls go when a person should take over."
               action={<Badge tone={hasNumber ? 'success' : 'warning'} dot>{hasNumber ? 'Set' : 'Not set'}</Badge>} />
             <div className="space-y-3 px-5 pb-5">
-              <Field label="Transfer number" hint="Mobile or office line with country code, e.g. +91 98765 43210." error={numberError}>
-                <Input type="tel" inputMode="tel" value={form.transfer_number} onChange={(e) => set('transfer_number', e.target.value)} placeholder="Enter your team's number" maxLength={20} />
-              </Field>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="font-semibold">Team members</div>
+                  <button type="button" onClick={() => set('transfer_number', form.transfer_number ? form.transfer_number + ',' : ',')} className="text-xs font-semibold text-fg hover:underline">+ Add number</button>
+                </div>
+                <div className="text-[13px] text-muted mb-2">Mobile or office line with country code, e.g. +91 98765 43210.</div>
+                {numberError && <div className="text-xs font-medium text-destructive">{numberError}</div>}
+                {(form.transfer_number || '').split(',').map((num, i) => {
+                   const arr = (form.transfer_number || '').split(',')
+                   return (
+                     <div key={i} className="flex items-center gap-2">
+                       <Input type="tel" value={num} onChange={e => { arr[i] = e.target.value; set('transfer_number', arr.join(',')) }} placeholder="e.g. +91 98765 43210" maxLength={20} />
+                       <button type="button" onClick={() => { arr.splice(i, 1); set('transfer_number', arr.join(',')) }} className="text-muted hover:text-fg p-2"><X className="size-4" /></button>
+                     </div>
+                   )
+                })}
+              </div>
               {backups.length > 0 && (
                 <div className="rounded-xl border border-border px-3 py-2.5 text-sm">
                   <div className="font-semibold">If that line is busy, these ring next</div>
