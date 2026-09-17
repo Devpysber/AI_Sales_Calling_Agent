@@ -367,6 +367,13 @@ export default function AppShell({ user, role }: { user: string; role: string })
 
   useEffect(() => { setMobile(false) }, [location.pathname])
 
+  // Most workspace queries are keyed by path alone ('automation', 'knowledge', 'calls'…), so moving
+  // to another agent would show the previous agent's data until each refetch landed. Drop everything
+  // workspace-scoped when the agent changes; the agent list itself is shared and stays.
+  useEffect(() => {
+    qc.removeQueries({ predicate: (query) => query.queryKey[0] !== 'agents' })
+  }, [id, qc])
+
   const logout = useCallback(async () => {
     await api('/api/auth/logout', { method: 'POST' }).catch(() => undefined)
     qc.clear()

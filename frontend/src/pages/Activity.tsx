@@ -35,7 +35,9 @@ export default function Activity() {
   const [hideRoutine, setHideRoutine] = useState(true)
   const [callId, setCallId] = useState<number | null>(null)
   const query = useInfiniteQuery({
-    queryKey: ['activity', 'feed', type],
+    // Without the agent id the cache is shared between workspaces: opening a second agent showed
+    // the first one's history until the refetch landed.
+    queryKey: ['activity', 'feed', agent?.id, type],
     queryFn: ({ pageParam }) => api<ActivityEvent[]>(`${base}/activity`, { params: { type, before_id: pageParam, limit: 60 } }),
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (last) => (last.length === 60 ? last[last.length - 1]!.id : undefined),
@@ -93,7 +95,9 @@ export default function Activity() {
               <span><span className="block font-semibold">Hide routine runs</span><span className="text-xs text-muted">Repeated scheduler results</span></span>
               <Switch checked={hideRoutine} onChange={setHideRoutine} label="Hide routine automation runs" />
             </label>
-            <p className="text-xs text-muted">{query.isLoading ? 'Loading…' : `${total} event${total === 1 ? '' : 's'} shown`}</p>
+            <p className="text-xs text-muted">{query.isLoading ? 'Loading…' : `${total} event${total === 1 ? '' : 's'} shown`}
+              {/* Filtering happens on what has been loaded, so say so rather than implying the count is everything. */}
+              {!query.isLoading && q && query.hasNextPage ? ' — searching loaded events; use “Load older events” to go further back.' : ''}</p>
           </Card>
         </div>
 
