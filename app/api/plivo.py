@@ -17,6 +17,7 @@ from plivo import plivoxml
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services import agent, agents, call_session, tts
+from app.services import team_service
 from app.services.call_service import CallService, session_agent
 
 log = get_logger(__name__)
@@ -143,6 +144,11 @@ def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = N
     raw_numbers = persona.get("transfer_number", "")
     numbers = [agents.phone_digits(n) for n in raw_numbers.replace(" ", "").split(",")]
     numbers = [n for n in numbers if n]
+    # The agent's own transfer number rings first; if it is busy or nobody answers, the hunt carries
+    # on through the sales team's own lines rather than giving up on the caller.
+    for number in team_service.call_numbers():
+        if number not in numbers:
+            numbers.append(number)
     
     if idx >= len(numbers):
         return r
@@ -222,7 +228,7 @@ async def answer(request: Request):
             audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
             speak(r, session, text, audio_id=audio_id)
             r.add(plivoxml.RecordElement(action=f"{settings.base_url}/api/plivo/voicemail?cid={session['call_id']}",
-                                         method="POST", maxLength=120, playBeep=True))
+                                         method="POST", max_length=120, play_beep=True))
             return xml(r)
     if persona["record_calls"]:
         r.add(plivoxml.RecordElement(action=f"{settings.base_url}/api/plivo/recording?cid={session['call_id']}",
@@ -453,6 +459,20 @@ async def transfer_done(request: Request):
         asyncio.get_running_loop().run_in_executor(None, _notify_missed, session, persona, status)
 
     key = lang_key(session)
+    if persona.get("forward_fallback", "ai") == "ai":
+        # Fall back to AI
+        greeting = FALLBACK_LINES[key] if session else "Sorry, our team is busy."
+        if session:
+            call_session.add_turn(session, "assistant", greeting)
+            call_session.save(session)
+            if settings.voice_mode == "stream":
+                stream_url = settings.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1) + f"/api/plivo/stream?sid={session['id']}"
+                r.add(plivoxml.StreamElement(stream_url, bidirectional=True, keepCallAlive=True, contentType="audio/x-mulaw;rate=8000"))
+                return xml(r)
+            audio_id = await asyncio.to_thread(synthesize_to_id, greeting, session)
+            await asyncio.to_thread(listen, r, session, text=greeting if not audio_id else None, audio_id=audio_id)
+            return xml(r)
+
     text = ("Sorry, our team is not available right now. Please leave a message after the beep." if key == "en"
             else "माफ़ करना, हमारी टीम अभी व्यस्त है। कृपया बीप के बाद अपना संदेश छोड़ें।")
     if session:
@@ -460,7 +480,7 @@ async def transfer_done(request: Request):
         speak(r, session, text, audio_id=audio_id)
         # Record voicemail up to 2 minutes
         r.add(plivoxml.RecordElement(action=f"{settings.base_url}/api/plivo/voicemail?cid={session['call_id']}",
-                                     method="POST", maxLength=120, playBeep=True))
+                                     method="POST", max_length=120, play_beep=True))
     else:
         r.add(plivoxml.SpeakElement(text, voice="WOMAN", language="en-IN"))
         r.add(plivoxml.HangupElement())

@@ -69,6 +69,7 @@ def test_usage_cost_estimate(monkeypatch):
 
     assert _usage_fields({"tts_chars": 120.0, "stt_seconds": 33.333, "llm_requests": 4}) == {"tts_chars": 120, "stt_seconds": 33.3, "llm_requests": 4}
     assert _usage_fields(None) == {}
+    monkeypatch.setattr("app.services.settings_service.SettingsService.get_state", lambda self, key: {})
     monkeypatch.setattr(settings, "cost_per_call_minute", 1.0)
     monkeypatch.setattr(settings, "cost_per_10k_tts_chars", 10.0)
     monkeypatch.setattr(settings, "cost_per_stt_hour", 30.0)

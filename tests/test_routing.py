@@ -37,7 +37,7 @@ def test_forward_and_closed_message(client, support, monkeypatch):
 
     monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: False)
     xml = _answer(client, "closed-1")
-    assert "<Hangup" in xml and "<Dial" not in xml
+    assert "<Record" in xml and "<Dial" not in xml
     assert webhooks.inbound_route({"after_hours_mode": "forward", "transfer_number": ""}, support) == "ai"
 
     # Unanswered transfer: caller hears an apology instead of dead air
@@ -80,7 +80,7 @@ def test_unanswered_forward_falls_back_to_ai(client, support, monkeypatch):
 
     client.put(f"/api/agents/{support}/profile", json={"forward_fallback": "message"})
     xml = client.post(f"/api/plivo/transfer-done?sid={session['id']}", data={"DialStatus": "busy"}).text
-    assert "<Stream" not in xml and "<Hangup" in xml
+    assert "<Stream" not in xml and "<Record" in xml
 
 
 def test_alerts_summary_and_snooze(client, monkeypatch):

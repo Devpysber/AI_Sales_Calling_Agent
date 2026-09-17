@@ -165,6 +165,7 @@ async def voice_preview(body: Preview, agent_id: int = Depends(workspace)):
 
 
 class PlaygroundMessage(BaseModel):
+    message: str = ""
     purpose: str | None = None
     lead_id: int | None = None
     history: list[dict] = Field(default_factory=list)
@@ -179,7 +180,10 @@ async def playground(body: PlaygroundMessage, agent_id: int = Depends(workspace)
         lead = {**lead, "call_purpose": body.purpose, "call_goal": goal}
     history = [t.model_dump() for t in body.history]
     try:
-        return await agent.turn(agent_id, history, lead)
+        res = await asyncio.to_thread(agent.respond, agent_id, history, body.message, lead)
+        audio_id = await asyncio.to_thread(tts.cached_audio_id, res["reply"], res.get("language") or "en-IN", agents.get_profile(agent_id)["voice_speaker"])
+        res["audio_url"] = tts.audio_url(audio_id) if audio_id else ""
+        return res
     except LLMError as e:
         raise HTTPException(502, str(e))
 

@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services import agents, llm, rag
+from app.services import agents, llm, rag, team_service
 from app.services.tts import LANGUAGES
 
 log = get_logger(__name__)
@@ -234,6 +234,8 @@ def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: i
         "If the answer is not in the knowledge base, politely state you will have a human follow up. "
         "Never add services, prices or claims that are not written there. DO NOT hallucinate."
     )
+    # Who the agent can honestly name when it promises a human will follow up.
+    team_lines = chr(10).join(team_service.directory_lines()) or "- No named colleagues: say 'our team' rather than inventing a name."
     lead_lines = "\n".join(f"- {label}: {lead.get(key)}" for key, label in [
         ("name", "Name"), ("company", "Company"), ("city", "City"), ("status", "Current status"),
         ("qualification", "Previous qualification"), ("summary", "Previous call summary"),
@@ -316,6 +318,11 @@ Primary call to action: {persona['call_to_action']}
 - Email addresses: use exactly what they said. Never add or remove a dot, and never turn a spoken name into "first.last". If they correct it ("dot nahi hai", "directly likhna hai"), repeat the corrected address back once and use only that from then on.
 - When a meeting is agreed, confirm day and time back to them, convert relative dates using today's date, fill crm_update.meeting_at, then wrap up.
 - Set end_call true only after your closing line.
+
+# The team behind you
+{team_lines}
+Name a colleague only from this list, and only when it helps the caller ("Rohit aapko call karega").
+Never invent a person, and never read out a colleague's phone number or email to a caller.
 
 # Today
 {now:%A, %d %B %Y, %H:%M} IST

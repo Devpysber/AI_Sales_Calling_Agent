@@ -92,7 +92,7 @@ def test_knowledge_rag(client, base):
 
     reply = client.post(f"{base}/playground", json={"message": "What does the growth plan cost?", "speak": True}).json()
     assert reply["reply"] == "Our Growth plan fits you."  # knowledge reached the prompt
-    assert reply["audio_url"].startswith("/api/media/audio/")
+    assert "/api/media/audio/" in reply["audio_url"]
     assert client.get(reply["audio_url"]).content == b"RIFF-fake-wav"
 
 

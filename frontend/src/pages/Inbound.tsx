@@ -28,6 +28,13 @@ export default function Inbound() {
     queryFn: () => api<Page<Call>>(`${base}/calls`, { params: { direction: 'inbound', page_size: 25 } }),
     refetchInterval: (q) => (q.state.data?.items.some((c) => ['Ringing', 'In Progress'].includes(c.status)) ? 2000 : 6000),
   })
+  // Forwarded calls hunt the agent's number first, then the team's own lines, so show who is in that
+  // queue here. The endpoint is admin-only: a team member sees nothing rather than an error.
+  const team = useQuery({
+    queryKey: ['team-members'],
+    queryFn: () => api<{ members: { id: string; name: string; role?: string; phone?: string }[] }>('/api/system/team-members'),
+    retry: false,
+  })
   const [form, setForm] = useState<Routing | null>(null)
   const [callId, setCallId] = useState<number | null>(null)
   useEffect(() => { if (data && !form) setForm(Object.fromEntries(KEYS.map((k) => [k, data.profile[k]])) as Routing) }, [data, form])
@@ -68,6 +75,11 @@ export default function Inbound() {
   const numberError = form.transfer_number && !hasNumber
     ? (transferDigits > 15 ? 'That is too long for a phone number.' : 'Include the country code, e.g. +91 98765 43210.')
     : undefined
+  // Only a full international number can be dialled, so only those count as a backup line.
+  const backups = (team.data?.members ?? []).filter((m) => {
+    const d = (m.phone ?? '').replace(/\D/g, '')
+    return d.length >= 11 && d.length <= 15
+  })
   const dirty = KEYS.some((k) => JSON.stringify(form[k]) !== JSON.stringify(data.profile[k]))
   const cfg = automation.data?.settings
   const hours = cfg ? `${cfg.calling_hours_start}:00 – ${cfg.calling_hours_end}:00 IST` : '…'
@@ -130,6 +142,20 @@ export default function Inbound() {
               <Field label="Transfer number" hint="Mobile or office line with country code, e.g. +91 98765 43210." error={numberError}>
                 <Input type="tel" inputMode="tel" value={form.transfer_number} onChange={(e) => set('transfer_number', e.target.value)} placeholder="Enter your team's number" maxLength={20} />
               </Field>
+              {backups.length > 0 && (
+                <div className="rounded-xl border border-border px-3 py-2.5 text-sm">
+                  <div className="font-semibold">If that line is busy, these ring next</div>
+                  <ul className="mt-1.5 space-y-1 text-xs text-fg-2">
+                    {backups.map((m) => (
+                      <li key={m.id} className="flex items-center justify-between gap-2">
+                        <span>{m.name}{m.role ? ` · ${m.role}` : ''}</span>
+                        <span className="font-mono text-muted">{m.phone}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-1.5 text-[11.5px] text-muted">From Sales Team Accounts, in the order they were added.</p>
+                </div>
+              )}
               <label className={cn('flex items-center gap-3 rounded-xl border border-border px-3 py-2.5 text-sm', !hasNumber && 'opacity-50')}>
                 <UserRound className="size-4 text-fg-2" />
                 <span className="flex-1"><span className="block font-semibold">AI transfers when a caller asks for a person</span><span className="text-xs text-muted">The agent says it is connecting them, then your number rings.</span></span>
