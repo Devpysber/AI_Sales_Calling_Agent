@@ -1,6 +1,10 @@
 
+// A deploy replaces the hashed chunks an already-open tab still points at, so a lazy import can 404.
+// One reload picks up the new index.html; reloading again would only loop if the chunk is truly gone.
 window.addEventListener('error', (e) => {
   if (e.message && e.message.includes('Failed to fetch dynamically imported module')) {
+    if (sessionStorage.getItem('chunk-reloaded')) return
+    try { sessionStorage.setItem('chunk-reloaded', '1') } catch { /* storage unavailable */ }
     window.location.reload();
   }
 });

@@ -348,6 +348,10 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
 
 /* ---------------- Shell ---------------- */
 
+// Dropped on every agent switch except these: the session, the agent list and system-level state are
+// app-wide, and removing them would unmount the tree that renders this shell.
+const APP_WIDE_QUERIES = new Set(['agents', 'me', 'system'])
+
 export default function AppShell({ user, role }: { user: string; role: string }) {
   const [mobile, setMobile] = useState(false)
   const [compact, setCompact] = useStoredBoolean('sidebar-compact', false)
@@ -371,7 +375,7 @@ export default function AppShell({ user, role }: { user: string; role: string })
   // to another agent would show the previous agent's data until each refetch landed. Drop everything
   // workspace-scoped when the agent changes; the agent list itself is shared and stays.
   useEffect(() => {
-    qc.removeQueries({ predicate: (query) => query.queryKey[0] !== 'agents' })
+    qc.removeQueries({ predicate: (query) => !APP_WIDE_QUERIES.has(String(query.queryKey[0])) })
   }, [id, qc])
 
   const logout = useCallback(async () => {

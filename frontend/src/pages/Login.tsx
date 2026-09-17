@@ -23,6 +23,7 @@ export default function Login() {
       navigate(from === '/login' ? '/' : from, { replace: true })
     } catch (err) {
       setError((err as Error).message)
+    } finally {
       setLoading(false)
     }
   }
