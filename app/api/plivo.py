@@ -17,7 +17,6 @@ from plivo import plivoxml
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services import agent, agents, call_session, tts
-from app.services import team_service
 from app.services.call_service import CallService, session_agent
 
 log = get_logger(__name__)
@@ -144,11 +143,7 @@ def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = N
     raw_numbers = persona.get("transfer_number", "")
     numbers = [agents.phone_digits(n) for n in raw_numbers.replace(" ", "").split(",")]
     numbers = [n for n in numbers if n]
-    # The agent's own transfer number rings first; if it is busy or nobody answers, the hunt carries
-    # on through the sales team's own lines rather than giving up on the caller.
-    for number in team_service.call_numbers():
-        if number not in numbers:
-            numbers.append(number)
+    # The agent's own transfer number rings first (which contains all its team members).
     
     if idx >= len(numbers):
         return r

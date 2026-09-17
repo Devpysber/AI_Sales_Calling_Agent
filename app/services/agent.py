@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services import agents, llm, rag, team_service
+from app.services import agents, llm, rag
 from app.services.tts import LANGUAGES
 
 log = get_logger(__name__)
@@ -235,7 +235,9 @@ def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: i
         "Never add services, prices or claims that are not written there. DO NOT hallucinate."
     )
     # Who the agent can honestly name when it promises a human will follow up.
-    team_lines = chr(10).join(team_service.directory_lines()) or "- No named colleagues: say 'our team' rather than inventing a name."
+    _members = persona.get("team_members") or []
+    _t_lines = [f"- {(m.get('name') or '').strip()} — {(m.get('role') or 'Sales').strip()}" for m in _members if (m.get('name') or '').strip()]
+    team_lines = chr(10).join(_t_lines) or "- No named colleagues: say 'our team' rather than inventing a name."
     lead_lines = "\n".join(f"- {label}: {lead.get(key)}" for key, label in [
         ("name", "Name"), ("company", "Company"), ("city", "City"), ("status", "Current status"),
         ("qualification", "Previous qualification"), ("summary", "Previous call summary"),
