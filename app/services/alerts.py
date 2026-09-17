@@ -229,15 +229,19 @@ def _routing() -> list[dict]:
     return cached
 
 
-def summary(force: bool = False) -> dict:
-    balances = credits(force)
-    items = _routing() + reminders()
-    for p in balances["providers"]:
-        if p["level"] in ("low", "critical"):
-            items.insert(0, {"key": f"credit:{p['provider']}:{p['level']}", "agent_id": None, "agent": None, "kind": "credit",
-                             "level": "danger" if p["level"] == "critical" else "warning", "count": 1, "to": p["action"]["url"] if p.get("action") else "/settings",
-                             "external": True, "action": p["action"]["label"] if p.get("action") else None, "when": None,
-                             "text": f"{p['provider']}: {p['value']} · {p['detail']}"})
+def summary(force: bool = False, unlocked: list[int] | None = None) -> dict:
+    if unlocked is not None:
+        balances = {"providers": [], "checked_at": int(time.time())}
+        items = [i for i in reminders() if i["agent_id"] in unlocked]
+    else:
+        balances = credits(force)
+        items = _routing() + reminders()
+        for p in balances["providers"]:
+            if p["level"] in ("low", "critical"):
+                items.insert(0, {"key": f"credit:{p['provider']}:{p['level']}", "agent_id": None, "agent": None, "kind": "credit",
+                                 "level": "danger" if p["level"] == "critical" else "warning", "count": 1, "to": p["action"]["url"] if p.get("action") else "/settings",
+                                 "external": True, "action": p["action"]["label"] if p.get("action") else None, "when": None,
+                                 "text": f"{p['provider']}: {p['value']} · {p['detail']}"})
     snoozed = _snoozed()
     visible = [i for i in items if i["key"] not in snoozed]
     popup = next((p for p in balances["providers"] if p["level"] == "critical" and f"popup:{p['provider']}" not in snoozed), None)

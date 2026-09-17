@@ -83,8 +83,10 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
             <button type="button" onClick={() => setOpen(false)} className="grid size-7 place-items-center rounded-lg text-muted hover:bg-surface-2" aria-label="Close"><X className="size-4" /></button>
           </div>
           <div className="flex gap-1 border-b border-border px-3 py-2">
-            {([['reminders', `Reminders${items.length ? ` · ${items.length}` : ''}`], ['balances', `Balances${lowBalances ? ` · ${lowBalances} low` : ''}`]] as const).map(([k, l]) => (
-              <button key={k} type="button" onClick={() => setTab(k)} className={cn('rounded-lg px-2.5 py-1 text-xs font-semibold', tab === k ? 'bg-fg text-bg' : 'text-muted hover:bg-surface-2')}>{l}</button>
+            {([['reminders', `Reminders${items.length ? ` · ${items.length}` : ''}`]] as const)
+              .concat((data?.balances?.length ? [['balances', `Balances${lowBalances ? ` · ${lowBalances} low` : ''}`]] : []) as any)
+              .map(([k, l]) => (
+              <button key={k} type="button" onClick={() => setTab(k as any)} className={cn('rounded-lg px-2.5 py-1 text-xs font-semibold', tab === k ? 'bg-fg text-bg' : 'text-muted hover:bg-surface-2')}>{l}</button>
             ))}
           </div>
 

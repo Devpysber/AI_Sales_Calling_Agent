@@ -156,10 +156,13 @@ async def inbound_restore():
 
 
 @router.get("/system/alerts")
-async def alerts(refresh: bool = False):
+async def alerts(request: Request, refresh: bool = False):
     """Navbar bell: reminders across agents plus live provider balances (cached briefly; refresh=true re-fetches)."""
+    user = getattr(request.state, "user", "admin")
+    payload = getattr(request.state, "token_payload", {})
+    unlocked = payload.get("unlocked", []) if user == "team" else None
     from app.services import alerts as alert_service
-    return await asyncio.to_thread(alert_service.summary, refresh)
+    return await asyncio.to_thread(alert_service.summary, refresh, unlocked)
 
 
 @router.post("/system/alerts/snooze")
