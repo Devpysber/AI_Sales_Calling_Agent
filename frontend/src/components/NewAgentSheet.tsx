@@ -79,7 +79,7 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
     const t = TEMPLATES.find((x) => x.id === template)!
     // Only send what was filled in: blanks keep the copied agent's (or the default) values.
     const profile: Record<string, string> = Object.fromEntries(
-      (['agent_name', 'company_name', 'company_tagline', 'website_url', 'voice_speaker', 'default_language', 'objective', 'call_to_action', 'instructions'] as const)
+      (['agent_name', 'company_name', 'company_tagline', 'website_url', 'voice_speaker', 'default_language', 'objective', 'call_to_action', 'instructions', 'agent_password'] as const)
         .map((k) => [k, (f[k] ?? '').trim()]).filter(([, v]) => v))
     if (!copyFrom) {
       profile.objective ??= t.objective
@@ -108,6 +108,9 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
             <Input name="website_url" type="url" placeholder="https://www.yourwebsite.com" maxLength={200} />
           </Field>
           <Field label="Phone number" hint="Plivo number for caller ID and inbound calls. Leave blank to use the default number."><Input name="phone_number" inputMode="tel" placeholder="+91 80 1234 5678" /></Field>
+          <Field label="Agent passcode" hint="Require team members to enter this password to open this workspace's CRM. Leave empty for open access.">
+            <Input name="agent_password" type="password" placeholder="No passcode required" />
+          </Field>
         </section>
 
         <section className="space-y-4 border-t border-border pt-5">
