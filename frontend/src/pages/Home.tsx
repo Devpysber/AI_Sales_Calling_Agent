@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import {
   AlertTriangle, ArrowUpRight, AudioWaveform, ChartBar, BookOpen, CalendarCheck, CalendarClock, Cpu, Flame, LayoutGrid, List, ListOrdered, Mail, MessageSquareText, Pause, Phone,
-  PhoneCall, PhoneIncoming, Play, Plus, Radio, Search, Settings, Sparkles, Timer, TrendingUp, Upload, Users,
+  PhoneCall, PhoneIncoming, Play, Plus, Radio, Search, Settings, Sparkles, TrendingUp, Upload, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useMemo, useState } from 'react'
@@ -14,6 +14,7 @@ import { CallStatusBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, Input, PageHeader, Ring, Select, Skeleton, StatTile, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
 import { Stagger } from '@/lib/motion'
+import { VoiceOrb } from '@/components/VoiceViz'
 import type { AgentOverviewItem, AgentsOverview } from '@/lib/types'
 import { callParty, cn, formatDuration, LANGUAGES, timeAgo } from '@/lib/utils'
 
@@ -330,6 +331,7 @@ export default function Home() {
   return (
     <>
       <PageHeader
+        visual={<VoiceOrb state={totals.live ? 'live' : 'idle'} size={76} />}
         eyebrow={<><Radio className="size-3.5" />Command center · {new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</>}
         title={`${greeting}.`}
         description={`${agents.length} agent${agents.length > 1 ? 's' : ''} · ${totals.live ? `${totals.live} call${totals.live > 1 ? 's' : ''} live right now` : 'no calls live right now'} · ${totals.today} call${totals.today === 1 ? '' : 's'} today`}
@@ -457,7 +459,7 @@ export default function Home() {
                   </Link>
                 )
               }) : (
-                <div className="dot-grid grid h-24 place-items-center rounded-xl text-xs font-semibold text-muted"><span className="flex items-center gap-2"><Timer className="size-4" />Waiting for the next call</span></div>
+                <div className="dot-grid grid h-28 place-items-center rounded-xl text-xs font-semibold text-muted"><span className="flex items-center gap-3"><VoiceOrb state="listening" size={48} />Waiting for the next call</span></div>
               )}
             </div>
           </Card>

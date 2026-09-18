@@ -13,6 +13,7 @@ import { CallStatusBadge, QualificationBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, EmptyState, Meter, PageHeader, Skeleton, StatTile, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
 import { Stagger } from '@/lib/motion'
+import { VoiceOrb } from '@/components/VoiceViz'
 import { useAgent } from '@/lib/agent'
 import type { ActivityEvent, Call, CallStats, Lead, LeadStats, Page } from '@/lib/types'
 import { callHandledBy, callParty, cn, formatDate, formatDuration, LANGUAGES, timeAgo, titleCase } from '@/lib/utils'
@@ -78,6 +79,7 @@ export default function Dashboard() {
   return (
     <>
       <PageHeader
+        visual={<VoiceOrb state={live.data?.items.length ? 'live' : 'idle'} size={76} />}
         eyebrow={<>
           <span className="flex items-center gap-1.5"><LiveDot on={agent.stats.live > 0} />{agent.stats.live ? `${agent.stats.live} live` : 'Agent overview'}</span>
           {agent.status === 'paused' && <Badge tone="warning"><Pause className="size-2.5" />Paused</Badge>}
@@ -145,7 +147,7 @@ export default function Dashboard() {
               </button>
             )) : (
               <div className="dot-grid grid h-full min-h-40 place-items-center rounded-xl text-center text-xs font-semibold text-muted">
-                <div><PhoneCall className="mx-auto mb-2 size-5" />Calls appear here the moment they start</div>
+                <div className="flex flex-col items-center gap-3"><VoiceOrb state="listening" size={64} />Listening for the next call</div>
               </div>
             )}
           </div>

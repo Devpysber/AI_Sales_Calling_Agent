@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Activity, AudioWaveform, BarChart3, BookOpen, Bot, CalendarClock, Check, ChevronsLeft, ChevronsRight, ChevronsUpDown, Columns3,
+  Activity, BarChart3, BookOpen, Bot, CalendarClock, Check, ChevronsLeft, ChevronsRight, ChevronsUpDown, Columns3,
   Download, Keyboard, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Lock, Mail, Menu, MessageSquareText, Moon, Pause, PhoneCall, Plus, Search, Settings,
   SlidersHorizontal, Sparkles, Sun, Upload, UserPlus, Users, X,
 } from 'lucide-react'
@@ -11,6 +11,8 @@ import AlertsBell from '@/components/AlertsBell'
 import { CommandPalette, type Command } from '@/components/CommandPalette'
 import NewAgentSheet from '@/components/NewAgentSheet'
 import { Button, Spinner, Input, Dialog } from '@/components/ui'
+import { Waveform } from '@/components/VoiceViz'
+import { getMotionSetting, setMotionSetting, type MotionSetting } from '@/lib/motion'
 import { api } from '@/lib/api'
 import { AgentProvider, useAgents } from '@/lib/agent'
 import type { AgentSummary } from '@/lib/types'
@@ -88,6 +90,22 @@ export function LiveDot({ on, className }: { on: boolean; className?: string }) 
       {on && <span className="absolute inset-0 animate-live-ring rounded-full bg-success/60" />}
       <span className={cn('relative size-2 rounded-full', on ? 'bg-success' : 'bg-ink-muted/50')} />
     </span>
+  )
+}
+
+
+/** Motion: follow Windows, always on, or off. Battery saver turns Windows animations off silently. */
+function MotionToggle() {
+  const [setting, setSetting] = useState<MotionSetting>(getMotionSetting)
+  const next: Record<MotionSetting, MotionSetting> = { system: 'full', full: 'off', off: 'system' }
+  const label: Record<MotionSetting, string> = { system: 'Motion: follow Windows', full: 'Motion: always on', off: 'Motion: off' }
+  return (
+    <button type="button" title={`${label[setting]} (click to change)`} aria-label={label[setting]}
+      onClick={() => { const n = next[setting]; setMotionSetting(n); setSetting(n); toast(label[n]) }}
+      className={cn('grid size-9 place-items-center rounded-xl hover:bg-ink-fg/5 hover:text-ink-fg',
+        setting === 'full' ? 'text-ink-fg' : 'text-ink-muted')}>
+      <Waveform bars={3} active={setting !== 'off'} className="h-3.5" />
+    </button>
   )
 }
 
@@ -198,7 +216,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
   return (
     <div className={cn('flex h-full flex-col border-r border-border bg-ink text-ink-fg', mobile ? 'w-72' : compact ? 'w-[76px]' : 'w-[272px]', 'transition-[width] duration-200')}>
       <div className={cn('flex items-center gap-2.5 pt-4 pb-3', compact ? 'flex-col px-2' : 'px-4')}>
-        <Link to="/" className="grid size-9 shrink-0 place-items-center rounded-xl bg-ink-fg text-ink shadow-sm"><AudioWaveform className="size-5" /></Link>
+        <Link to="/" className="grid size-9 shrink-0 place-items-center rounded-xl bg-ink-fg text-ink shadow-sm"><Waveform bars={4} className="h-4" /></Link>
         {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="text-[15px] font-extrabold tracking-tight">Samvaad AI</div><div className="text-[11px] text-ink-muted">Multi-agent calling</div></div>}
         {!mobile && (
           <button type="button" onClick={() => setCompact(!compact)} title={compact ? 'Expand sidebar ( [ )' : 'Collapse sidebar ( [ )'}
@@ -340,6 +358,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
           <AlertsBell compact={compact} />
           <button type="button" onClick={onHelp} title="Keyboard shortcuts (?)" className="grid size-9 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg"><Keyboard className="size-4" /></button>
           <button type="button" onClick={() => setDark(!dark)} title="Toggle theme" className="grid size-9 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg">{dark ? <Sun className="size-4" /> : <Moon className="size-4" />}</button>
+          <MotionToggle />
         </div>
         <div className={cn('mt-2 flex items-center gap-2.5 rounded-xl bg-ink-fg/[0.04] p-2', compact && 'justify-center')}>
           <Link to={role === 'team' ? '#' : '/profile'} title={role === 'team' ? 'Team Member' : 'Admin profile'} className={cn('flex min-w-0 items-center gap-2.5 rounded-lg transition hover:opacity-80', !compact && 'flex-1')}>

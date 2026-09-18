@@ -16,15 +16,48 @@ import {
 } from 'react'
 import { cn } from '@/lib/utils'
 
+/**
+ * Motion preference: 'system' follows the OS, 'full' plays animations even when Windows has
+ * "Animation effects" off (battery saver switches it off without asking), 'off' stops them.
+ * Stored per browser and applied as data-motion on <html>, which index.css reads.
+ */
+export type MotionSetting = 'system' | 'full' | 'off'
+const MOTION_KEY = 'motion'
+const MOTION_EVENT = 'motion:changed'
+
+export function getMotionSetting(): MotionSetting {
+  try {
+    const v = localStorage.getItem(MOTION_KEY)
+    return v === 'full' || v === 'off' ? v : 'system'
+  } catch { return 'system' }
+}
+
+export function applyMotionSetting(setting: MotionSetting = getMotionSetting()) {
+  const root = document.documentElement
+  if (setting === 'system') root.removeAttribute('data-motion')
+  else root.setAttribute('data-motion', setting)
+}
+
+export function setMotionSetting(setting: MotionSetting) {
+  try { localStorage.setItem(MOTION_KEY, setting) } catch { /* storage unavailable: applies for this tab only */ }
+  applyMotionSetting(setting)
+  window.dispatchEvent(new Event(MOTION_EVENT))
+}
+
+function reducedNow(): boolean {
+  const setting = getMotionSetting()
+  if (setting !== 'system') return setting === 'off'
+  return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
 export function useReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(() =>
-    typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches)
+  const [reduced, setReduced] = useState(reducedNow)
   useEffect(() => {
-    if (typeof matchMedia !== 'function') return
-    const mq = matchMedia('(prefers-reduced-motion: reduce)')
-    const onChange = () => setReduced(mq.matches)
-    mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
+    const onChange = () => setReduced(reducedNow())
+    const mq = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null
+    mq?.addEventListener('change', onChange)
+    window.addEventListener(MOTION_EVENT, onChange)
+    return () => { mq?.removeEventListener('change', onChange); window.removeEventListener(MOTION_EVENT, onChange) }
   }, [])
   return reduced
 }

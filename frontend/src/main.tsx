@@ -17,7 +17,11 @@ import { Toaster } from 'sonner'
 import App from './App'
 import { ConfirmProvider } from './components/ui'
 import { ApiError } from './lib/api'
+import { applyMotionSetting } from './lib/motion'
 import './index.css'
+
+// Before the first render, so a stored "motion on" choice is in place for the very first entrance.
+applyMotionSetting()
 
 const queryClient = new QueryClient({
   defaultOptions: {

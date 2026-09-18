@@ -11,6 +11,7 @@ import { Badge, Button, Card, CardHeader, Field, Input, PageHeader, Select, Skel
 import { api } from '@/lib/api'
 import type { AgentProfile, AgentTurnResult, KnowledgeDoc, Lead, Page, Turn } from '@/lib/types'
 import { cn, LANGUAGES, titleCase } from '@/lib/utils'
+import { VoiceOrb, Waveform } from '@/components/VoiceViz'
 import { useAgent } from '@/lib/agent'
 
 type ProfileResponse = { profile: AgentProfile; voices: string[]; languages: Record<string, string> }
@@ -450,10 +451,8 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
       <Card className="flex h-[calc(100vh-290px)] min-h-[540px] flex-col overflow-hidden">
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
           <div className="mr-auto flex min-w-0 items-center gap-2.5">
-            <span className="relative grid size-9 shrink-0 place-items-center rounded-xl bg-brand text-sm font-bold text-brand-fg">
-              {(profile.agent_name || 'A').slice(0, 1)}
-              <span className={cn('absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-surface', send.isPending ? 'animate-pulse bg-warning' : 'bg-success')} />
-            </span>
+            {/* The agent's orb: calm while it waits for you, spinning up while it thinks of a reply. */}
+            <VoiceOrb state={send.isPending ? 'speaking' : ended ? 'idle' : 'listening'} size={40} />
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold">{profile.agent_name} · {profile.company_name}</div>
               <div className="truncate text-xs text-muted">{inbound ? 'Rehearsing an inbound call' : 'Rehearsing an outbound call'} · voice {titleCase(profile.voice_speaker)} · nothing is saved to the CRM</div>
@@ -513,7 +512,7 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
           })}
           {send.isPending && (
             <div className="reveal reveal-in reveal-left flex gap-2.5"><span className="grid size-7 place-items-center rounded-full bg-brand text-brand-fg"><Bot className="size-3.5" /></span>
-              <div className="flex items-center gap-1 rounded-2xl rounded-tl-sm bg-surface px-4 py-3 ring-1 ring-border">{[0, 1, 2].map((d) => <span key={d} className="size-1.5 animate-pulse-dot rounded-full bg-muted" style={{ animationDelay: `${d * 150}ms` }} />)}</div>
+              <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm bg-surface px-4 py-2.5 text-xs text-muted ring-1 ring-border"><Waveform bars={7} className="h-4 text-fg" />Thinking…</div>
             </div>
           )}
           {ended && (

@@ -236,13 +236,70 @@ kbd {
 }
 
 /* Respect the OS setting: the dashboard still updates, it just stops moving. */
+/* Respect the OS setting, unless the user switched motion on in the app (sidebar → Motion):
+   Windows turns "Animation effects" off on battery saver, which would otherwise freeze the
+   whole dashboard without the user ever having asked for that. data-motion="off" forces it off. */
 @media (prefers-reduced-motion: reduce) {
-  /* Belt and braces: a reveal must be visible even if its animation never runs at all. */
-  .reveal { opacity: 1 !important; }
-  .lift:hover { transform: none; }
-  *, *::before, *::after {
+  html:not([data-motion="full"]) .reveal { opacity: 1 !important; }
+  html:not([data-motion="full"]) .lift:hover { transform: none; }
+  html:not([data-motion="full"]) *, html:not([data-motion="full"]) *::before, html:not([data-motion="full"]) *::after {
     animation-duration: .001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: .001ms !important;
   }
+}
+html[data-motion="off"] .reveal { opacity: 1 !important; }
+html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="off"] *::after {
+  animation-duration: .001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: .001ms !important;
+}
+
+/* ---------------- Voice visuals (components/VoiceViz.tsx) ---------------- */
+
+@keyframes orb-spin { to { transform: rotate(360deg); } }
+@keyframes orb-breathe { 50% { transform: scale(1.045); } }
+@keyframes orb-ring { 0% { transform: scale(.9); opacity: .5; } 100% { transform: scale(1.75); opacity: 0; } }
+@keyframes orb-halo { 50% { opacity: .95; transform: scale(1.06); } }
+@keyframes wave-bar { 0%, 100% { transform: scaleY(.28); } 50% { transform: scaleY(1); } }
+@keyframes aurora-a { 50% { transform: translate3d(8%, 12%, 0) scale(1.15); } }
+@keyframes aurora-b { 50% { transform: translate3d(-10%, -6%, 0) scale(1.1); } }
+@keyframes aurora-c { 50% { transform: translate3d(4%, -10%, 0) scale(1.2); } }
+
+.voice-orb { --orb-a: #6d7cff; --orb-b: #22d3a6; --orb-c: #f472b6; }
+.voice-orb .orb-body {
+  background: radial-gradient(circle at 35% 30%, #2a2f55, #0b0d18 70%);
+  box-shadow: inset 0 0 24px rgb(0 0 0 / .6), 0 10px 40px -12px color-mix(in srgb, var(--orb-a) 70%, transparent);
+  animation: orb-breathe calc(var(--orb-speed) / 2) ease-in-out infinite;
+}
+.voice-orb .orb-swirl {
+  background: conic-gradient(from 0deg, var(--orb-a), var(--orb-b), var(--orb-c), var(--orb-a));
+  filter: blur(14px); opacity: .75; mix-blend-mode: screen;
+  animation: orb-spin var(--orb-speed) linear infinite;
+}
+.voice-orb .orb-swirl-2 { animation-direction: reverse; animation-duration: calc(var(--orb-speed) * 1.6); opacity: .45; }
+.voice-orb .orb-gloss { background: radial-gradient(circle at 32% 24%, rgb(255 255 255 / .45), transparent 42%); }
+.voice-orb .orb-halo {
+  background: radial-gradient(circle, color-mix(in srgb, var(--orb-a) 35%, transparent), transparent 62%);
+  opacity: .55; animation: orb-halo calc(var(--orb-speed) / 2) ease-in-out infinite;
+}
+.voice-orb .orb-ring { border: 1.5px solid color-mix(in srgb, var(--orb-b) 70%, transparent); animation: orb-ring 2.2s var(--ease-entrance) infinite; }
+.voice-orb.is-active .orb-body { box-shadow: inset 0 0 24px rgb(0 0 0 / .5), 0 12px 50px -8px color-mix(in srgb, var(--orb-b) 80%, transparent); }
+
+.waveform .wave-bar { transform: scaleY(.28); transform-origin: center; transition: transform .3s var(--ease-pointer); }
+.waveform.is-active .wave-bar { animation-name: wave-bar; animation-timing-function: ease-in-out; animation-iteration-count: infinite; }
+
+.aurora { mask-image: linear-gradient(to bottom, #000 40%, transparent); }
+.aurora-blob { position: absolute; border-radius: 9999px; filter: blur(60px); opacity: .22; }
+.dark .aurora-blob { opacity: .28; }
+.aurora-a { width: 44%; height: 160%; left: -6%; top: -60%; background: #6d7cff; animation: aurora-a 18s ease-in-out infinite; }
+.aurora-b { width: 38%; height: 150%; left: 38%; top: -70%; background: #22d3a6; animation: aurora-b 22s ease-in-out infinite; }
+.aurora-c { width: 34%; height: 140%; right: -4%; top: -55%; background: #f472b6; animation: aurora-c 26s ease-in-out infinite; }
+
+/* Headline text with light passing through it. */
+@keyframes text-sheen { to { background-position: -200% 0; } }
+.text-sheen {
+  background: linear-gradient(100deg, var(--fg) 40%, color-mix(in srgb, var(--fg) 45%, #6d7cff) 50%, var(--fg) 60%) 0 0 / 200% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: text-sheen 6s linear infinite;
 }

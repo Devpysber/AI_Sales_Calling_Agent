@@ -5,6 +5,7 @@ import {
   type SelectHTMLAttributes, type TextareaHTMLAttributes,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { Aurora } from '@/components/VoiceViz'
 import { AnimatedNumber } from '@/lib/motion'
 import { cn, initials } from '@/lib/utils'
 
@@ -173,20 +174,24 @@ export function Avatar({ name, className }: { name?: string | null; className?: 
   )
 }
 
-export function PageHeader({ title, description, actions, eyebrow, children }: {
+export function PageHeader({ title, description, actions, eyebrow, children, visual }: {
   title: ReactNode; description?: ReactNode; actions?: ReactNode; eyebrow?: ReactNode; children?: ReactNode
+  /** Shown left of the title, e.g. the agent's voice orb. */
+  visual?: ReactNode
 }) {
   return (
-    <div className="hero-wash relative -mx-4 -mt-6 mb-6 border-b border-border/70 px-4 pt-7 pb-6 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="min-w-0 animate-rise">
+    <div className="hero-wash relative -mx-4 -mt-6 mb-6 overflow-hidden border-b border-border/70 px-4 pt-7 pb-6 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+      <Aurora />
+      <div className="relative flex flex-wrap items-end justify-between gap-4">
+        {visual && <div className="hidden shrink-0 animate-rise sm:block">{visual}</div>}
+        <div className="min-w-0 flex-1 animate-rise">
           {eyebrow && <div className="mb-2 flex items-center gap-2 text-xs font-bold tracking-wider text-brand uppercase">{eyebrow}</div>}
           <h1 className="text-[28px] leading-tight font-extrabold tracking-tight text-fg">{title}</h1>
           {description && <p className="mt-1.5 max-w-2xl text-[14.5px] text-muted">{description}</p>}
         </div>
         {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
-      {children && <div className="mt-5">{children}</div>}
+      {children && <div className="relative mt-5">{children}</div>}
     </div>
   )
 }
