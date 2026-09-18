@@ -407,7 +407,7 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
     ...(role === 'team' ? [] : [{ id: 'profile', group: 'Go to', label: 'Admin profile & password', icon: UserPlus, keywords: 'account security', run: () => navigate('/profile') }]),
     { id: 'theme', group: 'Preferences', label: dark ? 'Switch to light theme' : 'Switch to dark theme', icon: dark ? Sun : Moon, keywords: 'dark mode', run: () => setDark(!dark) },
     { id: 'logout', group: 'Preferences', label: 'Sign out', icon: LogOut, run: logout },
-  ], [agents, id, go, navigate, dark, setDark, logout, role])
+  ], [agents, id, go, navigate, dark, setDark, logout, role, canCreateAgent])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
