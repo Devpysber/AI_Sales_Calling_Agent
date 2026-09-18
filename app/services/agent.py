@@ -66,10 +66,10 @@ def call_goal(lead: dict, purpose: str | None) -> str | None:
                 "honestly about yourself: what you are set up to do, what you do and do not know, what you would say "
                 "to a real customer, how you would handle a question or an objection, and what happens after a call "
                 "(what gets noted, who is told, when someone is rung back).\n"
-                "If they ask something the knowledge base does not cover, say so plainly — it tells them what is "
-                "missing, which is what they called to find out. If they ask you to role-play a customer call, do it "
-                "and stay in character until they stop you. Keep answers short and concrete, the way a colleague "
-                "would explain their own job.")
+                "If they ask something you don't know or don't have access to (like past call history), say so plainly — "
+                "NEVER say you will pass a message to the team or arrange a callback, because YOU ARE TALKING TO THE TEAM. "
+                "If they ask you to role-play a customer call, do it and stay in character until they stop you. "
+                "Keep answers short and concrete, the way a colleague would explain their own job.")
     if purpose == "inbound":
         return ("The customer called us. Thank them, find out what they need, answer from the knowledge base, "
                 "and move them to the call to action. Ask their name if you do not know it.")
@@ -247,6 +247,61 @@ def can_transfer(persona: dict) -> bool:
         "".join(c for c in str(persona.get("transfer_number") or "") if c.isdigit()))
 
 
+
+def team_brief(agent_id: int) -> str:
+    """
+    What a colleague rings up to ask: how today went, who called, what is waiting, what is missing.
+
+    Read live at the start of the call. Every line is a fact from the workspace, so the agent can
+    answer "how is it going?" without guessing — and can say plainly when something is not set up.
+    """
+    from app.services import rag
+    from app.services.call_service import CallService
+    from app.services.crm_service import CRMService
+
+    lines: list[str] = []
+    try:
+        stats = CallService(agent_id).stats(days=7)
+        today = stats.get("today") or {}
+        talk = int(today.get("talk_seconds") or 0)
+        lines.append(f"- Today: {today.get('total', 0)} call(s), {today.get('connected', 0)} answered, "
+                     f"{talk // 60}m {talk % 60}s on the phone. {stats.get('active', 0)} live right now.")
+        outcomes = stats.get("outcomes") or {}
+        if outcomes:
+            lines.append("- How last week's calls ended: "
+                         + ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in sorted(outcomes.items())))
+    except Exception:  # noqa: BLE001 - a colleague's call must not fail over a missing number
+        log.exception("Team brief: call stats unavailable")
+
+    try:
+        crm = CRMService(agent_id).stats()
+        lines.append(f"- Leads: {crm.get('total', 0)} in total, {crm.get('pending', 0)} waiting to be called, "
+                     f"{crm.get('meetings', 0)} with a meeting booked.")
+        hot = (crm.get("by_qualification") or {}).get("Hot", 0)
+        lines.append(f"- Qualified Hot so far: {hot}.")
+    except Exception:  # noqa: BLE001
+        log.exception("Team brief: lead stats unavailable")
+
+    try:
+        recent = CallService(agent_id).list_calls(page_size=3)["items"]
+        for call in recent:
+            who = call.get("lead_name") or call.get("from_number") or call.get("to_number") or "unknown number"
+            summary = (call.get("summary") or "no summary yet").strip()
+            lines.append(f"- Last call with {who} ({call.get('status', '')}): {summary[:160]}")
+    except Exception:  # noqa: BLE001
+        log.exception("Team brief: recent calls unavailable")
+
+    try:
+        docs = rag.stats(agent_id)
+        count = docs.get("documents", 0)
+        lines.append(f"- Knowledge: {count} document(s), {docs.get('chunks', 0)} passage(s)."
+                     + ("" if count else " Nothing is loaded, so I cannot quote prices or specifics to a customer."))
+    except Exception:  # noqa: BLE001
+        log.exception("Team brief: knowledge stats unavailable")
+
+    return "\n".join(lines)
+
+
 def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: int | None = None) -> str:
     now = datetime.now(IST)
     handover = can_transfer(persona)
@@ -280,6 +335,8 @@ def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: i
         ("meeting_at", "Booked meeting"), ("notes", "Notes"),
         ("call_goal", "GOAL OF THIS CALL (follow this first)")] if lead.get(key))
 
+    # A colleague checking the agent gets its live numbers; a customer never sees any of this.
+    status = team_brief(agent_id) if (agent_id and lead.get("call_purpose") == "team") else ""
     role = (persona.get("agent_role") or "").strip() or "senior sales consultant"
     caller_noun = (persona.get("customer_noun") or "").strip() or "customer"
     Caller = caller_noun[:1].upper() + caller_noun[1:]
@@ -369,6 +426,7 @@ Never invent a person, and never read out a colleague's phone number or email to
 # Today
 {now:%A, %d %B %Y, %H:%M} IST
 
+{('# How this agent is doing right now (read these out if asked; they are live)' + chr(10) + status + chr(10)) if status else ''}
 # {Caller}
 {lead_lines or '- No details on file'}
 
