@@ -85,7 +85,12 @@ def _valid_meeting(value) -> str | None:
 
 def within_calling_hours(cfg: dict, now: datetime | None = None) -> bool:
     now = now or datetime.now(IST)
-    return now.weekday() in cfg["calling_days"] and cfg["calling_hours_start"] <= now.hour < cfg["calling_hours_end"]
+    # Defaults, not [], because a partial or legacy automation dict must not make every inbound
+    # call raise inside the answer webhook (Plivo drops the call when the XML never arrives).
+    days = cfg.get("calling_days") or [0, 1, 2, 3, 4, 5]
+    start = cfg.get("calling_hours_start", 9)
+    end = cfg.get("calling_hours_end", 21)
+    return now.weekday() in days and start <= now.hour < end
 
 
 def _utcnow():
@@ -563,7 +568,9 @@ class CallService:
         call_session.save(alert_session)
         
         try:
-            PlivoService().dial(team_number, alert_session["id"], original_call_id, max_minutes=3, endpoint="team-alert")
+            # No cid: this is a separate leg to a colleague. Reusing the customer's call id would
+            # let the alert leg's ring/hangup webhooks overwrite that call's status and duration.
+            PlivoService().dial(team_number, alert_session["id"], None, max_minutes=3, endpoint="team-alert")
             log.info("Initiated urgent team alert to %s for call %s", team_number, original_call_id)
         except Exception as e:
             log.error("Failed to dial urgent team alert: %s", e)

@@ -38,7 +38,7 @@ class PlivoService:
         )
         return response.message_uuid[0] if response.message_uuid else "Unknown"
 
-    def dial(self, phone: str, session_id: str, call_id: int, max_minutes: int, detect_voicemail: bool = False,
+    def dial(self, phone: str, session_id: str, call_id: int | None, max_minutes: int, detect_voicemail: bool = False,
              from_number: str | None = None, endpoint: str = "answer") -> str:
         params = {"sid": session_id, "cid": call_id}
         response = self.client.calls.create(

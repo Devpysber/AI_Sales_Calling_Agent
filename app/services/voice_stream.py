@@ -1113,7 +1113,12 @@ class CallStream:
                 self.turn("assistant", PROMPTS["handover"][self.lang_key()])
                 await self.checkpoint(transfer=True)
             else:
-                await self.say_fixed(PROMPTS["error"][self.lang_key()], hangup=True)
+                # Recorded like any other spoken line: a transcript that ends on the caller's
+                # question makes the call look like the agent never answered at all.
+                line = PROMPTS["error"][self.lang_key()]
+                await self.say_fixed(line, hangup=True)
+                self.turn("assistant", line)
+            self.save_session()
             return
 
         reply = " ".join("".join(spoken).split())

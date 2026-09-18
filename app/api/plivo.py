@@ -13,6 +13,7 @@ import asyncio
 import plivo.utils
 from fastapi import APIRouter, HTTPException, Query, Request, Response, WebSocket
 from plivo import plivoxml
+from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -138,21 +139,33 @@ def hangup_with(r, session: dict, text: str):
 TRANSFER_LINES = {"en": "Please hold, I am connecting you to our team.", "hi": "कृपया लाइन पर बने रहिए, मैं आपको हमारी टीम से जोड़ रहा हूँ।"}
 
 
-def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = None, idx: int = 0):
-    """<Dial> the agent's transfer number; if nobody picks up the caller hears a short message instead of silence."""
-    raw_numbers = persona.get("transfer_number", "")
-    numbers = [agents.phone_digits(n) for n in raw_numbers.replace(" ", "").split(",")]
-    numbers = [n for n in numbers if n]
-    # The agent's own transfer number rings first (which contains all its team members).
-    # A colleague calling in from one of those lines is dropped from the list: ringing the number
-    # someone is speaking on reaches their own busy line, never a person.
-    speaking_from = agents.phone_digits((session or {}).get("lead", {}).get("phone") or "")
+def transfer_numbers(persona: dict) -> list[str]:
+    raw = persona.get("transfer_number") or ""
+    return [n for n in (agents.phone_digits(x) for x in raw.replace(" ", "").split(",")) if n]
+
+
+def transfer_targets(persona: dict, session: dict | None = None) -> list[str]:
+    """The numbers to ring, in order, for this call.
+
+    The agent's own transfer number rings first (it contains all its team members).
+    A colleague calling in from one of those lines is dropped from the list: ringing the number
+    someone is speaking on reaches their own busy line, never a person. /transfer-done indexes
+    into this same list, so both sides must build it identically.
+    """
+    numbers = transfer_numbers(persona)
+    speaking_from = agents.phone_digits(((session or {}).get("lead") or {}).get("phone") or "")
     if speaking_from:
         numbers = [n for n in numbers if n != speaking_from]
-    
+    return numbers
+
+
+def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = None, idx: int = 0) -> bool:
+    """<Dial> the next transfer target. Returns False when there is nobody left to ring,
+    so the caller gets a spoken fallback instead of silence followed by a dead line."""
+    numbers = transfer_targets(persona, session)
     if idx >= len(numbers):
-        return r
-        
+        return False
+
     number = numbers[idx]
     action_url = f"{settings.base_url}/api/plivo/transfer-done?idx={idx + 1}"
     if session:
@@ -162,27 +175,27 @@ def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = N
                                 action=action_url, method="POST", redirect=True)
     dial.add(plivoxml.NumberElement(number))
     r.add(dial)
-    return r
+    return True
 
 
 def inbound_route(persona: dict, agent_id: int, caller: str | None = None) -> str:
     """ai | forward | message for an incoming call right now."""
     from app.services.call_service import within_calling_hours
-    raw_numbers = persona.get("transfer_number", "")
-    transfer_numbers = [agents.phone_digits(n) for n in raw_numbers.replace(" ", "").split(",")]
-    transfer_numbers = [n for n in transfer_numbers if n]
-    
-    has_number = len(transfer_numbers) > 0
+    numbers = transfer_numbers(persona)
+
     open_now = within_calling_hours(agents.get_automation(agent_id))
     mode = persona.get("inbound_mode", "ai") if open_now else persona.get("after_hours_mode", "ai")
-    
+
     # If forwarding to human, don't forward if the team is calling their own agent number to test/use it.
     if mode == "forward":
-        if not has_number:
+        if not numbers:
             return "ai"
-        if caller and agents.phone_digits(caller) in transfer_numbers:
+        # A team member calling in is the only person on that line: forwarding would ring
+        # their own busy number, so the AI takes the call instead.
+        if caller and agents.phone_digits(caller) in numbers:
             return "ai"
-            
+
+
     return mode if mode in ("ai", "forward", "message") else "ai"
 
 
@@ -204,6 +217,10 @@ async def answer(request: Request):
     persona = agents.get_profile(agent_id)
     if not p.get("sid"):
         route = inbound_route(persona, agent_id, p.get("From"))
+        # Nobody left to ring (e.g. the only transfer number is the line calling in): the AI
+        # answers instead of the caller hearing a hold line and then dead air.
+        if route == "forward" and not transfer_targets(persona, session):
+            route = "ai"
         if route == "forward":
             await asyncio.to_thread(calls.mark_transferred, session["call_id"],
                                     "Forwarded to " + calls.transfer_label(persona["transfer_number"]),
@@ -219,7 +236,8 @@ async def answer(request: Request):
             if persona["record_calls"]:
                 r.add(plivoxml.RecordElement(action=f"{settings.base_url}/api/plivo/recording?cid={session['call_id']}",
                                              record_session=True, redirect=False, max_length=3600, file_format="mp3"))
-            return xml(dial_human(r, persona, p.get("To"), session))
+            dial_human(r, persona, p.get("To"), session)
+            return xml(r)
         if route == "message":
             key = lang_key(session)
             text = persona.get("after_hours_message") or (
@@ -306,10 +324,15 @@ async def _reply_or_hold(session_id: str, max_wait: float) -> plivoxml.ResponseE
         agent_id = session_agent(session)
         persona = agents.get_profile(agent_id) if agent_id else {}
         # Put the caller through to a person rather than ending the call on our own failure.
-        if "".join(c for c in persona.get("transfer_number", "") if c.isdigit()):
+        handed_over = False
+        if transfer_targets(persona, session):
             speak(r, session, PROMPTS["handover"][lang_key(session)])
-            dial_human(r, persona, agents.caller_id(agent_id), session)
-        else:
+            handed_over = dial_human(r, persona, agents.caller_id(agent_id), session)
+            if handed_over and session.get("call_id"):
+                await asyncio.to_thread(CallService().mark_transferred, int(session["call_id"]),
+                                        "Handed to team after an AI error", "error",
+                                        persona.get("transfer_number"))
+        if not handed_over:
             await asyncio.to_thread(hangup_with, r, session, PROMPTS["error"][lang_key(session)])
     else:
         # Still thinking: short silence (no hold tone), then poll again
@@ -360,20 +383,28 @@ async def stream(ws: WebSocket, sid: str = ""):
     await CallStream(ws, sid).run()
 
 
+def int_or_none(value) -> int | None:
+    """Webhook params are strings and can be absent or the literal "None": never let int() raise here."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 @router.post("/ring")
 async def ring(request: Request):
     p = await verified(request)
-    if p.get("cid"):
-        await asyncio.to_thread(CallService().on_ring, int(p["cid"]))
+    cid = int_or_none(p.get("cid"))
+    if cid:
+        await asyncio.to_thread(CallService().on_ring, cid)
     return {"ok": True}
 
 
 @router.post("/hangup")
 async def hangup(request: Request):
     p = await verified(request)
-    call_id = p.get("cid")
+    call_id = int_or_none(p.get("cid"))
     if not call_id and p.get("CallUUID"):
-        from sqlalchemy import select
         from app.core.database import get_db
         from app.models.call import Call
         with get_db() as db:
@@ -391,8 +422,9 @@ async def hangup(request: Request):
 @router.post("/recording")
 async def recording(request: Request):
     p = await verified(request)
-    if p.get("cid") and p.get("RecordUrl"):
-        await asyncio.to_thread(CallService().on_recording, int(p["cid"]), p["RecordUrl"])
+    cid = int_or_none(p.get("cid"))
+    if cid and p.get("RecordUrl"):
+        await asyncio.to_thread(CallService().on_recording, cid, p["RecordUrl"])
     return {"ok": True}
 
 
@@ -404,11 +436,17 @@ async def transfer(request: Request):
     agent_id = session_agent(session) if session else None
     r = plivoxml.ResponseElement()
     persona = agents.get_profile(agent_id) if agent_id else {}
-    if not "".join(c for c in persona.get("transfer_number", "") if c.isdigit()):
-        r.add(plivoxml.HangupElement())
+    dial_session = session if session.get("call_id") else None
+    if not dial_human(r, persona, agents.caller_id(agent_id), dial_session):
+        # No reachable team number: say something instead of cutting the caller off mid-sentence.
+        if session:
+            await asyncio.to_thread(hangup_with, r, session, PROMPTS["error"][lang_key(session)])
+        else:
+            r.add(plivoxml.HangupElement())
         return xml(r)
-    caller = agents.caller_id(agent_id)
-    return xml(dial_human(r, persona, caller, session if session.get("call_id") else None))
+    # The caller of PlivoService.transfer (voice_stream / supervisor) records the timeline event,
+    # so nothing is logged here — a second event would show the same handover twice.
+    return xml(r)
 
 
 FALLBACK_LINES = {"en": "Sorry, our team is busy right now. I can help you, what do you need?",
@@ -446,17 +484,19 @@ async def transfer_done(request: Request):
     agent_id = session_agent(session) if session else None
     persona = agents.get_profile(agent_id) if agent_id else {}
     
-    idx = int(request.query_params.get("idx", "1"))
-    raw_numbers = persona.get("transfer_number", "")
-    numbers = [agents.phone_digits(n) for n in raw_numbers.replace(" ", "").split(",")]
-    numbers = [n for n in numbers if n]
-    
-    if idx < len(numbers):
-        dial_human(r, persona, agents.caller_id(agent_id), session, idx=idx)
+    try:
+        idx = int(p.get("idx") or request.query_params.get("idx") or 1)
+    except ValueError:
+        idx = 1
+
+    # Ring the next team member. transfer_targets() is the same list dial_human() indexed into,
+    # so idx still points at the number after the one that just failed.
+    if dial_human(r, persona, agents.caller_id(agent_id), session, idx=idx):
         return xml(r)
 
-    if p.get("cid"):
-        await asyncio.to_thread(CallService().mark_transferred, int(p["cid"]), f"Team did not answer ({status})", None)
+    cid = int_or_none(p.get("cid") or session.get("call_id"))
+    if cid:
+        await asyncio.to_thread(CallService().mark_transferred, cid, f"Team did not answer ({status})", None)
     if session:
         asyncio.get_running_loop().run_in_executor(None, _notify_missed, session, persona, status)
 
@@ -488,70 +528,94 @@ async def transfer_done(request: Request):
         r.add(plivoxml.HangupElement())
     return xml(r)
 
+def _attach_voicemail(call_id: int, url: str):
+    """Store the voicemail recording and put it in the transcript so the summary sees it."""
+    from app.core.database import get_db
+    from app.models.call import Call
+
+    CallService().on_recording(call_id, url)
+    with get_db() as db:
+        session_id = db.scalar(select(Call.session_id).where(Call.id == call_id))
+    session = call_session.get(session_id) if session_id else None
+    if session:
+        call_session.add_turn(session, "user", f"[Left a voicemail: {url}]")
+        call_session.save(session)
+
+
 @router.post("/voicemail")
 async def voicemail(request: Request):
     p = await verified(request)
-    cid = request.query_params.get("cid")
+    cid = int_or_none(p.get("cid") or request.query_params.get("cid"))
     url = p.get("RecordUrl")
     if cid and url:
-        from app.services.call_service import CallService, call_session
-        from app.db.core import get_db
-        await asyncio.to_thread(CallService().on_recording, int(cid), url)
-        with get_db() as db:
-            from app.db.models import Call
-            call = db.get(Call, int(cid))
-            if call:
-                session = call_session.get(call.session_id)
-                if session:
-                    call_session.add_turn(session, "user", f"[Left a Voicemail: {url}]")
-                    call_session.save(session)
-    return {"ok": True}
-
-
-@router.post("/team-alert")
-async def plivo_team_alert(sid: str = Query(None)):
-    session = call_session.get(sid)
-    if not session:
-        return xml(plivoxml.ResponseElement())
-    
-    text = f"Urgent alert from AI Sales Agent. A customer needs immediate attention. They said: {session.get('team_action')}. Press any key to accept, or hang up."
-    
-    r = plivoxml.ResponseElement()
-    audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
-    speak(r, session, text, audio_id=audio_id)
-    
-    # Redirect to team-alert-done so the next action fires when the message finishes or they hang up
-    r.add(plivoxml.RedirectElement(f"{settings.base_url}/api/plivo/team-alert-done?sid={sid}", method="POST"))
-    return xml(r)
-
-@router.post("/team-alert-done")
-async def plivo_team_alert_done(sid: str = Query(None)):
-    session = call_session.get(sid)
-    if not session:
-        return xml(plivoxml.ResponseElement())
-        
-    customer_phone = session.get("customer_phone")
-    if customer_phone:
-        backcall_session = call_session.create(session["agent_id"], session["lead_id"], session.get("lead") or {}, "en-IN")
-        call_session.save(backcall_session)
-        
-        from app.services.plivo_service import PlivoService
-        try:
-            PlivoService().dial(customer_phone, backcall_session["id"], session.get("original_call_id"), max_minutes=2, endpoint="customer-alert")
-        except Exception as e:
-            from app.core.logging import get_logger
-            get_logger(__name__).error("Failed to dial customer back call: %s", e)
-            
+        await asyncio.to_thread(_attach_voicemail, cid, url)
+    # Plivo plays nothing after <Record>, so the call would sit in silence until it times out.
     r = plivoxml.ResponseElement()
     r.add(plivoxml.HangupElement())
     return xml(r)
 
-@router.post("/customer-alert")
-async def plivo_customer_alert(sid: str = Query(None)):
-    session = call_session.get(sid)
+
+@router.post("/team-alert")
+async def plivo_team_alert(request: Request, sid: str = Query(None)):
+    p = await verified(request)
+    session = call_session.get(p.get("sid") or sid)
     if not session:
         return xml(plivoxml.ResponseElement())
-        
+
+    text = f"Urgent alert from AI Sales Agent. A customer needs immediate attention. They said: {session.get('team_action')}. Press any key to accept, or hang up."
+
+    r = plivoxml.ResponseElement()
+    audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
+    # The keypress is what "accept" means, so the message plays *inside* <GetDigits>: a plain
+    # <Speak> followed by a redirect fired the callback whether or not anybody accepted.
+    gd = plivoxml.GetDigitsElement(action=f"{settings.base_url}/api/plivo/team-alert-done?sid={session['id']}",
+                                  method="POST", num_digits=1, timeout=10, redirect=True)
+    speak(gd, session, text, audio_id=audio_id)
+    r.add(gd)
+    r.add(plivoxml.HangupElement())
+    return xml(r)
+
+
+def _dial_customer_back(session: dict):
+    from app.services.plivo_service import PlivoService
+
+    backcall_session = call_session.create(session["agent_id"], session["lead_id"], session.get("lead") or {}, "en-IN")
+    call_session.save(backcall_session)
+    # No call row exists for this short courtesy call: passing the original call id would let its
+    # hangup webhook overwrite the real call's status and duration.
+    PlivoService().dial(session["customer_phone"], backcall_session["id"], None, max_minutes=2,
+                        endpoint="customer-alert")
+
+
+@router.post("/team-alert-done")
+async def plivo_team_alert_done(request: Request, sid: str = Query(None)):
+    p = await verified(request)
+    session = call_session.get(p.get("sid") or sid)
+    r = plivoxml.ResponseElement()
+    if not session:
+        return xml(r)
+
+    accepted = bool((p.get("Digits") or "").strip())
+    if accepted and session.get("customer_phone"):
+        try:
+            await asyncio.to_thread(_dial_customer_back, session)
+        except Exception as e:  # noqa: BLE001 - never fail the team member's call over the callback
+            log.error("Failed to dial customer back call: %s", e)
+    elif not accepted:
+        log.info("Team alert for session %s was not accepted", session["id"][:8])
+
+    r.add(plivoxml.HangupElement())
+    return xml(r)
+
+
+@router.post("/customer-alert")
+async def plivo_customer_alert(request: Request, sid: str = Query(None)):
+    p = await verified(request)
+    session = call_session.get(p.get("sid") or sid)
+    if not session:
+        return xml(plivoxml.ResponseElement())
+
+
     text = "Hi, this is the AI assistant calling back. I have informed the team about your urgent request, and they are acting on it now. Thank you."
     r = plivoxml.ResponseElement()
     audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
