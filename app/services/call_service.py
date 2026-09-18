@@ -238,7 +238,8 @@ class CallService:
         # Checked before anything is saved: a colleague trying the agent out must not become a lead,
         # or every test call lands in the CRM and counts as a customer in the pipeline.
         from app.services import team_service
-        internal = team_service.is_team_number(from_number, agent_id)
+        is_admin = team_service.is_admin_number(from_number)
+        internal = is_admin or team_service.is_team_number(from_number, agent_id)
         team_name = team_service.name_for(from_number, agent_id)
 
         lead = None if internal else crm.find_by_phone(from_number)
@@ -252,9 +253,10 @@ class CallService:
         language = (lead or {}).get("language") or persona["default_language"]
         # A colleague ringing their own agent gets a walkthrough, not a sales call.
         if internal:
-            context = {"phone": from_number, "call_purpose": "team", "team_name": team_name or "",
+            purpose = "admin" if is_admin else "team"
+            context = {"phone": from_number, "call_purpose": purpose, "team_name": team_name or "",
                        "name": team_name or ""}
-            context["call_goal"] = agent.call_goal(context, "team")
+            context["call_goal"] = agent.call_goal(context, purpose)
         else:
             collect = persona.get("inbound_collect") or ["name", "requirement"]
             missing = [f for f in collect if not (lead or {}).get(agent.COLLECT_FIELDS.get(f, f))]
@@ -654,9 +656,11 @@ class CallService:
 
     def _with_team_name(self, data: dict) -> dict:
         """Name the colleague a call was handed to, so lists can say who took it instead of a bare number."""
+        from app.services import team_service
         if data.get("transferred_to"):
-            from app.services import team_service
             data["transferred_to_name"] = team_service.name_for(data["transferred_to"], data.get("agent_id"))
+        if data.get("trigger") == "internal" and not data.get("lead_name"):
+            data["lead_name"] = team_service.name_for(data.get("from_number"), data.get("agent_id"))
         return data
 
     def get(self, call_id: int) -> dict | None:

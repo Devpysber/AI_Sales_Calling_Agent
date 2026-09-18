@@ -200,12 +200,12 @@ function WebsiteIntake() {
   const copy = (t: string) => { void navigator.clipboard.writeText(t); toast.success('Copied') }
   return (
     <Card className="xl:col-span-2">
-      <div className="flex flex-wrap items-start gap-4 p-5">
-        <span className="grid size-10 place-items-center rounded-xl bg-brand-soft text-brand"><Globe className="size-5" /></span>
-        <div className="min-w-0 flex-1">
+      <div className="flex flex-col sm:flex-row items-start gap-4 p-5">
+        <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand"><Globe className="size-5" /></span>
+        <div className="min-w-0 flex-1 w-full">
           <div className="flex flex-wrap items-center gap-2"><h3 className="font-bold">Website form → {agent?.name}</h3>
             <Badge tone={intakeFate(data).tone} dot>{intakeFate(data).label}</Badge></div>
-          <p className="text-sm text-muted">Send enquiries from any website, landing page, WordPress/Webflow form, Zapier or your backend straight into this agent's leads. Use a separate agent per website to keep each site's leads, script and reports apart.</p>
+          <p className="mt-1 text-sm text-muted">Send enquiries from any website, landing page, WordPress/Webflow form, Zapier or your backend straight into this agent's leads. Use a separate agent per website to keep each site's leads, script and reports apart.</p>
           <div className="mt-3 flex min-w-0 items-center gap-2 rounded-xl border border-border bg-surface-2 px-3 py-2">
             <code className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{data.url}</code>
             <Button size="icon" variant="ghost" onClick={() => copy(data.url)} aria-label="Copy form link"><Copy /></Button>
@@ -215,12 +215,12 @@ function WebsiteIntake() {
               <button key={t} type="button" onClick={() => setTab(t)} className={cn('rounded-lg px-2.5 py-1 text-xs font-semibold', tab === t ? 'bg-fg text-bg' : 'text-muted hover:bg-surface-2')}>
                 {{ html: 'HTML form', js: 'JavaScript', curl: 'cURL / Zapier' }[t]}</button>
             ))}
-            <Button size="sm" variant="ghost" className="ml-auto" onClick={() => copy(snippets[tab])}><Copy />Copy snippet</Button>
+            <Button size="sm" variant="ghost" className="sm:ml-auto" onClick={() => copy(snippets[tab])}><Copy />Copy snippet</Button>
           </div>
-          <pre className="mt-2 max-h-56 overflow-auto rounded-xl bg-ink p-3 font-mono text-[12px] leading-relaxed text-ink-fg">{snippets[tab]}</pre>
+          <pre className="mt-2 max-h-56 overflow-auto rounded-xl bg-ink p-3 font-mono text-[12px] leading-relaxed text-ink-fg whitespace-pre-wrap">{snippets[tab]}</pre>
           <p className="mt-2 text-xs text-muted">Fields: name, phone (required), email, company, city, message, source, language (e.g. hi-IN). Repeat enquiries update the same lead. Bots filling the hidden “website” field are ignored.</p>
         </div>
-        <Button size="sm" variant="ghost" loading={rotate.isPending} onClick={async () => {
+        <Button size="sm" variant="ghost" className="w-full sm:w-auto" loading={rotate.isPending} onClick={async () => {
           if (await confirm({ title: 'Create a new form link?', description: 'Forms using the current link stop working until you update them.', confirmLabel: 'Regenerate', danger: true })) rotate.mutate()
         }}><RefreshCw />New link</Button>
       </div>

@@ -285,7 +285,23 @@ def _get_group(agent_id: int, group: str) -> dict:
                 raise AgentNotFound(f"Agent {agent_id} not found.")
             cached = agent.stored(group)
         store.set_json(_cache_key(agent_id, group), cached, ttl=CACHE_TTL)
-    return {**defaults, **{k: v for k, v in cached.items() if k in defaults and v is not None}}
+    result = {**defaults, **{k: v for k, v in cached.items() if k in defaults and v is not None}}
+    
+    # Handle corrupted DB state where team_members were saved as strings
+    if group == "profile" and "team_members" in result:
+        import ast
+        clean_members = []
+        for m in result["team_members"]:
+            if isinstance(m, str):
+                try:
+                    clean_members.append(ast.literal_eval(m))
+                except Exception:
+                    pass
+            else:
+                clean_members.append(m)
+        result["team_members"] = clean_members
+        
+    return result
 
 
 def _update_group(agent_id: int, group: str, values: dict, label: str, actor: str) -> dict:

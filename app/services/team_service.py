@@ -7,11 +7,22 @@ places: their logins, the addresses a message to "the team" reaches, and — fro
 a forwarded call hunts through and the people the agent can name to a caller.
 """
 
+import ast
 from app.services.settings_service import SettingsService
 
-
 def members() -> list[dict]:
-    return SettingsService().get_state("team_members") or []
+    raw_members = SettingsService().get_state("team_members") or []
+    clean_members = []
+    for m in raw_members:
+        if isinstance(m, str):
+            try:
+                # Handle corrupted DB state where dicts were saved as strings
+                clean_members.append(ast.literal_eval(m))
+            except Exception:
+                pass
+        else:
+            clean_members.append(m)
+    return clean_members
 
 
 def _digits(value: str) -> str:
@@ -100,3 +111,15 @@ def is_team_number(number: str | None, agent_id: int | None = None) -> bool:
         raw = str(agents.get_profile(agent_id).get("transfer_number") or "")
         lines = lines + [_digits(part) for part in raw.split(",")]
     return wanted in [line for line in lines if line]
+
+
+def is_admin_number(number: str | None) -> bool:
+    """True when this number belongs to an Admin (role 'Admin')."""
+    wanted = _digits(number or "")
+    if not wanted:
+        return False
+    for m in members():
+        if (m.get("role") or "Sales").lower() == "admin":
+            if _digits(m.get("phone", "")) == wanted:
+                return True
+    return False

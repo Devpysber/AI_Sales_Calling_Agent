@@ -153,17 +153,24 @@ def _stream_sse(url: str, headers: dict, body: dict, first_token_timeout: float)
                 break
             data = json.loads(payload)
             choices = data.get("choices") or []
-            delta = (choices[0].get("delta") or {}).get("content") if choices else None
-            if delta:
+            delta_obj = choices[0].get("delta") or {} if choices else {}
+            content = delta_obj.get("content")
+            tool_calls = delta_obj.get("tool_calls")
+            
+            if content:
                 got = True
-                yield delta
-            elif not got and time.monotonic() - started > first_token_timeout:
+                yield content
+            if tool_calls:
+                got = True
+                yield {"tool_calls": tool_calls}
+                
+            if not got and time.monotonic() - started > first_token_timeout:
                 raise LLMError("no content before timeout")
         if not got:
             raise LLMError("empty stream")
 
 
-def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4):
+def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4, tools: list[dict] | None = None):
     """
     Streaming completion for live calls, in LLM_PROVIDERS order. Falls back to the next provider only
     if the current one fails before producing any text (a half-spoken reply is never restarted).
@@ -178,6 +185,8 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
             url = "https://openrouter.ai/api/v1/chat/completions"
             headers = {"Authorization": f"Bearer {settings.openrouter_api_key}", "X-Title": settings.app_name}
             body = {"model": settings.openrouter_models.split(",")[0].strip(), "reasoning": {"enabled": False}}
+            if tools:
+                body["tools"] = tools
         else:
             continue
         body.update(messages=messages, max_tokens=max_tokens, temperature=temperature)

@@ -550,13 +550,63 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
                     "connecting them, transferring them, putting them through, or that someone will come on the "
                     "line. If they ask for a person, say once in their own language that you will pass the message "
                     "on and the team will call them back, then continue helping them yourself.")
-    messages[0]["content"] = system + VOICE_OUTPUT + transfer
+    purpose = lead.get("call_purpose") or ""
+    tools = None
+    if purpose in ("team", "admin"):
+        from app.services.agent_tools import get_tools_for_role
+        tools = get_tools_for_role(purpose)
+        # Remove the restriction against tool calls for team/admin members
+        base_content = system + VOICE_OUTPUT.replace("Never output tool calls, tags", "Never output tags") + transfer
+        if purpose == "admin":
+            base_content = "You are the Super Admin AI for the entire Psyber platform. You have root access. You can diagnose the website, check any agent's stats, and manage system resources.\n\n" + base_content
+        messages[0]["content"] = base_content
+    else:
+        messages[0]["content"] = system + VOICE_OUTPUT + transfer
+
     if language:
         # Placed next to the latest customer turn: earlier turns in another language otherwise win.
         name = LANGUAGES.get(language, language)
         script = " in Devanagari script (English business words are fine)" if language == "hi-IN" else ""
         messages[-1]["content"] += f"\n\n(Reply in {name}{script}, whatever language earlier turns used.)"
-    yield from llm.stream(messages, max_tokens=90, temperature=0.7)  # short spoken replies also cut TTS characters
+
+    tool_call_buffer = []
+    
+    def process_stream(msgs):
+        nonlocal tool_call_buffer
+        for delta in llm.stream(msgs, max_tokens=90, temperature=0.7, tools=tools):
+            if isinstance(delta, dict) and "tool_calls" in delta:
+                for tc in delta["tool_calls"]:
+                    idx = tc.get("index", 0)
+                    while len(tool_call_buffer) <= idx:
+                        tool_call_buffer.append({"id": "", "function": {"name": "", "arguments": ""}})
+                    
+                    if tc.get("id"):
+                        tool_call_buffer[idx]["id"] = tc["id"]
+                    if tc.get("function"):
+                        func = tc["function"]
+                        if func.get("name"):
+                            tool_call_buffer[idx]["function"]["name"] = func["name"]
+                        if func.get("arguments"):
+                            tool_call_buffer[idx]["function"]["arguments"] += func["arguments"]
+            elif isinstance(delta, str):
+                yield delta
+
+    while True:
+        yield from process_stream(messages)
+        if not tool_call_buffer:
+            break
+        
+        # We received complete tool calls. Execute them and get the next response.
+        messages.append({"role": "assistant", "tool_calls": [{"id": tc["id"], "type": "function", "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}} for tc in tool_call_buffer]})
+        for tc in tool_call_buffer:
+            func_name = tc["function"]["name"]
+            func_args = tc["function"]["arguments"]
+            from app.services.agent_tools import execute_tool
+            result = execute_tool(func_name, func_args, agent_id, purpose)
+            messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": result})
+        
+        # Clear buffer and recurse
+        tool_call_buffer = []
 
 
 def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True) -> dict:
