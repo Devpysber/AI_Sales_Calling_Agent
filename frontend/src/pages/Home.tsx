@@ -55,7 +55,7 @@ function setupScore(a: AgentOverviewItem) {
   return values.filter(Boolean).length / values.length
 }
 
-function AgentCard({ agent, role }: { agent: AgentOverviewItem; role?: string }) {
+function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?: string; className?: string }) {
   const s = agent.stats
   const p = agent.period
   const o = agent.ops
@@ -69,7 +69,7 @@ function AgentCard({ agent, role }: { agent: AgentOverviewItem; role?: string })
   const missing = Object.entries(agent.setup).filter(([, v]) => !v).map(([k]) => SETUP_LABELS[k])
   const base = `/a/${agent.id}`
   return (
-    <Card className={cn('group relative flex min-w-0 flex-col overflow-hidden transition hover:-translate-y-0.5 hover:shadow-pop', paused && 'opacity-90')}>
+    <Card className={cn('group relative flex min-w-0 flex-col overflow-hidden transition hover:-translate-y-0.5 hover:shadow-pop', paused && 'opacity-90', className)}>
       <Link to={base} className="absolute inset-0 z-0" aria-label={`Open ${agent.name}`} />
 
       <div className="relative p-5 pb-0">

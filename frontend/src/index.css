@@ -172,7 +172,11 @@ kbd {
    Paired with src/lib/motion.tsx. A .reveal is invisible until it also carries .reveal-in, which
    the component adds on mount or when the element is first scrolled into view. */
 
-.reveal { opacity: 0; will-change: opacity, transform; }
+/* Hidden only while waiting to play. Never put opacity:0 on the element that animates: the
+   keyframes define just `from`, so the animation ends on the element's own style, and a base of
+   opacity:0 would fade it from 0 to 0 and leave it invisible. */
+.reveal:not(.reveal-in) { opacity: 0; }
+.reveal { will-change: opacity, transform; }
 .reveal-in { animation-duration: .42s; animation-timing-function: var(--ease-entrance); animation-fill-mode: both; }
 .reveal-up.reveal-in { animation-name: reveal-up; }
 .reveal-down.reveal-in { animation-name: reveal-down; }

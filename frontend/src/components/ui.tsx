@@ -194,14 +194,16 @@ export function PageHeader({ title, description, actions, eyebrow, children }: {
 export function Tabs<T extends string>({ value, onChange, items }: { value: T; onChange: (v: T) => void; items: { value: T; label: ReactNode }[] }) {
   const active = Math.max(0, items.findIndex((i) => i.value === value))
   return (
-    <div className="relative inline-flex rounded-xl border border-border bg-surface-2 p-1">
+    // Equal columns sized to the widest label (auto-cols-fr), so the pill's width and offset are exact
+    // and no label wraps; flex-1 gave each button basis 0 and broke "All 1" over two lines.
+    <div className="relative inline-grid auto-cols-fr grid-flow-col rounded-xl border border-border bg-surface-2 p-1">
       {/* One pill that travels to the selected tab: the movement is what shows which way you went. */}
       <span aria-hidden
         className="absolute top-1 bottom-1 left-1 rounded-lg bg-surface shadow-sm ring-1 ring-border transition-transform duration-250 ease-[var(--ease-entrance)] motion-reduce:transition-none"
         style={{ width: `calc((100% - 0.5rem) / ${items.length})`, transform: `translateX(${active * 100}%)` }} />
       {items.map((i) => (
         <button key={i.value} type="button" onClick={() => onChange(i.value)}
-          className={cn('relative z-10 flex-1 rounded-lg px-3 py-1.5 text-[13px] font-semibold transition-colors',
+          className={cn('relative z-10 rounded-lg px-3 py-1.5 text-[13px] font-semibold whitespace-nowrap transition-colors',
             value === i.value ? 'text-brand' : 'text-muted hover:text-fg')}>
           {i.label}
         </button>
