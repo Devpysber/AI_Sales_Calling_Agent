@@ -36,6 +36,8 @@ _refreshing = threading.Semaphore(1)
 IST_OFFSET = timedelta(hours=5, minutes=30)
 LOW_MINUTES = 300      # warn when the Plivo balance covers fewer connected minutes than this
 CRITICAL_MINUTES = 60  # popup: calls are about to stop
+SLOW_REPLY_MS = 2500        # p95 first-audio latency a caller starts noticing as a pause
+SLOW_REPLY_SAMPLE = 5       # answered calls with latency data needed before judging an agent slow
 
 
 # ---------------- balances ----------------
@@ -240,8 +242,34 @@ def reminders() -> list[dict]:
                                          or_(Lead.meeting_at.is_(None), Lead.meeting_at == "")):
             add(agent_id, "warm_idle", "info", n, f"{n} warm lead{'s' if n > 1 else ''} not contacted in 3+ days",
                 "/leads?view=hot_uncalled", "Follow up")
+        # Slow replies never raise an error, so nothing else surfaces them: a caller just hears a
+        # pause before every answer. Judged on p95, not the mean, because one fast turn per call
+        # hides the ones that made the customer wait.
+        for agent_id, p95, n in _slow_agents(db):
+            add(agent_id, "slow_replies", "warning", n,
+                f"Replies are slow: p95 {round(p95 / 1000, 1)}s to first audio over {n} calls",
+                "/analytics", "See latency")
     order = {"danger": 0, "warning": 1, "success": 2, "info": 3}
     return sorted(items, key=lambda i: (order[i["level"]], i.get("when") or ""))
+
+
+def _slow_agents(db) -> list[tuple[int, float, int]]:
+    """(agent_id, p95 first-audio ms, calls) for agents whose recent answered calls feel slow."""
+    since = datetime.utcnow() - timedelta(days=7)
+    rows = db.execute(select(Call.agent_id, Call.avg_latency_ms)
+                      .where(Call.avg_latency_ms.is_not(None), Call.avg_latency_ms > 0, Call.created_at >= since)).all()
+    by_agent: dict[int, list[float]] = {}
+    for agent_id, latency in rows:
+        by_agent.setdefault(agent_id, []).append(float(latency))
+    slow = []
+    for agent_id, values in by_agent.items():
+        if len(values) < SLOW_REPLY_SAMPLE:
+            continue
+        values.sort()
+        p95 = values[min(len(values) - 1, int(round(0.95 * (len(values) - 1))))]
+        if p95 > SLOW_REPLY_MS:
+            slow.append((agent_id, p95, len(values)))
+    return slow
 
 
 def _routing() -> list[dict]:

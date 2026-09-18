@@ -9,11 +9,14 @@ Retrieve: hybrid ranking = BM25 keyword score + cosine similarity
 invalidated by a per-agent version counter so every replica sees new documents.
 """
 
+import contextlib
 import io
 import math
 import re
 import threading
+import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -286,6 +289,50 @@ def _load_index(agent_id: int) -> _Index:
         return index
 
 
+EMBED_CACHE_TTL = 120.0
+_embed_cache: dict[str, tuple[float, list[float]]] = {}
+_embed_lock = threading.Lock()
+_prefetch_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rag-prefetch")
+
+
+def _embed_query(query: str, timeout: float) -> list[float] | None:
+    """The query embedding, from cache when it was prefetched while the caller was still speaking."""
+    now = time.monotonic()
+    with _embed_lock:
+        for key, (at, _) in list(_embed_cache.items()):
+            if now - at > EMBED_CACHE_TTL:
+                _embed_cache.pop(key, None)
+        hit = _embed_cache.get(query)
+    if hit:
+        return hit[1]
+    vectors = llm.embed([query], timeout=timeout)
+    if not vectors:
+        return None
+    with _embed_lock:
+        _embed_cache[query] = (now, vectors[0])
+    return vectors[0]
+
+
+def prefetch(agent_id: int, query: str, timeout: float = 2.5) -> None:
+    """Load the index and embed `query` in the background, off the reply path.
+
+    Called on each partial transcript: by the time the caller stops talking the embedding is in
+    cache, so semantic search costs nothing on the turn the customer is waiting for.
+    """
+    if not query.strip():
+        return
+
+    def run():
+        try:
+            _load_index(agent_id)
+            _embed_query(query, timeout)
+        except Exception as e:  # noqa: BLE001 - a warm cache is an optimisation, never a failure
+            log.debug("RAG prefetch failed: %s", e)
+
+    with contextlib.suppress(RuntimeError):  # pool shut down during reload
+        _prefetch_pool.submit(run)
+
+
 def search(agent_id: int, query: str, top_k: int = 4, use_embeddings: bool = True, embed_timeout: float = 2.5) -> list[dict]:
     index = _load_index(agent_id)
     if not index.ids or not query.strip():
@@ -317,9 +364,9 @@ def search(agent_id: int, query: str, top_k: int = 4, use_embeddings: bool = Tru
         # Nothing to lose: without this the turn has no knowledge at all, so allow a longer round trip.
         embed_timeout = max(embed_timeout, 1.5)
     if use_embeddings and index.vectors is not None and index.has_vector.any():
-        qv = llm.embed([query], timeout=embed_timeout)
+        qv = _embed_query(query, embed_timeout)
         if qv:
-            q = np.asarray(qv[0], dtype=np.float32)
+            q = np.asarray(qv, dtype=np.float32)
             q = q / (np.linalg.norm(q) or 1)
             cosine = np.where(index.has_vector, index.vectors @ q, 0)
             scores = 0.35 * bm25 + 0.65 * np.clip(cosine, 0, 1)

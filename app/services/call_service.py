@@ -610,7 +610,8 @@ class CallService:
             persona = agents.get_profile(agent_id)
             lead = (self.crm.get(session["lead_id"]) if session.get("lead_id") else None) or session.get("lead") or {}
             # Live calls skip the embedding round-trip (~1s); keyword search answers instantly
-            result = agent.respond(agent_id, session["history"], text, lead, use_embeddings=False)
+            result = agent.respond(agent_id, session["history"], text, lead, use_embeddings=False,
+                                   summary=session.get("summary"))
             language = result["language"] or tts.detect_language(result["reply"], session["language"])
             audio_id = tts.store_audio(tts.synthesize(result["reply"], language, persona["voice_speaker"]))
 
@@ -623,12 +624,37 @@ class CallService:
             call_session.save(session)
 
             self._apply_turn_signals(session, result)
+            self._compact_history(session_id)
         except Exception as e:
             log.exception("Turn failed for session %s", session_id)
             session = call_session.get(session_id) or session
             call_session.add_turn(session, "customer", text)
             session["pending"] = {"state": "error", "error": str(e)[:300]}
             call_session.save(session)
+
+    def _compact_history(self, session_id: str):
+        """Fold the turns that fell out of the prompt window into one summary line, off the reply path.
+
+        The caller is already listening to the reply this was queued behind, so a long call keeps
+        paying for the last few turns plus a paragraph rather than the whole transcript.
+        """
+        session = call_session.get(session_id)
+        if not session:
+            return
+        turns = len(session["history"])
+        if turns < agent.COMPACT_AFTER_TURNS or turns - int(session.get("compacted_at") or 0) < agent.COMPACT_EVERY_TURNS:
+            return
+
+        def run():
+            try:
+                summary = agent.compact_history(session["history"], session.get("summary"))
+            except Exception as e:  # noqa: BLE001 - the summary is an optimisation, not state we need
+                log.warning("History compaction failed for %s: %s", session_id[:8], e)
+                return
+            if summary:
+                call_session.update(session_id, summary=summary, compacted_at=turns)
+
+        _turn_pool.submit(run)
 
     def _apply_turn_signals(self, session: dict, result: dict):
         lead_id = session.get("lead_id")

@@ -21,6 +21,9 @@ from app.services.tts import LANGUAGES
 log = get_logger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 MAX_HISTORY_TURNS = 14          # every turn resends history: fewer turns = fewer billed tokens
+LIVE_EMBED_TIMEOUT = 0.3        # a live turn waits this long for a query embedding that was not prefetched
+COMPACT_AFTER_TURNS = 20        # a call this long gets its older turns folded into one summary line
+COMPACT_EVERY_TURNS = 6         # and re-folded this often after that
 KNOWLEDGE_CHARS = 600           # per retrieved passage in the prompt
 
 INTENTS = ["greeting", "question", "interested", "pricing", "objection", "meeting", "callback",
@@ -501,21 +504,31 @@ If the call is wrapping up, you said goodbye, they answered 'no' to needing anyt
 Thanks, "ok bye", "theek hai", silence after the goal is achieved: say one short farewell with {END_MARK}. Do not offer more help a second time."""
 
 
-def build_messages(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True, top_k: int = 5) -> tuple[list[dict], list[dict]]:
-    persona = agents.get_profile(agent_id)
-
-    query = customer_text
+def retrieval_query(history: list[dict], customer_text: str) -> str:
+    """What to search the knowledge base with. Shared so a prefetch warms the exact query the turn uses."""
     last_agent = next((h["text"] for h in reversed(history) if h["role"] == "assistant"), "")
     if len(customer_text.split()) < 4 and last_agent:
-        query = f"{last_agent} {customer_text}"  # short answers like "yes, tell me" need context
+        return f"{last_agent} {customer_text}"  # short answers like "yes, tell me" need context
+    return customer_text
+
+
+def build_messages(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True,
+                   top_k: int = 5, embed_timeout: float = 0.8, summary: str | None = None) -> tuple[list[dict], list[dict]]:
+    persona = agents.get_profile(agent_id)
+
+    query = retrieval_query(history, customer_text)
     try:
-        # Live call budget: semantic search gets 0.8s, otherwise BM25 alone answers
-        knowledge = rag.search(agent_id, query, top_k=top_k, use_embeddings=use_embeddings, embed_timeout=0.8)
+        knowledge = rag.search(agent_id, query, top_k=top_k, use_embeddings=use_embeddings, embed_timeout=embed_timeout)
     except Exception:
         log.exception("RAG search failed")
         knowledge = []
 
-    messages = [{"role": "system", "content": _system_prompt(persona, lead, knowledge, agent_id)}]
+    system = _system_prompt(persona, lead, knowledge, agent_id)
+    if summary:
+        # Turns older than the window are one line instead of a transcript: a twenty-minute call
+        # costs about the same prompt as a two-minute one.
+        system += "\n# Earlier in this call\n" + summary + "\n"
+    messages = [{"role": "system", "content": system}]
     for turn in history[-MAX_HISTORY_TURNS:]:
         messages.append({"role": "assistant" if turn["role"] == "assistant" else "user", "content": turn["text"]})
     messages.append({"role": "user", "content": customer_text})
@@ -523,12 +536,16 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
 
 
 def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead: dict, guidance: str | None = None,
-                   language: str | None = None):
+                   language: str | None = None, summary: str | None = None):
     """
     Live-call turn as a stream of text deltas (plain speech, END_MARK when the call should end).
-    Knowledge uses keyword search only: no embedding round-trip on the hot path.
+
+    Semantic search is used, but on a budget of LIVE_EMBED_TIMEOUT: rag.prefetch() embeds the query
+    while the caller is still talking, so the vector is normally already cached and free. A cold or
+    slow turn falls back to keyword search rather than making the caller wait.
     """
-    messages, _ = build_messages(agent_id, history, customer_text, lead, use_embeddings=False, top_k=2)
+    messages, _ = build_messages(agent_id, history, customer_text, lead, use_embeddings=True, top_k=3,
+                                 embed_timeout=LIVE_EMBED_TIMEOUT, summary=summary)
     system = messages[0]["content"].rsplit("# Output", 1)[0]
     # The JSON-mode rules talk about fields; phrased as fields, the model emits tool calls instead of speech.
     for field_rule, spoken_rule in ((' set intent "do_not_call" and end_call true', f" and add {END_MARK}"),
@@ -626,12 +643,13 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
         tool_call_buffer = []
 
 
-def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True) -> dict:
+def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True,
+            summary: str | None = None) -> dict:
     """
     Generate the next turn for one agent (its persona and its own knowledge base). `history` excludes `customer_text`.
     """
     started = time.perf_counter()
-    messages, knowledge = build_messages(agent_id, history, customer_text, lead, use_embeddings)
+    messages, knowledge = build_messages(agent_id, history, customer_text, lead, use_embeddings, summary=summary)
     result = llm.complete(messages, json_mode=True, max_tokens=220, temperature=0.4)
     try:
         data = llm.parse_json(result.text)
@@ -694,6 +712,29 @@ Return ONLY JSON:
     }}
   ]
 }}"""
+
+
+COMPACT_PROMPT = (
+    "Fold this part of a sales phone call into at most 3 short lines an agent can read mid-call: who the "
+    "customer is, what they want, budget/timeline/city if stated, objections raised, and anything already "
+    "promised. Facts only, no advice, no preamble. If a previous summary is given, merge it and keep it short."
+)
+
+
+def compact_history(history: list[dict], prior: str | None = None) -> str:
+    """One-paragraph memory of the turns that have fallen out of the prompt window.
+
+    Runs between turns, never on the reply path: an unfinished or failed compaction just means the
+    next turn carries the previous summary.
+    """
+    older = history[:-MAX_HISTORY_TURNS]
+    if not older:
+        return prior or ""
+    transcript = "\n".join(f"{'Agent' if t['role'] == 'assistant' else 'Customer'}: {t['text']}" for t in older)
+    user = (f"Previous summary:\n{prior}\n\n" if prior else "") + f"Call so far:\n{transcript}"
+    result = llm.complete([{"role": "system", "content": COMPACT_PROMPT}, {"role": "user", "content": user}],
+                          max_tokens=160, temperature=0.1, providers=settings.summary_llm_providers, timeout=12)
+    return " ".join(result.text.split()) or (prior or "")
 
 
 def summarize(history: list[dict]) -> dict:

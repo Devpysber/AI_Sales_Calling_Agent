@@ -40,7 +40,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services import agent, agents, call_session, events, tts
+from app.services import agent, agents, call_session, events, rag, tts
 from app.services.call_service import IST, CallService, session_agent
 
 log = get_logger(__name__)
@@ -511,6 +511,7 @@ class CallStream:
         self.heard: list[str] = []         # transcripts of the caller's current turn
         self.reply_task: asyncio.Task | None = None
         self.commit_task: asyncio.Task | None = None
+        self.compacted_at = 0              # history length when the rolling summary was last rebuilt
         self.mark = 0
         self.hangup_on_mark: str | None = None
         self.transfer_on_mark: str | None = None
@@ -735,6 +736,34 @@ class CallStream:
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(PlivoService().hangup, self.call_uuid)
 
+    def compact_history_soon(self):
+        """Fold the turns that have fallen out of the prompt window into one summary line.
+
+        Runs between turns in a worker thread: a long call keeps paying for the last
+        MAX_HISTORY_TURNS plus one paragraph instead of a growing transcript. The caller never
+        waits for it, and a failure only means the next turn reuses the previous summary.
+        """
+        turns = len(self.session["history"])
+        if turns < agent.COMPACT_AFTER_TURNS or turns - self.compacted_at < agent.COMPACT_EVERY_TURNS:
+            return
+        self.compacted_at = turns
+        history, prior = list(self.session["history"]), self.session.get("summary")
+
+        def run():
+            try:
+                return agent.compact_history(history, prior)
+            except Exception as e:  # noqa: BLE001 - the summary is an optimisation, not state we need
+                log.warning("History compaction failed for %s: %s", self.session_id[:8], e)
+                return None
+
+        async def store():
+            summary = await asyncio.to_thread(run)
+            if summary:
+                self.save_session(summary=summary)
+                log.info("Compacted %s turns into a summary, session=%s", len(history), self.session_id[:8])
+
+        asyncio.create_task(store())
+
     def save_session(self, **fields):
         fresh = call_session.get(self.session_id) or self.session
         fresh.update(fields)
@@ -904,6 +933,9 @@ class CallStream:
             elif text:
                 self.publish({"type": "heard", "text": text})
                 self.heard.append(text)
+                # Retrieve for what we have heard so far while the caller finishes their sentence, so
+                # the embedding is cached by the time the reply is actually built.
+                rag.prefetch(self.agent_id, agent.retrieval_query(self.session["history"], " ".join(self.heard)))
                 if self.commit_task and not self.commit_task.done():
                     self.commit_task.cancel()
                 self.commit_task = asyncio.create_task(self.commit_turn())
@@ -1023,7 +1055,8 @@ class CallStream:
 
         def pump():
             try:
-                for delta in agent.respond_stream(self.agent_id, history, prompt_text, lead, guidance, language):
+                for delta in agent.respond_stream(self.agent_id, history, prompt_text, lead, guidance, language,
+                                                  summary=self.session.get('summary')):
                     if stop.is_set():
                         return
                     loop.call_soon_threadsafe(deltas.put_nowait, delta)
@@ -1129,7 +1162,9 @@ class CallStream:
                 retry = ReplyFilter()
                 spoken_only = ((guidance + " ") if guidance else "") + SPOKEN_ONLY
                 self.meter("llm_requests")
-                raw = await asyncio.to_thread(lambda: "".join(agent.respond_stream(self.agent_id, history, prompt_text, lead, spoken_only, language)))
+                raw = await asyncio.to_thread(lambda: "".join(agent.respond_stream(
+                    self.agent_id, history, prompt_text, lead, spoken_only, language,
+                    summary=self.session.get("summary"))))
                 reply = " ".join((retry.feed(raw) + retry.flush()).split())
                 cleaner.end_call = retry.end_call
                 if reply:
@@ -1157,6 +1192,7 @@ class CallStream:
             self.session["latencies"] = (self.session.get("latencies") or []) + [first_audio_ms]
         self.save_session(silent_prompts=0)
         log.info("Turn: first audio %sms after caller stopped, session=%s", first_audio_ms, self.session_id[:8])
+        self.compact_history_soon()
         if cleaner.transfer and self.can_transfer():
             await self.checkpoint(transfer=True)
         else:
