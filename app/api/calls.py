@@ -34,6 +34,10 @@ def list_calls(lead_id: int | None = None, status: str | None = None, direction:
                agent_id: int = Depends(workspace)):
     return CallService(agent_id).list_calls(lead_id, status, direction, search, page, page_size)
 
+@router.delete("")
+def delete_all_calls(agent_id: int = Depends(workspace)):
+    return CallService(agent_id).delete_history()
+
 
 @router.get("/stats")
 def stats(days: int = Query(14, ge=1, le=90), agent_id: int = Depends(workspace)):

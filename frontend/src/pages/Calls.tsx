@@ -147,7 +147,17 @@ export default function Calls() {
               <EmptyState icon={<PhoneCall />} title="No calls found" description={filtered ? 'Try clearing the filters.' : 'Place a call from the Leads page or switch on auto-dial.'} />
             )}
           </div>
-          {data && data.total > 0 && <Pagination page={page} pageSize={25} total={data.total} onPage={setPage} />}
+          <div className="flex items-center justify-between p-4">
+            <Button variant="ghost" size="sm" className="text-danger hover:bg-danger/10 hover:text-danger" onClick={async () => {
+              if (window.confirm("Are you sure you want to permanently delete all call history for this agent?")) {
+                await api(`${base}/calls`, { method: 'DELETE' })
+                window.location.reload()
+              }
+            }}>
+              Delete call history
+            </Button>
+            {data && data.total > 0 && <Pagination page={page} pageSize={25} total={data.total} onPage={setPage} />}
+          </div>
         </Card>
       )}
 

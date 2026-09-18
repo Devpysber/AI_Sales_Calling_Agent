@@ -677,6 +677,13 @@ class CallService:
                 data["transcript"] = session["history"]  # live transcript
         return data
 
+    def delete_history(self) -> dict:
+        from sqlalchemy import delete
+        with get_db() as db:
+            db.execute(delete(Call).where(Call.agent_id == self.agent_id))
+            db.commit()
+        return {"ok": True}
+
     def list_calls(self, lead_id=None, status=None, direction=None, search=None, page=1, page_size=25) -> dict:
         with get_db() as db:
             query = self._scoped(select(Call, Lead.name).outerjoin(Lead, Lead.id == Call.lead_id))
