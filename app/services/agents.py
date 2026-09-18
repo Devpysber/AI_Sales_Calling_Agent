@@ -285,7 +285,7 @@ def _get_group(agent_id: int, group: str) -> dict:
                 raise AgentNotFound(f"Agent {agent_id} not found.")
             cached = agent.stored(group)
         store.set_json(_cache_key(agent_id, group), cached, ttl=CACHE_TTL)
-    return {**defaults, **{k: v for k, v in cached.items() if k in defaults}}
+    return {**defaults, **{k: v for k, v in cached.items() if k in defaults and v is not None}}
 
 
 def _update_group(agent_id: int, group: str, values: dict, label: str, actor: str) -> dict:
