@@ -8,6 +8,7 @@ import InboundSetup from '@/components/InboundSetup'
 import { CallStatusBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, PageHeader, Skeleton, Switch, Textarea } from '@/components/ui'
 import { api } from '@/lib/api'
+import { AnimatedNumber } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
 import type { AgentProfile, AutomationSettings, Call, Page } from '@/lib/types'
 import { cn, formatDuration, timeAgo } from '@/lib/utils'
@@ -101,20 +102,24 @@ export default function Inbound() {
       <PageHeader eyebrow={<><PhoneIncoming className="size-3.5" />{agent?.name} · Call routing</>} title="Inbound & transfer"
         description="Choose who answers when customers call, and where the AI sends callers who need a person." />
 
-      <Card className="mb-4">
+      <Card className="glint mb-4">
         <div className="flex flex-wrap items-center gap-4 px-5 py-4">
           <div className="flex items-center gap-2.5 text-sm">
-            <span className="grid size-9 place-items-center rounded-xl bg-surface-2"><PhoneIncoming className="size-4" /></span>
+            <span className="relative grid size-9 place-items-center rounded-xl bg-surface-2">
+              <span className="absolute inset-0 animate-live-ring rounded-xl bg-fg/10" />
+              <PhoneIncoming className="relative size-4" />
+            </span>
             <div><div className="font-bold">A customer calls now</div><div className="text-xs text-muted">{automation.data ? `${automation.data.within_calling_hours ? 'Open' : 'Closed'} · ${hours}` : '…'}</div></div>
           </div>
-          <span className="hidden h-px w-10 bg-border-strong sm:block" />
+          {/* A signal travelling from the caller to whoever answers right now: the route, shown working. */}
+          <span className="route-path hidden w-16 sm:block" aria-hidden><span className="route-signal" /></span>
           <div className="flex min-w-0 items-center gap-2.5 text-sm">
-            <span className="grid size-9 place-items-center rounded-xl bg-fg text-bg [&_svg]:size-4">{flow[routeNow]?.icon}</span>
+            <span key={routeNow} className="animate-pop-in grid size-9 place-items-center rounded-xl bg-fg text-bg [&_svg]:size-4">{flow[routeNow]?.icon}</span>
             <div className="min-w-0"><div className="font-bold">{flow[routeNow]?.label}</div><div className="truncate text-xs text-muted">{flow[routeNow]?.detail}</div></div>
           </div>
           <div className="ml-auto grid grid-cols-4 gap-5 text-center">
             {([['Inbound', stats.total], ['Answered', stats.answered], ['Forwarded', stats.forwarded], ['Missed', stats.missed]] as const).map(([l, v]) => (
-              <div key={l}><div className="text-lg font-extrabold tabular-nums">{v}</div><div className="text-[11px] text-muted">{l}</div></div>
+              <div key={l}><div className="text-lg font-extrabold tabular-nums"><AnimatedNumber value={v} /></div><div className="text-[11px] text-muted">{l}</div></div>
             ))}
           </div>
         </div>
@@ -253,8 +258,8 @@ export default function Inbound() {
           {calls.isLoading ? <div className="space-y-2 px-5 pb-5">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-12" />)}</div>
             : items.length ? (
               <ul className="divide-y divide-border">
-                {items.map((c) => (
-                  <li key={c.id}>
+                {items.map((c, i) => (
+                  <li key={c.id} style={{ animationDelay: `${Math.min(i, 10) * 45}ms` }} className="reveal reveal-in reveal-right">
                     <button type="button" onClick={() => setCallId(c.id)} className="flex w-full items-center gap-3 px-5 py-3 text-left transition hover:bg-surface-2">
                       <span className={cn('grid size-8 shrink-0 place-items-center rounded-full', c.trigger === 'forwarded' || c.transferred_to ? 'bg-surface-2 text-fg-2' : 'bg-brand-soft text-brand')}>
                         {c.trigger === 'forwarded' || c.transferred_to ? <PhoneForwarded className="size-4" /> : <PhoneIncoming className="size-4" />}

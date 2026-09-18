@@ -7,6 +7,7 @@ import { useStartCall } from '@/components/LeadSheets'
 import { CallStatusBadge, QualificationBadge } from '@/components/status'
 import { Avatar, Button, Card, Input, PageHeader, Select, Skeleton, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
+import { AnimatedNumber } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
 import { useDebounced } from '@/lib/useDebounced'
 import type { Board, Lead } from '@/lib/types'
@@ -24,8 +25,8 @@ function LeadCard({ lead, onOpen, onDragStart, onMove }: { lead: Lead; onOpen: (
   const fresh = !onCall && Date.now() - Date.parse(lead.updated_at) < RECENT_MS
   return (
     <div draggable onDragStart={onDragStart} role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => e.key === 'Enter' && onOpen()}
-      className={cn('group min-w-0 shrink-0 cursor-grab rounded-2xl border bg-surface p-3.5 shadow-card transition hover:border-border-strong active:cursor-grabbing',
-        onCall ? 'border-success ring-2 ring-success/25' : fresh ? 'border-brand/50 animate-pop-in' : 'border-border')}>
+      className={cn('group min-w-0 shrink-0 cursor-grab rounded-2xl border bg-surface p-3.5 shadow-card transition duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-pop active:scale-[.98] active:cursor-grabbing',
+        onCall ? 'beam beam-on beam-live border-success ring-2 ring-success/25' : fresh ? 'border-brand/50 animate-pop-in' : 'border-border')}>
       {(onCall || fresh) && (
         <div className={cn('mb-2 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10.5px] font-bold', onCall ? 'bg-success-soft text-success' : 'bg-surface-2 text-fg-2')}>
           <span className={cn('size-1.5 rounded-full', onCall ? 'animate-pulse bg-success' : 'bg-brand')} />
@@ -177,7 +178,7 @@ export default function Pipeline() {
           {totals && (
             <div className="ml-auto flex flex-wrap gap-2 text-[13px]">
               {[['In pipeline', totals.open], ['Meetings', totals.meetings], ['Won', totals.won], ['Win rate', `${totals.winRate}%`]].map(([l, v]) => (
-                <span key={l as string} className="rounded-full border border-border bg-surface px-3 py-1.5 font-semibold text-muted">{l} <b className="ml-1 text-fg tabular-nums">{v}</b></span>
+                <span key={l as string} className="rounded-full border border-border bg-surface px-3 py-1.5 font-semibold text-muted">{l} <b className="ml-1 text-fg tabular-nums">{typeof v === 'number' ? <AnimatedNumber value={v} /> : v}</b></span>
               ))}
             </div>
           )}
@@ -193,7 +194,7 @@ export default function Pipeline() {
       <div ref={boardRef} onDragEnd={() => { setDragging(null); setOver(null) }}
         className="-mx-4 overflow-x-auto px-4 pb-4 [scrollbar-width:thin] sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
         <div className="flex flex-col gap-4 sm:w-max sm:flex-row">
-          {columns.map((stage) => {
+          {columns.map((stage, ci) => {
             const col = data?.[stage]
             const hot = col?.items.filter((l) => l.qualification === 'Hot').length ?? 0
             const isOver = over === stage && dragging?.from !== stage
@@ -206,19 +207,22 @@ export default function Pipeline() {
                   if (dragging && dragging.from !== stage) move.mutate({ id: dragging.id, status: stage })
                   setDragging(null); setOver(null)
                 }}
-                className={cn('flex w-full flex-col rounded-[var(--radius-card)] border bg-surface-2/60 transition sm:w-80 sm:shrink-0', isOver ? 'border-fg bg-surface-2' : 'border-transparent')}>
+                style={{ animationDelay: `${ci * 70}ms` }}
+                className={cn('reveal reveal-in reveal-up flex w-full flex-col rounded-[var(--radius-card)] border bg-surface-2/60 transition sm:w-80 sm:shrink-0', isOver ? 'is-drop-target border-fg bg-surface-2' : 'border-transparent')}>
                 <div className="flex items-center gap-2 px-3.5 pt-3.5 pb-2">
-                  <span className={cn('size-2 rounded-full', stage === 'Closed Won' || stage === 'Meeting Booked' ? 'bg-success' : ['Not Interested', 'Do Not Call', 'Closed Lost'].includes(stage) ? 'bg-danger' : 'bg-fg')} />
+                  <span className={cn('size-2 rounded-full', (stage === 'Closed Won' || stage === 'Meeting Booked') && (col?.total ?? 0) > 0 && 'animate-pulse-dot', stage === 'Closed Won' || stage === 'Meeting Booked' ? 'bg-success' : ['Not Interested', 'Do Not Call', 'Closed Lost'].includes(stage) ? 'bg-danger' : 'bg-fg')} />
                   <h3 className="flex-1 text-[13px] font-extrabold">{stage}</h3>
                   {hot > 0 && <span className="flex items-center gap-0.5 text-[11px] font-bold text-danger"><Flame className="size-3" />{hot}</span>}
                   <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] font-bold tabular-nums ring-1 ring-border">{col?.total ?? '…'}</span>
                 </div>
                 <div data-column-scroll className="flex max-h-[70vh] min-h-24 flex-col gap-2.5 overflow-y-auto px-2.5 pb-3 [scrollbar-width:thin] sm:min-h-40 sm:max-h-[calc(100vh-300px)]">
                   {board.isLoading ? [0, 1].map((i) => <Skeleton key={i} className="h-28" />)
-                    : col?.items.length ? col.items.map((lead) => (
-                      <LeadCard key={lead.id} lead={lead} onOpen={() => navigate(path(`/leads/${lead.id}`))}
+                    : col?.items.length ? col.items.map((lead, li) => (
+                      <div key={lead.id} className="reveal reveal-in reveal-up" style={{ animationDelay: `${ci * 70 + 120 + Math.min(li, 6) * 50}ms` }}>
+                      <LeadCard lead={lead} onOpen={() => navigate(path(`/leads/${lead.id}`))}
                         onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; setDragging({ id: lead.id, from: stage }) }}
                         onMove={(status) => status !== lead.status && move.mutate({ id: lead.id, status })} />
+                      </div>
                     )) : (
                       <div className={cn('grid flex-1 place-items-center rounded-2xl border-2 border-dashed py-10 text-center text-xs font-semibold text-muted', isOver ? 'border-fg' : 'border-border')}>
                         {dragging ? 'Drop here' : 'No leads'}

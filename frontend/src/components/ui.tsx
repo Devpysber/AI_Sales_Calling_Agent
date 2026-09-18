@@ -321,7 +321,7 @@ export function StatTile({ label, value, count, decimals, prefix, suffix, sub, i
 }) {
   const counted = count !== undefined
   return (
-    <Card className={cn('group relative overflow-hidden p-5', className)}>
+    <Card className={cn("glint group relative overflow-hidden p-5", className)}>
       <div className="flex items-start justify-between gap-3">
         <span className="text-[13px] font-semibold text-muted">{label}</span>
         {icon && (

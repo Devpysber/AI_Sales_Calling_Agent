@@ -185,7 +185,7 @@ kbd {
 .reveal-none.reveal-in { animation-name: reveal-none; }
 
 /* Each route change replays this on <main>, so a new page arrives instead of blinking into place. */
-.page-in { animation: var(--animate-page-in); }
+.page-in { animation: fade-in .25s var(--ease-entrance) both; }  /* sections below travel; the page itself only fades */
 
 /* Cards that lead somewhere lift towards the pointer; cards that are only read do not. */
 .lift {
@@ -390,3 +390,31 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 /* "Now" on a chart: the latest point breathes. SVG needs its own transform box. */
 @keyframes now-ring { 0% { transform: scale(1); opacity: .6; } 100% { transform: scale(3.2); opacity: 0; } }
 .now-ring { transform-box: fill-box; transform-origin: center; animation: now-ring 2s var(--ease-entrance) infinite; }
+
+/* ---------------- Page cascade ----------------
+   Every page's top-level sections (header, stat row, filters, table, …) enter one after another,
+   on every route, without each page wiring it up. <main> remounts per route (AppShell), so this
+   replays on navigation and never on a background refresh. */
+.page-in > * { animation: reveal-up .45s var(--ease-entrance) both; }
+.page-in > *:nth-child(2) { animation-delay: 70ms; }
+.page-in > *:nth-child(3) { animation-delay: 140ms; }
+.page-in > *:nth-child(4) { animation-delay: 210ms; }
+.page-in > *:nth-child(5) { animation-delay: 280ms; }
+.page-in > *:nth-child(6) { animation-delay: 350ms; }
+.page-in > *:nth-child(n+7) { animation-delay: 400ms; }
+
+/* Inbound route: a dotted line with a signal running along it, caller → whoever answers. */
+@keyframes route-run { from { left: -10%; opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } to { left: 100%; opacity: 0; } }
+.route-path {
+  position: relative; height: 2px;
+  background-image: linear-gradient(90deg, var(--border-strong) 50%, transparent 50%);
+  background-size: 6px 2px;
+}
+.route-signal {
+  position: absolute; top: 50%; width: 10px; height: 10px; margin-top: -5px; border-radius: 9999px;
+  background: var(--success); box-shadow: 0 0 12px 2px color-mix(in srgb, var(--success) 60%, transparent);
+  animation: route-run 1.8s var(--ease-pointer) infinite;
+}
+
+/* Pipeline: the column under a dragged card opens up to receive it. */
+.is-drop-target { transform: scale(1.015); box-shadow: 0 0 0 2px var(--fg), var(--shadow-pop); }

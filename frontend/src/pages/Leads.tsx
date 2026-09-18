@@ -10,6 +10,7 @@ import { LeadFormSheet, useStartCall } from '@/components/LeadSheets'
 import { CallStatusBadge, LeadStatusBadge, QualificationBadge } from '@/components/status'
 import { Avatar, Button, Card, EmptyState, Input, PageHeader, Pagination, Select, Skeleton, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
+import { AnimatedNumber } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
 import type { Lead, LeadStats, Page } from '@/lib/types'
 import { CALL_STATUSES, cn, formatDate, LANGUAGES, QUALIFICATIONS, timeAgo } from '@/lib/utils'
@@ -180,13 +181,13 @@ export default function Leads() {
           <Button variant="primary" onClick={() => setAdding(true)}><Plus />Add lead</Button>
         </>}>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {summary.map(([Icon, label, value, onClick, active]) => (
-            <button key={label} type="button" onClick={onClick}
-              className={cn('flex items-center gap-3 rounded-2xl border bg-surface p-4 text-left shadow-card transition hover:border-border-strong',
+          {summary.map(([Icon, label, value, onClick, active], i) => (
+            <button key={label} type="button" onClick={onClick} style={{ animationDelay: `${120 + i * 70}ms` }}
+              className={cn('reveal reveal-in reveal-up glint group flex items-center gap-3 rounded-2xl border bg-surface p-4 text-left shadow-card transition hover:-translate-y-0.5 hover:border-border-strong hover:shadow-pop',
                 active ? 'border-fg ring-1 ring-fg' : 'border-border')}>
-              <span className={cn('grid size-10 place-items-center rounded-xl', active ? 'bg-fg text-bg' : 'bg-surface-2 text-fg-2')}><Icon className="size-4.5" /></span>
+              <span className={cn('grid size-10 place-items-center rounded-xl transition-transform duration-300 group-hover:-rotate-6 group-hover:scale-105', active ? 'bg-fg text-bg' : 'bg-surface-2 text-fg-2')}><Icon className="size-4.5" /></span>
               <span>
-                <span className="block text-2xl leading-none font-extrabold tabular-nums">{value ?? '—'}</span>
+                <span className="block text-2xl leading-none font-extrabold tabular-nums">{value == null ? '—' : <AnimatedNumber value={value} />}</span>
                 <span className="mt-1 block text-xs font-semibold text-muted">{label}</span>
               </span>
             </button>
@@ -317,7 +318,7 @@ export default function Leads() {
                   <td className="px-3">
                     {(() => { const v = score(l); return (
                       <div className="flex items-center gap-2" title={`Lead score ${v}/100`}>
-                        <div className="h-1.5 w-12 overflow-hidden rounded-full bg-surface-2"><div className={cn('h-full rounded-full', v >= 60 ? 'bg-success' : v >= 35 ? 'bg-warning' : 'bg-muted')} style={{ width: `${v}%` }} /></div>
+                        <div className="h-1.5 w-12 overflow-hidden rounded-full bg-surface-2"><div className={cn('grow-x h-full rounded-full', v >= 60 ? 'flow bg-success' : v >= 35 ? 'bg-warning' : 'bg-muted')} style={{ width: `${v}%` }} /></div>
                         <span className="text-xs font-semibold tabular-nums text-fg-2">{v}</span>
                       </div>) })()}
                   </td>

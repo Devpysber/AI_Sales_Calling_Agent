@@ -2,12 +2,13 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Bot, Clock, Gauge, PhoneCall, PhoneIncoming, PhoneOutgoing, Radio, Search, Timer, X, ListOrdered } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { LiveDot } from '@/components/AppShell'
 import CallSheet from '@/components/CallSheet'
 import { CallStatusBadge, QualificationBadge, SentimentDot } from '@/components/status'
 import CallQueue from '@/components/CallQueue'
 import { Button, Card, EmptyState, Input, PageHeader, Pagination, Select, Skeleton, StatTile, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
+import { Orb3D, VoiceOrb, Waveform } from '@/components/VoiceViz'
+import { Stagger } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
 import { useDebounced } from '@/lib/useDebounced'
 import type { Call, CallStats, Page } from '@/lib/types'
@@ -18,10 +19,9 @@ function LiveCallCard({ call, onOpen }: { call: Call; onOpen: () => void }) {
   const detail = useQuery({ queryKey: ['call', call.id], queryFn: () => api<Call>(`${base}/calls/${call.id}`), refetchInterval: 2000 })
   const turns = detail.data?.transcript ?? []
   return (
-    <Card className="flex flex-col overflow-hidden">
+    <Card className="beam beam-on beam-live is-live-card flex flex-col overflow-hidden">
       <div className="flex items-center gap-3 border-b border-border p-4">
-        <span className="relative grid size-10 place-items-center rounded-full bg-success-soft text-success"><PhoneCall className="size-4" />
-          <span className="absolute -top-0.5 -right-0.5"><LiveDot on /></span></span>
+        <VoiceOrb state={call.status === 'In Progress' ? 'live' : 'listening'} size={40} />
         <div className="min-w-0 flex-1 leading-tight">
           <div className="truncate font-bold">{callParty(call)}</div>
           <div className="text-xs text-muted">{call.direction === 'inbound' ? 'Inbound' : 'Outbound'} · {call.direction === 'inbound' ? call.from_number : call.to_number} · {timeAgo(call.created_at)}</div>
@@ -31,12 +31,17 @@ function LiveCallCard({ call, onOpen }: { call: Call; onOpen: () => void }) {
       <div className="flex h-56 flex-col-reverse overflow-y-auto p-4">
         <div className="space-y-2">
           {turns.length ? turns.slice(-8).map((t, i) => (
-            <div key={i} className={cn('flex', t.role === 'customer' && 'justify-end')}>
+            <div key={turns.length > 8 ? turns.length - 8 + i : i} className={cn('reveal reveal-in flex', t.role === 'customer' ? 'reveal-right justify-end' : 'reveal-left')}>
               <div className={cn('max-w-[85%] rounded-2xl px-3 py-1.5 text-[13px] leading-snug', t.role === 'assistant' ? 'rounded-tl-sm bg-fg text-bg' : 'rounded-tr-sm bg-surface-2 ring-1 ring-border')}>{t.text}</div>
             </div>
-          )) : <p className="text-center text-xs text-muted">{call.status === 'In Progress' ? 'Listening…' : 'Waiting for the call to be answered…'}</p>}
+          )) : <p className="flex flex-col items-center gap-2 text-center text-xs text-muted"><Waveform bars={7} className="h-5 text-success" />{call.status === 'In Progress' ? 'Listening…' : 'Waiting for the call to be answered…'}</p>}
         </div>
       </div>
+      {turns.length > 0 && call.status === 'In Progress' && (
+        <div className="flex items-center gap-2 border-t border-border px-4 py-2 text-[11px] font-semibold text-success">
+          <Waveform bars={9} className="h-3.5" />On the line
+        </div>
+      )}
       <button type="button" onClick={onOpen} className="border-t border-border py-2.5 text-xs font-bold text-muted transition hover:bg-surface-2 hover:text-fg">Open full transcript</button>
     </Card>
   )
@@ -91,9 +96,18 @@ export default function Calls() {
       {view === 'queue' ? <CallQueue /> : view === 'active' ? (
         isLoading ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-80" />)}</div>
           : data?.items.length ? (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{data.items.map((c) => <LiveCallCard key={c.id} call={c} onOpen={() => setCallId(c.id)} />)}</div>
+            <Stagger className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{data.items.map((c) => <LiveCallCard key={c.id} call={c} onOpen={() => setCallId(c.id)} />)}</Stagger>
           ) : (
-            <Card><EmptyState icon={<Radio />} title="No live calls right now" description="Calls show up here the second they start, with a real-time transcript." /></Card>
+            <Card className="scan-line overflow-hidden">
+              <div className="flex flex-col items-center px-6 py-10 text-center">
+                <Orb3D state="listening" size={170} />
+                <p className="mt-2 font-semibold text-fg">No live calls right now</p>
+                <p className="mt-1 max-w-sm text-sm text-muted">Calls show up here the second they start, with a real-time transcript.</p>
+                <span className="mt-4 inline-flex items-center gap-2 rounded-full bg-surface-2 px-3 py-1 text-xs font-semibold text-muted ring-1 ring-border">
+                  <span className="size-1.5 animate-pulse-dot rounded-full bg-success" />Listening for calls
+                </span>
+              </div>
+            </Card>
           )
       ) : (
         <Card className="overflow-hidden">
