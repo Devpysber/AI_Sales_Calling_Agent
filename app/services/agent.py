@@ -555,10 +555,22 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
     if purpose in ("team", "admin"):
         from app.services.agent_tools import get_tools_for_role
         tools = get_tools_for_role(purpose)
-        # Remove the restriction against tool calls for team/admin members
-        base_content = system + VOICE_OUTPUT.replace("Never output tool calls, tags", "Never output tags") + transfer
+        
+        god_mode_instructions = (
+            "\n\n# GOD MODE ACTIVE\n"
+            "You have direct access to backend tools and databases. If the caller asks you to check records, send emails, "
+            "schedule callbacks, diagnose the system, or check configs, YOU MUST USE YOUR TOOLS. "
+            "Do NOT say you cannot help them, and do NOT offer to transfer them to a human. "
+            "Simply execute the required tool, and when you receive the result, summarize it back to the caller in their language."
+        )
+        
+        base_content = system + VOICE_OUTPUT.replace("Never output tool calls, tags", "Never output tags") + god_mode_instructions
+        
         if purpose == "admin":
             base_content = "You are the Super Admin AI for the entire Psyber platform. You have root access. You can diagnose the website, check any agent's stats, and manage system resources.\n\n" + base_content
+        else:
+            base_content = "You are the Internal Team AI for this agent. You are assisting an internal team member. You have access to tools to manage operations.\n\n" + base_content
+            
         messages[0]["content"] = base_content
     else:
         messages[0]["content"] = system + VOICE_OUTPUT + transfer
