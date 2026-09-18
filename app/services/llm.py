@@ -42,7 +42,7 @@ _hedge_pool = ThreadPoolExecutor(max_workers=64, thread_name_prefix="llm")
 HEDGE_AFTER_SECONDS = 0.8
 
 
-def _openrouter_model(model: str, messages: list[dict], json_mode: bool, max_tokens: int, temperature: float) -> LLMResult:
+def _openrouter_model(model: str, messages: list[dict], json_mode: bool, max_tokens: int, temperature: float, shrunk: bool = False) -> LLMResult:
     body = {
         "model": model,
         "messages": messages,
@@ -62,7 +62,23 @@ def _openrouter_model(model: str, messages: list[dict], json_mode: bool, max_tok
         res = _client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body)
     data = res.json()
     if "choices" not in data:
-        raise LLMError((data.get("error") or {}).get("message", str(data)[:200]))
+        message = (data.get("error") or {}).get("message", str(data)[:200])
+        # Free-tier accounts get a small, shifting prompt cap ("Prompt tokens limit exceeded: 4759 > 4130").
+        # Shrink the longest message (the system prompt with knowledge) to fit and retry once rather than fail.
+        m = re.search(r"Prompt tokens limit exceeded: (\d+) > (\d+)", message)
+        if m and not shrunk:
+            ratio = int(m.group(2)) / int(m.group(1)) * 0.85
+            longest = max(range(len(messages)), key=lambda i: len(messages[i].get("content") or ""))
+            trimmed = [dict(msg) for msg in messages]
+            content = trimmed[longest]["content"]
+            # Keep the output-format instructions at the end intact; drop the tail of the knowledge sections.
+            idx = content.rfind("# Output")
+            head, tail = (content[:idx], content[idx:]) if idx > 0 else (content, "")
+            keep = max(200, int(len(content) * ratio) - len(tail))
+            trimmed[longest]["content"] = head[:keep] + "\n(... trimmed to fit the model's prompt limit)\n\n" + tail
+            log.warning("OpenRouter %s prompt over free cap, retrying with system prompt trimmed to %.0f%%", model, ratio * 100)
+            return _openrouter_model(model, trimmed, json_mode, max_tokens, temperature, shrunk=True)
+        raise LLMError(message)
     text = (data["choices"][0]["message"].get("content") or "").strip()
     if not text:
         raise LLMError("empty content")
