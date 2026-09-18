@@ -330,3 +330,10 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--fg) 6%, transparent), transparent);
   animation: scan 3.6s ease-in-out infinite;
 }
+
+/* Glow beneath the 3D orb (components/VoiceViz.tsx → Orb3D). */
+.orb3d-glow {
+  background: radial-gradient(circle, color-mix(in srgb, #6d7cff 45%, transparent), color-mix(in srgb, #22d3a6 18%, transparent) 45%, transparent 70%);
+  filter: blur(18px);
+  animation: orb-halo 5s ease-in-out infinite;
+}

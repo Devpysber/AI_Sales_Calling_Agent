@@ -6,7 +6,11 @@
  * something to hear. The state is always the real one passed in — nothing here fakes activity.
  */
 
+import { lazy, Suspense, useCallback, useState } from 'react'
 import { cn } from '@/lib/utils'
+
+// three.js is ~600 KB: loaded only when a 3D orb is actually on screen.
+const VoiceOrb3D = lazy(() => import('@/components/VoiceOrb3D'))
 
 type OrbState = 'idle' | 'listening' | 'speaking' | 'live'
 
@@ -64,6 +68,26 @@ export function Aurora({ className }: { className?: string }) {
       <span className="aurora-blob aurora-a" />
       <span className="aurora-blob aurora-b" />
       <span className="aurora-blob aurora-c" />
+    </div>
+  )
+}
+
+/**
+ * The 3D orb where WebGL is available, the CSS orb everywhere else — and while three.js loads,
+ * so the space is never empty.
+ */
+export function Orb3D({ state = 'idle', size = 140, className }: { state?: OrbState; size?: number; className?: string }) {
+  const [unsupported, setUnsupported] = useState(false)
+  const onUnsupported = useCallback(() => setUnsupported(true), [])
+  const fallback = <VoiceOrb state={state} size={size * 0.72} className="m-auto" />
+  if (unsupported) return <div className={cn('grid place-items-center', className)} style={{ width: size, height: size }}>{fallback}</div>
+  return (
+    <div className={cn('relative grid place-items-center', className)} style={{ width: size, height: size }}>
+      {/* Soft light under the particles, so the sphere sits on something instead of floating on the page. */}
+      <span className="orb3d-glow pointer-events-none absolute inset-[14%] rounded-full" aria-hidden />
+      <Suspense fallback={fallback}>
+        <VoiceOrb3D state={state} size={size} onUnsupported={onUnsupported} className="relative" />
+      </Suspense>
     </div>
   )
 }

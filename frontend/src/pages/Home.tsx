@@ -14,7 +14,7 @@ import { CallStatusBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, Input, PageHeader, Ring, Select, Skeleton, StatTile, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
 import { Stagger } from '@/lib/motion'
-import { VoiceOrb, Waveform } from '@/components/VoiceViz'
+import { Orb3D, VoiceOrb, Waveform } from '@/components/VoiceViz'
 import type { AgentOverviewItem, AgentsOverview } from '@/lib/types'
 import { callParty, cn, formatDuration, LANGUAGES, timeAgo } from '@/lib/utils'
 
@@ -336,7 +336,7 @@ export default function Home() {
   return (
     <>
       <PageHeader
-        visual={<VoiceOrb state={totals.live ? 'live' : 'idle'} size={76} />}
+        visual={<Orb3D state={totals.live ? 'live' : 'listening'} size={124} className="-my-6 -ml-3" />}
         eyebrow={<><Radio className="size-3.5" />Command center · {new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</>}
         title={`${greeting}.`}
         description={`${agents.length} agent${agents.length > 1 ? 's' : ''} · ${totals.live ? `${totals.live} call${totals.live > 1 ? 's' : ''} live right now` : 'no calls live right now'} · ${totals.today} call${totals.today === 1 ? '' : 's'} today`}

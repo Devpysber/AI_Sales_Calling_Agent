@@ -77,11 +77,28 @@ def _openrouter():
     try:
         data = httpx.get("https://openrouter.ai/api/v1/key", timeout=8,
                          headers={"Authorization": f"Bearer {settings.openrouter_api_key}"}).json()["data"]
-        return {"ok": True, "key": _mask(settings.openrouter_api_key), "free_tier": data.get("is_free_tier"),
-                "usage": data.get("usage"), "limit_remaining": data.get("limit_remaining"),
-                "models": settings.openrouter_models.split(",")}
+        models = [m.strip() for m in settings.openrouter_models.split(",") if m.strip()]
+        unknown = _unknown_models(models)
+        result = {"ok": not unknown, "key": _mask(settings.openrouter_api_key), "free_tier": data.get("is_free_tier"),
+                  "usage": data.get("usage"), "limit_remaining": data.get("limit_remaining"),
+                  "models": models, "unknown_models": unknown}
+        if unknown:
+            # A retired model id fails every live turn before the next model is tried: that was
+            # the "not a valid model ID" behind dropped calls, and nothing on this page showed it.
+            result["detail"] = (f"OpenRouter no longer has {', '.join(unknown)}. Replace it in OPENROUTER_MODELS "
+                                "— every live reply wastes a request on it first.")
+        return result
     except Exception as e:
         return {"ok": False, "detail": str(e)}
+
+
+def _unknown_models(models: list[str]) -> list[str]:
+    """Configured model ids missing from OpenRouter's public catalogue. Empty if the catalogue can't be read."""
+    try:
+        catalogue = {m["id"] for m in httpx.get("https://openrouter.ai/api/v1/models", timeout=8).json()["data"]}
+    except Exception:  # noqa: BLE001 - never report a model as missing because the check itself failed
+        return []
+    return [m for m in models if m not in catalogue]
 
 
 def _sarvam():

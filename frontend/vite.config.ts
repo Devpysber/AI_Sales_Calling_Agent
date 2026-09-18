@@ -17,6 +17,8 @@ export default defineConfig({
       output: {
         manualChunks: (id) => {
           if (id.includes('recharts') || id.includes('d3-')) return 'charts'
+          // Own chunk, fetched only when a 3D orb mounts: in 'vendor' it would load on every page.
+          if (/node_modules[\/]three[\/]/.test(id)) return 'three'
           if (id.includes('node_modules')) return 'vendor'
         },
       },
