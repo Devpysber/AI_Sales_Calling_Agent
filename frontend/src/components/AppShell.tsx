@@ -261,8 +261,8 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
         {agent ? <>
           {/* Live status */}
           {!compact ? (
-            <Link to={path('/calls?status=active')} className={cn('relative block overflow-hidden rounded-2xl border border-ink-fg/8 bg-gradient-to-br from-ink-2 to-ink-3/40 p-3 transition hover:border-ink-fg/15',
-              agent.stats.live > 0 && 'is-live-card')}>
+            <Link to={path('/calls?status=active')} className={cn('beam relative block overflow-hidden rounded-2xl border border-ink-fg/8 bg-gradient-to-br from-ink-2 to-ink-3/40 p-3 transition hover:border-ink-fg/15',
+              agent.stats.live > 0 && 'is-live-card beam-on beam-live')}>
               <Aurora className="opacity-60" />
               <div className="relative flex items-center gap-2.5">
                 <VoiceOrb state={agent.status === 'paused' ? 'idle' : agent.stats.live > 0 ? 'live' : 'listening'} size={30} />

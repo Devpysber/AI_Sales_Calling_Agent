@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { AudioWaveform, Lock } from 'lucide-react'
 import { Orb3D, Waveform } from '@/components/VoiceViz'
-import { useState, type FormEvent } from 'react'
+import { useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Button, Field, Input } from '@/components/ui'
 import { api } from '@/lib/api'
@@ -30,8 +30,10 @@ export default function Login() {
   }
 
   return (
-    <div className="grid min-h-full lg:grid-cols-2">
-      <div className="relative hidden overflow-hidden bg-[#0d0b1f] p-12 text-white lg:flex lg:flex-col">
+    // One screen, never a scrollbar: on desktop the page is exactly the viewport and the orb
+    // shrinks to the height the copy leaves it; on phones only the form shows.
+    <div className="grid min-h-dvh lg:h-dvh lg:grid-cols-2 lg:overflow-hidden">
+      <div className="relative hidden min-h-0 overflow-hidden bg-[#0d0b1f] px-10 py-8 text-white lg:flex lg:flex-col xl:px-12 xl:py-10">
         <div className="absolute -top-40 -left-40 size-[520px] rounded-full bg-[#5b4bf5] opacity-40 blur-[120px] [animation:aurora-a_18s_ease-in-out_infinite]" />
         <div className="absolute -right-32 -bottom-40 size-[420px] rounded-full bg-[#00c2a8] opacity-20 blur-[120px] [animation:aurora-b_22s_ease-in-out_infinite]" />
         <div className="relative flex items-center gap-2.5">
@@ -39,13 +41,11 @@ export default function Login() {
           <span className="text-lg font-semibold">Samvaad AI</span>
         </div>
         {/* The product in one image: the agent's voice, alive and waiting for the next call. */}
-        <div className="relative my-auto grid place-items-center py-6">
-          <Orb3D state="listening" size={340} />
-        </div>
-        <div className="relative max-w-md">
-          <h2 className="text-4xl leading-tight font-semibold tracking-tight">Your AI sales team that never stops dialling.</h2>
-          <p className="mt-4 text-white/70">Calls leads in Hindi and English, answers from your company knowledge, qualifies intent and books meetings — with every conversation logged to your CRM.</p>
-          <div className="mt-8 grid grid-cols-3 gap-4 text-sm">
+        <FittedOrb />
+        <div className="relative max-w-md shrink-0">
+          <h2 className="text-3xl leading-tight font-semibold tracking-tight xl:text-4xl">Your AI sales team that never stops dialling.</h2>
+          <p className="mt-3 text-[15px] text-white/70">Calls leads in Hindi and English, answers from your company knowledge, qualifies intent and books meetings — with every conversation logged to your CRM.</p>
+          <div className="mt-6 grid grid-cols-3 gap-3 text-sm">
             {[['Plivo', 'Telephony'], ['Sarvam', 'Indian voices'], ['RAG', 'Grounded answers']].map(([a, b]) => (
               <div key={a} className="rounded-lg bg-white/5 p-3 ring-1 ring-white/10 transition hover:-translate-y-0.5 hover:bg-white/10"><div className="font-semibold">{a}</div><div className="text-white/60">{b}</div></div>
             ))}
@@ -53,7 +53,7 @@ export default function Login() {
         </div>
       </div>
 
-      <div className="flex items-center justify-center p-6">
+      <div className="flex min-h-0 items-center justify-center overflow-y-auto p-6">
         <form onSubmit={submit} className="w-full max-w-sm space-y-5">
           <div>
             <div className="mb-6 grid size-10 place-items-center rounded-xl bg-brand-soft text-brand lg:hidden"><AudioWaveform className="size-5" /></div>
@@ -68,6 +68,26 @@ export default function Login() {
           <Button type="submit" variant="primary" size="lg" className="w-full" loading={loading}><Lock />Sign in</Button>
         </form>
       </div>
+    </div>
+  )
+}
+
+/** The hero orb sized to the space left between the logo and the copy, so the panel never overflows. */
+function FittedOrb() {
+  const ref = useRef<HTMLDivElement>(null)
+  const [size, setSize] = useState(0)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const measure = () => setSize(Math.max(0, Math.min(el.clientHeight - 16, el.clientWidth * 0.8, 380)))
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  return (
+    <div ref={ref} className="relative grid min-h-0 flex-1 place-items-center">
+      {size >= 120 && <Orb3D key={Math.round(size / 40)} state="listening" size={size} />}
     </div>
   )
 }

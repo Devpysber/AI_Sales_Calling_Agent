@@ -337,3 +337,22 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   filter: blur(18px);
   animation: orb-halo 5s ease-in-out infinite;
 }
+
+/* ---------------- Border beam ----------------
+   A short light travelling round a card's edge. Idle cards carry it only on hover; a card whose
+   agent is live carries it all the time, faster, in the live colour. @property lets the browser
+   animate the gradient angle itself, so this costs no JavaScript. */
+@property --beam-angle { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+@keyframes beam-spin { to { --beam-angle: 360deg; } }
+
+.beam { position: relative; isolation: isolate; }
+.beam::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.5px; pointer-events: none; z-index: 1;
+  background: conic-gradient(from var(--beam-angle), transparent 0 70%, color-mix(in srgb, var(--beam-color, #8b93ff) 90%, transparent) 85%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  opacity: 0; transition: opacity .35s var(--ease-pointer);
+  animation: beam-spin var(--beam-speed, 4.5s) linear infinite;
+}
+.beam:hover::before, .beam.beam-on::before { opacity: 1; }
+.beam.beam-live { --beam-color: var(--success); --beam-speed: 2.6s; }

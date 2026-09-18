@@ -13,7 +13,7 @@ import NewAgentSheet from '@/components/NewAgentSheet'
 import { CallStatusBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, Input, PageHeader, Ring, Select, Skeleton, StatTile, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
-import { Stagger } from '@/lib/motion'
+import { AnimatedNumber, Stagger } from '@/lib/motion'
 import { Orb3D, VoiceOrb, Waveform } from '@/components/VoiceViz'
 import type { AgentOverviewItem, AgentsOverview } from '@/lib/types'
 import { callParty, cn, formatDuration, LANGUAGES, timeAgo } from '@/lib/utils'
@@ -71,8 +71,8 @@ function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?
   const missing = Object.entries(agent.setup).filter(([, v]) => !v).map(([k]) => SETUP_LABELS[k])
   const base = `/a/${agent.id}`
   return (
-    <Card className={cn('group relative flex min-w-0 flex-col overflow-hidden transition hover:-translate-y-0.5 hover:shadow-pop',
-      paused && 'opacity-90', s.live > 0 && !paused && 'is-live-card', className)}>
+    <Card className={cn('beam group relative flex min-w-0 flex-col overflow-hidden transition duration-300 hover:-translate-y-1 hover:shadow-pop',
+      paused && 'opacity-90', s.live > 0 && !paused && 'is-live-card beam-on beam-live', className)}>
       <Link to={base} className="absolute inset-0 z-0" aria-label={`Open ${agent.name}`} />
 
       <div className="relative p-5 pb-0">
@@ -108,9 +108,9 @@ function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?
       </div>
 
       <div className="relative grid grid-cols-4 gap-px border-y border-border bg-border">
-        {[['Calls 14d', p.calls], ['Connect', p.connect_rate === null ? '—' : `${Math.round(p.connect_rate)}%`], ['Meetings', s.meetings], ['Leads', s.leads]].map(([l, v]) => (
-          <div key={l as string} className="bg-surface px-2 py-2.5 text-center">
-            <div className="text-[17px] font-extrabold tabular-nums">{v}</div>
+        {([['Calls 14d', p.calls, ''], ['Connect', p.connect_rate === null ? null : Math.round(p.connect_rate), '%'], ['Meetings', s.meetings, ''], ['Leads', s.leads, '']] as const).map(([l, v, suffix]) => (
+          <div key={l} className="bg-surface px-2 py-2.5 text-center transition-colors group-hover:bg-surface-2/40">
+            <div className="text-[17px] font-extrabold tabular-nums">{v === null ? '—' : <AnimatedNumber value={v} suffix={suffix} />}</div>
             <div className="text-[10.5px] font-semibold text-muted">{l}</div>
           </div>
         ))}
@@ -336,7 +336,7 @@ export default function Home() {
   return (
     <>
       <PageHeader
-        visual={<Orb3D state={totals.live ? 'live' : 'listening'} size={124} className="-my-6 -ml-3" />}
+        visual={<Orb3D state={totals.live ? 'live' : 'listening'} size={96} />}
         eyebrow={<><Radio className="size-3.5" />Command center · {new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</>}
         title={`${greeting}.`}
         description={`${agents.length} agent${agents.length > 1 ? 's' : ''} · ${totals.live ? `${totals.live} call${totals.live > 1 ? 's' : ''} live right now` : 'no calls live right now'} · ${totals.today} call${totals.today === 1 ? '' : 's'} today`}
@@ -391,9 +391,9 @@ export default function Home() {
             <div className="flex-1" />
             <div className="relative">
               <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
-              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find an agent" className="w-52 pl-9" aria-label="Find an agent" />
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find an agent" className="w-40 pl-9 2xl:w-52" aria-label="Find an agent" />
             </div>
-            <Select value={sort} onChange={(e) => setSort(e.target.value as Sort)} className="w-44" aria-label="Sort agents">
+            <Select value={sort} onChange={(e) => setSort(e.target.value as Sort)} className="w-40" aria-label="Sort agents">
               <option value="activity">Sort: recent activity</option><option value="name">Sort: name</option><option value="calls">Sort: most calls</option>
               <option value="rate">Sort: connect rate</option><option value="meetings">Sort: meetings</option><option value="leads">Sort: leads</option>
             </Select>

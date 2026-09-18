@@ -134,7 +134,7 @@ export default function VoiceOrb3D({ state = 'idle', size = 140, className, onUn
 
     const scene = new THREE.Scene()
     const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 20)
-    camera.position.z = 3.4
+    camera.position.z = 4.1  // shell radius 1.25 + live swell stays inside the frame
 
     const geometry = new THREE.BufferGeometry()
     geometry.setAttribute('position', new THREE.BufferAttribute(fibonacciSphere(size > 180 ? 4200 : 2800, 1), 3))
@@ -154,7 +154,7 @@ export default function VoiceOrb3D({ state = 'idle', size = 140, className, onUn
     scene.add(points)
 
     // A faint wire shell turning the other way gives the sphere depth without more particles.
-    const shellGeometry = new THREE.IcosahedronGeometry(1.32, 1)
+    const shellGeometry = new THREE.IcosahedronGeometry(1.25, 1)
     const shellMaterial = new THREE.MeshBasicMaterial({ color: '#8b93ff', wireframe: true, transparent: true, opacity: 0.07 })
     const shell = new THREE.Mesh(shellGeometry, shellMaterial)
     scene.add(shell)
