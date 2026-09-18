@@ -301,6 +301,14 @@ def _get_group(agent_id: int, group: str) -> dict:
                 clean_members.append(m)
         result["team_members"] = clean_members
         
+        if not result["team_members"] and result.get("transfer_number"):
+            migrated = []
+            for part in result["transfer_number"].split(","):
+                phone = part.strip()
+                if phone:
+                    migrated.append({"name": "", "phone": phone, "email": ""})
+            result["team_members"] = migrated
+        
     return result
 
 
