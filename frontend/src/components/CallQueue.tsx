@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDown, ArrowUp, ChevronsUp, GripVertical, ListOrdered, PhoneCall, Plus, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronsUp, GripVertical, ListOrdered, PhoneCall, Plus, Trash2, Search } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -23,8 +23,12 @@ export default function CallQueue() {
   const { data, isLoading } = useQuery({ queryKey: ['calls', 'queue'], queryFn: () => api<Queue>(`${base}/leads/queue`), refetchInterval: 2000 })
   const [order, setOrder] = useState<QueueItem[]>([])
   const [dragging, setDragging] = useState<number | null>(null)
+  const [search, setSearch] = useState('')
+  const [now, setNow] = useState(new Date())
+
   // Keep the server order unless the user is mid-drag
   useEffect(() => { if (data && dragging === null) setOrder(data.items) }, [data, dragging])
+  useEffect(() => { const timer = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(timer) }, [])
 
   const save = useMutation({
     mutationFn: (ids: number[]) => api(`${base}/leads/queue/order`, { method: 'POST', json: { ids } }),
@@ -52,10 +56,12 @@ export default function CallQueue() {
   if (isLoading || !data) return <Card className="space-y-2 p-5">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-14" />)}</Card>
 
   const ready = order.filter((l) => l.state === 'ready').length
+  const istTime = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(now)
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {[['In queue', order.length], ['Ready to dial', ready], ['Calls running', `${data.active_calls}/${data.slots}`], ['Calling hours', data.open_now ? `Open · ${data.hours}` : `Closed · ${data.hours}`]].map(([l, v]) => (
+        {[['In queue', order.length], ['Ready to dial', ready], ['Calls running', `${data.active_calls}/${data.slots}`], ['Calling hours (IST)', data.open_now ? `Open until ${data.hours.split('–')[1]} · Now: ${istTime}` : `Closed · ${data.hours} · Now: ${istTime}`]].map(([l, v]) => (
           <Card key={l as string} className="p-4"><div className="text-xs text-muted">{l}</div><div className="mt-1 truncate text-lg font-extrabold text-fg tabular-nums">{v}</div></Card>
         ))}
       </div>
@@ -65,6 +71,11 @@ export default function CallQueue() {
           <ListOrdered className="size-4 text-fg-2" />
           <div className="mr-auto"><div className="text-sm font-bold text-fg">Dialling order</div>
             <div className="text-xs text-muted">Drag rows, use the arrows, or type a position. The queue calls {data.slots} at a time as calls finish · updates live.</div></div>
+          
+          <div className="relative min-w-[200px]">
+            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
+            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search in queue…" className="pl-9 h-8 text-[13px]" />
+          </div>
           <Link to={path('/leads')}><Button size="sm"><Plus />Add leads</Button></Link>
         </div>
 
@@ -72,7 +83,7 @@ export default function CallQueue() {
           <EmptyState icon={<ListOrdered />} title="The queue is empty" description="Select leads on the Leads page and click “Queue for auto-dial”, or use Queue on a lead." />
         ) : (
           <ol className="divide-y divide-border">
-            {order.map((lead, index) => (
+            {order.filter(l => !search || (l.name?.toLowerCase() || '').includes(search.toLowerCase()) || (l.phone || '').includes(search)).map((lead, index) => (
               <li key={lead.id} draggable
                 onDragStart={() => setDragging(index)}
                 onDragOver={(e) => { e.preventDefault(); if (dragging !== null && dragging !== index) { const next = [...order]; const [it] = next.splice(dragging, 1); next.splice(index, 0, it!); setOrder(next); setDragging(index) } }}

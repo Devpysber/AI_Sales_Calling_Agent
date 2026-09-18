@@ -8,6 +8,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { LiveDot } from '@/components/AppShell'
 import CallSheet from '@/components/CallSheet'
+import { ChartNowDot } from '@/components/Live'
 import { LeadFormSheet, LeadSheet } from '@/components/LeadSheets'
 import { CallStatusBadge, QualificationBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, EmptyState, Meter, PageHeader, Skeleton, StatTile, Tabs } from '@/components/ui'
@@ -125,7 +126,7 @@ export default function Dashboard() {
                   <YAxis allowDecimals={false} tick={{ fill: 'var(--muted)', fontSize: 12 }} axisLine={false} tickLine={false} />
                   <Tooltip contentStyle={tooltipStyle} labelStyle={{ color: 'var(--fg)', fontWeight: 700 }} />
                   <Area type="monotone" dataKey="total" name="Calls" stroke="var(--fg)" strokeWidth={2.5} fill="url(#gTotal)" isAnimationActive={false}
-                    dot={(d: { cx?: number; cy?: number; index?: number }) => <NowDot key={d.index} {...d} last={(c.series.length ?? 0) - 1} />} />
+                    dot={(d: { cx?: number; cy?: number; index?: number }) => <ChartNowDot key={d.index} {...d} last={(c.series.length ?? 0) - 1} />} />
                   <Area type="monotone" dataKey="connected" name="Connected" stroke="var(--success)" strokeWidth={2} fill="transparent" isAnimationActive={false} />
                   <Area type="monotone" dataKey="meetings" name="Meetings" stroke="var(--muted)" strokeDasharray="4 3" strokeWidth={1.5} fill="transparent" isAnimationActive={false} />
                 </AreaChart>
@@ -321,13 +322,3 @@ export default function Dashboard() {
   )
 }
 
-/** Today's point on the call-volume chart: a solid dot with a ring leaving it. Other points draw nothing. */
-function NowDot({ cx, cy, index, last }: { cx?: number; cy?: number; index?: number; last: number }) {
-  if (index !== last || cx === undefined || cy === undefined) return <g />
-  return (
-    <g>
-      <circle cx={cx} cy={cy} r={4} fill="var(--fg)" className="now-ring" />
-      <circle cx={cx} cy={cy} r={4} fill="var(--fg)" stroke="var(--surface)" strokeWidth={2} />
-    </g>
-  )
-}

@@ -5,7 +5,6 @@ import {
   type SelectHTMLAttributes, type TextareaHTMLAttributes,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { Aurora } from '@/components/VoiceViz'
 import { AnimatedNumber } from '@/lib/motion'
 import { cn, initials } from '@/lib/utils'
 
@@ -89,10 +88,12 @@ export function Switch({ checked, onChange, disabled, label }: { checked: boolea
     <button
       type="button" role="switch" aria-checked={checked} aria-label={label} disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={cn('relative inline-flex h-5.5 w-10 shrink-0 items-center rounded-full transition disabled:opacity-50',
+      className={cn('group relative inline-flex h-5.5 w-10 shrink-0 items-center rounded-full transition-colors duration-300 disabled:opacity-50',
         checked ? 'bg-brand' : 'bg-border-strong')}
     >
-      <span className={cn('inline-block size-4 rounded-full shadow transition', checked ? 'translate-x-5 bg-brand-fg' : 'translate-x-1 bg-white')} />
+      {/* The knob springs across and stretches while pressed, like a physical switch. */}
+      <span className={cn('inline-block h-4 w-4 rounded-full shadow transition-all duration-300 ease-[cubic-bezier(.34,1.56,.64,1)] group-active:w-5',
+        checked ? 'translate-x-5 bg-brand-fg group-active:translate-x-4' : 'translate-x-1 bg-white')} />
     </button>
   )
 }
@@ -181,7 +182,6 @@ export function PageHeader({ title, description, actions, eyebrow, children, vis
 }) {
   return (
     <div className="hero-wash relative -mx-4 -mt-6 mb-6 overflow-hidden border-b border-border/70 px-4 pt-7 pb-6 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
-      <Aurora />
       <div className="relative flex flex-wrap items-end justify-between gap-4">
         {visual && <div className="hidden shrink-0 animate-rise sm:block">{visual}</div>}
         <div className="min-w-0 flex-1 animate-rise">

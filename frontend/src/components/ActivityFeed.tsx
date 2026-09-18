@@ -45,9 +45,14 @@ export default function ActivityFeed({ events, showLead, onLead, onCall, compact
         const [, Icon, color] = iconFor(e.type)
         const data = e.data && e.type.startsWith('ai.') ? Object.entries(e.data).filter(([, v]) => v && typeof v !== 'object') : []
         return (
-          <li key={e.id} className="relative flex gap-3 pb-5 last:pb-0">
-            {i < grouped.length - 1 && <span className="absolute top-8 bottom-0 left-[15px] w-px bg-border" />}
-            <span className={cn('relative grid size-8 shrink-0 place-items-center rounded-full', color)}><Icon className="size-3.5" /></span>
+          // Events arrive down the timeline in order; the rail draws down behind them and the
+          // newest event keeps a ring leaving its icon.
+          <li key={e.id} style={{ animationDelay: `${Math.min(i, 10) * 55}ms` }} className="reveal reveal-in reveal-left group relative flex gap-3 pb-5 last:pb-0">
+            {i < grouped.length - 1 && <span className="line-down absolute top-8 bottom-0 left-[15px] w-px bg-border" style={{ animationDelay: `${Math.min(i, 10) * 55 + 120}ms` }} />}
+            <span className={cn('relative grid size-8 shrink-0 place-items-center rounded-full transition-transform duration-300 group-hover:scale-110', color)}>
+              {i === 0 && <span className="absolute inset-0 animate-live-ring rounded-full bg-current opacity-30" />}
+              <Icon className="relative size-3.5" />
+            </span>
             <div className="min-w-0 flex-1 pt-1">
               <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
                 <span className="font-medium text-fg">{e.title}</span>

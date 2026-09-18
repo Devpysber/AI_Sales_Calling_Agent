@@ -1,4 +1,4 @@
-﻿import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Ban, Bot, Building2, CalendarClock, Check, ChevronRight, Clock, Copy, Gauge, Lightbulb, ListPlus, Mail, MapPin,
   MessageSquareQuote, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOutgoing, Play, ShieldAlert, Sparkles, Target, Trash2, User,
@@ -12,6 +12,7 @@ import { LeadFormSheet, useStartCall } from '@/components/LeadSheets'
 import { CallStatusBadge, QualificationBadge, SentimentDot } from '@/components/status'
 import { Avatar, Badge, Button, Card, CardHeader, Dialog, EmptyState, Input, PageHeader, Ring, Select, ShowMore, Skeleton, Switch, Tabs, Textarea, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
+import { Stagger } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
 import type { ActivityEvent, Call, Lead, Page } from '@/lib/types'
 import { cn, formatDate, formatDuration, LANGUAGES, LEAD_STATUSES, timeAgo, titleCase } from '@/lib/utils'
@@ -219,7 +220,7 @@ export default function LeadDetail() {
             {JOURNEY.map((s, i) => {
               const done = !offJourney && i <= stageIndex
               return (
-                <li key={s}>
+                <li key={s} className="reveal reveal-in reveal-up" style={{ animationDelay: `${i * 35}ms` }}>
                   <button type="button" onClick={() => s !== l.status && patch.mutate({ status: s })} className="group w-full text-left" title={`Move to ${s}`}>
                     <span className={cn('block h-1.5 rounded-full transition', done ? 'bg-fg' : 'bg-surface-2 group-hover:bg-border-strong')} />
                     <span className={cn('mt-2 hidden items-center gap-1 text-[11.5px] font-semibold sm:flex', i === stageIndex ? 'text-fg' : 'text-muted')}>
@@ -254,13 +255,13 @@ export default function LeadDetail() {
           </div>
 
           {/* Metrics */}
-          <Card className="grid grid-cols-2 divide-border overflow-hidden sm:grid-cols-3 lg:grid-cols-5 lg:divide-x max-lg:[&>*]:border-b max-lg:[&>*]:border-border">
+          <Stagger className="grid grid-cols-2 divide-border overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface shadow-card sm:grid-cols-3 lg:grid-cols-5 lg:divide-x max-lg:[&>*]:border-b max-lg:[&>*]:border-border">
             <Metric icon={<PhoneOutgoing />} label="Calls" value={stats.total} sub={`${stats.connected} connected`} />
             <Metric icon={<Check />} label="Connect rate" value={`${stats.rate}%`} sub={stats.total ? `${stats.total - stats.connected} unanswered` : 'No attempts yet'} />
             <Metric icon={<Clock />} label="Talk time" value={formatDuration(stats.talk)} sub={stats.connected ? `${formatDuration(stats.avgTalk)} per call` : '—'} />
             <Metric icon={<Gauge />} label="AI reply" value={stats.latency ? `${(stats.latency / 1000).toFixed(1)}s` : '—'} sub="Average response time" />
             <Metric icon={<CalendarClock />} label="Best hour" value={stats.bestHour !== null ? `${stats.bestHour}:00` : '—'} sub={stats.bestHour !== null ? 'When they pick up' : 'Not enough data'} />
-          </Card>
+          </Stagger>
 
           {/* AI analysis */}
           <Card>
@@ -275,7 +276,7 @@ export default function LeadDetail() {
                 <Insight icon={<ShieldAlert />} title="Objections" empty="No objections raised.">{l.objections}</Insight>
               </div>
               {talked[0] && (
-                <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                <Stagger className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
                   {[['Last outcome', analyzed.outcome ? titleCase(analyzed.outcome) : '—'], ['Sentiment', analyzed.sentiment ? <SentimentDot value={analyzed.sentiment} /> : '—'],
                     ['Temperature', <QualificationBadge value={l.qualification ?? analyzed?.qualification} />], ['Language', LANGUAGES[l.language] ?? l.language]].map(([k, v]) => (
                     <div key={k as string} className="rounded-xl border border-border px-3 py-2.5">
@@ -283,7 +284,7 @@ export default function LeadDetail() {
                       <div className="mt-1 font-bold">{v as ReactNode}</div>
                     </div>
                   ))}
-                </div>
+                </Stagger>
               )}
             </div>
           </Card>
@@ -319,7 +320,7 @@ export default function LeadDetail() {
                             {transcript.map((t, i) => {
                             const agentTurn = t.role === 'assistant'
                             return (
-                              <div key={i} className={cn('flex gap-2.5', !agentTurn && 'flex-row-reverse')}>
+                              <div key={i} className={cn('reveal reveal-in flex gap-2.5', !agentTurn ? 'reveal-right flex-row-reverse' : 'reveal-left')}>
                                 <span className={cn('grid size-8 shrink-0 place-items-center rounded-full', agentTurn ? 'bg-fg text-bg' : 'border border-border bg-surface-2 text-fg')}>
                                   {agentTurn ? <Bot className="size-4" /> : <User className="size-4" />}
                                 </span>
@@ -339,8 +340,8 @@ export default function LeadDetail() {
               {tab === 'calls' && (
                 items.length ? (
                   <ol className="relative space-y-1 before:absolute before:top-3 before:bottom-3 before:left-[19px] before:w-px before:bg-border">
-                    {items.map((c) => (
-                      <li key={c.id}>
+                    {items.map((c, i) => (
+                      <li key={c.id} className="reveal reveal-in reveal-up" style={{ animationDelay: `${i * 35}ms` }}>
                         <button onClick={() => setCallId(c.id)} className="relative flex w-full items-start gap-3 rounded-xl p-2 text-left hover:bg-surface-2">
                           <span className={cn('z-10 grid size-[38px] shrink-0 place-items-center rounded-full border border-border bg-surface', (c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0)) && 'border-fg bg-fg text-bg')}>
                             {c.direction === 'inbound' ? <PhoneIncoming className="size-4" /> : <PhoneOutgoing className="size-4" />}

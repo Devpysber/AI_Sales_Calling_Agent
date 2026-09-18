@@ -8,7 +8,7 @@ import InboundSetup from '@/components/InboundSetup'
 import { CallStatusBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, PageHeader, Skeleton, Switch, Textarea } from '@/components/ui'
 import { api } from '@/lib/api'
-import { AnimatedNumber } from '@/lib/motion'
+import { AnimatedNumber, Stagger } from '@/lib/motion'
 import { Waveform } from '@/components/VoiceViz'
 import { useAgent } from '@/lib/agent'
 import type { AgentProfile, AutomationSettings, Call, Page } from '@/lib/types'
@@ -141,7 +141,7 @@ export default function Inbound() {
       </Card>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
-        <div className="min-w-0 space-y-4">
+        <Stagger className="min-w-0 space-y-4" step={60}>
           <Card>
             <CardHeader title="1 · Phone number" description="Plivo must send calls on this number to the app." />
             <div className="px-5 pb-5 text-sm"><InboundSetup /></div>
@@ -265,7 +265,7 @@ export default function Inbound() {
               )}
             </div>
           </Card>
-        </div>
+        </Stagger>
 
         <Card className="h-fit">
           <CardHeader title="Recent inbound calls" description="Updates live."
@@ -280,7 +280,9 @@ export default function Inbound() {
                         {c.trigger === 'forwarded' || c.transferred_to ? <PhoneForwarded className="size-4" /> : <PhoneIncoming className="size-4" />}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-semibold">{c.lead_name || c.from_number}</span>
+                        <span className="block truncate text-sm font-semibold">
+                          {c.lead_name || data.profile.team_members?.find(m => m.phone === c.from_number)?.name || data.transfer_contacts?.find(t => t.phone === c.from_number)?.name || c.from_number}
+                        </span>
                         {/* An AI call that was handed over mid-way used to read "Answered by AI", hiding the transfer. */}
                         <span className="block truncate text-xs text-muted">
                           {c.trigger === 'internal'

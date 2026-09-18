@@ -443,3 +443,24 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 
 /* While a call is actually on the route, the signal runs twice as fast. */
 .route-path.is-live .route-signal { animation-duration: .9s; }
+
+/* Analytics heatmap: cells arrive as a diagonal wave from Monday 08:00; the best slot pulses. */
+@keyframes heat-in { from { opacity: 0; transform: scale(.4); } }
+@keyframes heat-best { 50% { box-shadow: 0 0 0 2px var(--success), 0 0 14px 2px color-mix(in srgb, var(--success) 50%, transparent); } }
+.heat-cell { animation: heat-in .4s var(--ease-entrance) both; }
+.heat-best { animation: heat-in .4s var(--ease-entrance) both, heat-best 2s ease-in-out .8s infinite; }
+
+/* Automation: a running job. */
+@keyframes job-track { from { background-position: -100% 0; } to { background-position: 200% 0; } }
+.job-track {
+  background: linear-gradient(90deg, transparent, var(--success), transparent) 0 0 / 50% 100% no-repeat;
+  animation: job-track 2.4s linear infinite;
+}
+.job-spinner {
+  background: conic-gradient(from var(--beam-angle), transparent 0 60%, var(--success) 85%, transparent);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  animation: beam-spin 2.2s linear infinite;
+}
+@keyframes scheduler-fill { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+.scheduler-ring { animation: scheduler-fill 20s linear infinite; }

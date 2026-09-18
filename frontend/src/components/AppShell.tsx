@@ -241,7 +241,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
   )
 
   return (
-    <div className={cn('flex h-full flex-col border-r border-border bg-ink text-ink-fg', mobile ? 'w-72' : compact ? 'w-[76px]' : 'w-[272px]', 'transition-[width] duration-200')}>
+    <div className={cn('relative z-40 flex h-full flex-col border-r border-border bg-ink/70 backdrop-blur-2xl text-ink-fg', mobile ? 'w-72' : compact ? 'w-[76px]' : 'w-[272px]', 'transition-[width] duration-200')}>
       <div className={cn('flex items-center gap-2.5 pt-4 pb-3', compact ? 'flex-col px-2' : 'px-4')}>
         <Link to="/" className="grid size-9 shrink-0 place-items-center rounded-xl bg-ink-fg text-ink shadow-sm"><Waveform bars={4} className="h-4" /></Link>
         {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="text-sheen text-[15px] font-extrabold tracking-tight">Samvaad AI</div><div className="text-[11px] text-ink-muted">Multi-agent calling</div></div>}
@@ -504,6 +504,7 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
 
   const frame = (children: ReactNode) => (
     <div className="flex min-h-full">
+      <Aurora className="fixed top-0 inset-x-0 h-[500px] opacity-50 z-0 pointer-events-none" />
       <aside className="sticky top-0 z-40 hidden h-screen shrink-0 lg:block">
         <Sidebar {...sidebarProps} compact={compact} setCompact={setCompact} />
       </aside>
@@ -518,7 +519,7 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
         </div>
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative z-10 flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-30 flex h-12 items-center gap-2 border-b border-border bg-bg/85 px-4 backdrop-blur-md lg:hidden">
           <Button variant="ghost" size="icon" onClick={() => setMobile(true)} aria-label="Open menu"><Menu /></Button>
           {agent && <AgentMark agent={agent} className="size-7 rounded-lg text-[10px]" />}

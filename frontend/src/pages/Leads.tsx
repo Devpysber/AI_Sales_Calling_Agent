@@ -293,8 +293,8 @@ export default function Leads() {
             <tbody className="divide-y divide-border">
               {isLoading ? Array.from({ length: 8 }, (_, i) => (
                 <tr key={i}><td colSpan={10} className="px-4 py-3"><Skeleton className="h-8" /></td></tr>
-              )) : items.map((l) => (
-                <tr key={l.id} onClick={() => navigate(path(`/leads/${l.id}`))} className={cn('group cursor-pointer transition hover:bg-surface-2/70', selected.has(l.id) && 'bg-surface-2')}>
+              )) : items.map((l, i) => (
+                <tr key={l.id} onClick={() => navigate(path(`/leads/${l.id}`))} style={{ animationDelay: `${Math.min(i, 20) * 45}ms` }} className={cn('reveal reveal-in reveal-up group cursor-pointer transition hover:bg-surface-2/70', selected.has(l.id) && 'bg-surface-2')}>
                   <td className="px-4" onClick={(e) => e.stopPropagation()}>
                     <input type="checkbox" checked={selected.has(l.id)} onChange={() => toggle(l.id)} aria-label={`Select ${l.name}`} className="size-4 accent-[var(--fg)]" />
                   </td>

@@ -14,10 +14,12 @@ import { useDebounced } from '@/lib/useDebounced'
 import type { Call, CallStats, Page } from '@/lib/types'
 import { callHandledBy, callParty, CALL_STATUSES, cn, formatDate, formatDuration, timeAgo, titleCase } from '@/lib/utils'
 
-function LiveCallCard({ call, onOpen }: { call: Call; onOpen: () => void }) {
+function LiveCallCard({ call, onOpen, index }: { call: Call; onOpen: () => void; index: number }) {
   const { base } = useAgent()
-  const detail = useQuery({ queryKey: ['call', call.id], queryFn: () => api<Call>(`${base}/calls/${call.id}`), refetchInterval: 2000 })
-  const turns = detail.data?.transcript ?? []
+  // Limit heavy transcript polling to the first 6 cards to prevent network saturation and UI lag with 50-100 concurrent calls.
+  const poll = index < 6 && call.status === 'In Progress'
+  const detail = useQuery({ queryKey: ['call', call.id], queryFn: () => api<Call>(`${base}/calls/${call.id}`), refetchInterval: poll ? 2500 : false, enabled: poll })
+  const turns = detail.data?.transcript ?? call.transcript ?? []
   return (
     <Card className="beam beam-on beam-live is-live-card flex flex-col overflow-hidden">
       <div className="flex items-center gap-3 border-b border-border p-4">
@@ -34,7 +36,7 @@ function LiveCallCard({ call, onOpen }: { call: Call; onOpen: () => void }) {
             <div key={turns.length > 8 ? turns.length - 8 + i : i} className={cn('reveal reveal-in flex', t.role === 'customer' ? 'reveal-right justify-end' : 'reveal-left')}>
               <div className={cn('max-w-[85%] rounded-2xl px-3 py-1.5 text-[13px] leading-snug', t.role === 'assistant' ? 'rounded-tl-sm bg-fg text-bg' : 'rounded-tr-sm bg-surface-2 ring-1 ring-border')}>{t.text}</div>
             </div>
-          )) : <p className="flex flex-col items-center gap-2 text-center text-xs text-muted"><Waveform bars={7} className="h-5 text-success" />{call.status === 'In Progress' ? 'Listening…' : 'Waiting for the call to be answered…'}</p>}
+          )) : <p className="flex flex-col items-center gap-2 text-center text-xs text-muted"><Waveform bars={7} className="h-5 text-success" />{call.status === 'In Progress' ? (index < 6 ? 'Listening…' : 'Live on the line') : 'Waiting for the call to be answered…'}</p>}
         </div>
       </div>
       {turns.length > 0 && call.status === 'In Progress' && (
@@ -94,9 +96,14 @@ export default function Calls() {
       </PageHeader>
 
       {view === 'queue' ? <CallQueue /> : view === 'active' ? (
-        isLoading ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-80" />)}</div>
-          : data?.items.length ? (
-            <Stagger className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{data.items.map((c) => <LiveCallCard key={c.id} call={c} onOpen={() => setCallId(c.id)} />)}</Stagger>
+        <div className="space-y-4">
+          <div className="relative min-w-56 max-w-sm">
+            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
+            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search live calls…" className="pl-9 bg-surface" />
+          </div>
+          {isLoading ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-80" />)}</div>
+            : data?.items.length ? (
+            <Stagger className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{data.items.map((c, i) => <LiveCallCard key={c.id} call={c} index={i} onOpen={() => setCallId(c.id)} />)}</Stagger>
           ) : (
             <Card className="scan-line overflow-hidden">
               <div className="flex flex-col items-center px-6 py-10 text-center">
@@ -108,7 +115,8 @@ export default function Calls() {
                 </span>
               </div>
             </Card>
-          )
+          )}
+        </div>
       ) : (
         <Card className="overflow-hidden">
           <div className="flex flex-wrap items-center gap-2 border-b border-border p-3">

@@ -7,7 +7,7 @@ import { useStartCall } from '@/components/LeadSheets'
 import { CallStatusBadge, QualificationBadge } from '@/components/status'
 import { Avatar, Button, Card, Input, PageHeader, Select, Skeleton, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
-import { AnimatedNumber } from '@/lib/motion'
+import { AnimatedNumber, Stagger } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
 import { useDebounced } from '@/lib/useDebounced'
 import type { Board, Lead } from '@/lib/types'
@@ -176,11 +176,11 @@ export default function Pipeline() {
             <option value="">Any temperature</option>{QUALIFICATIONS.map((x) => <option key={x}>{x}</option>)}
           </Select>
           {totals && (
-            <div className="ml-auto flex flex-wrap gap-2 text-[13px]">
+            <Stagger className="ml-auto flex flex-wrap gap-2 text-[13px]" step={60}>
               {[['In pipeline', totals.open], ['Meetings', totals.meetings], ['Won', totals.won], ['Win rate', `${totals.winRate}%`]].map(([l, v]) => (
-                <span key={l as string} className="rounded-full border border-border bg-surface px-3 py-1.5 font-semibold text-muted">{l} <b className="ml-1 text-fg tabular-nums">{typeof v === 'number' ? <AnimatedNumber value={v} /> : v}</b></span>
+                <span key={l as string} className="glint rounded-full border border-border bg-surface px-3 py-1.5 font-semibold text-muted">{l} <b className="ml-1 text-fg tabular-nums">{typeof v === 'number' ? <AnimatedNumber value={v} /> : v}</b></span>
               ))}
-            </div>
+            </Stagger>
           )}
         </div>
       </PageHeader>
@@ -193,7 +193,7 @@ export default function Pipeline() {
       </div>
       <div ref={boardRef} onDragEnd={() => { setDragging(null); setOver(null) }}
         className="-mx-4 overflow-x-auto px-4 pb-4 [scrollbar-width:thin] sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
-        <div className="flex flex-col gap-4 sm:w-max sm:flex-row">
+        <Stagger className="flex flex-col gap-4 sm:w-max sm:flex-row" step={70} delay={100}>
           {columns.map((stage, ci) => {
             const col = data?.[stage]
             const hot = col?.items.filter((l) => l.qualification === 'Hot').length ?? 0
@@ -207,8 +207,7 @@ export default function Pipeline() {
                   if (dragging && dragging.from !== stage) move.mutate({ id: dragging.id, status: stage })
                   setDragging(null); setOver(null)
                 }}
-                style={{ animationDelay: `${ci * 70}ms` }}
-                className={cn('reveal reveal-in reveal-up flex w-full flex-col rounded-[var(--radius-card)] border bg-surface-2/60 transition sm:w-80 sm:shrink-0', isOver ? 'is-drop-target border-fg bg-surface-2' : 'border-transparent')}>
+                className={cn('flex w-full flex-col rounded-[var(--radius-card)] border bg-surface-2/60 transition sm:w-80 sm:shrink-0', isOver ? 'is-drop-target border-fg bg-surface-2' : 'border-transparent')}>
                 <div className="flex items-center gap-2 px-3.5 pt-3.5 pb-2">
                   <span className={cn('size-2 rounded-full', (stage === 'Closed Won' || stage === 'Meeting Booked') && (col?.total ?? 0) > 0 && 'animate-pulse-dot', stage === 'Closed Won' || stage === 'Meeting Booked' ? 'bg-success' : ['Not Interested', 'Do Not Call', 'Closed Lost'].includes(stage) ? 'bg-danger' : 'bg-fg')} />
                   <h3 className="flex-1 text-[13px] font-extrabold">{stage}</h3>
@@ -233,7 +232,7 @@ export default function Pipeline() {
               </div>
             )
           })}
-        </div>
+        </Stagger>
       </div>
 
       {data && totals?.all === 0 && (

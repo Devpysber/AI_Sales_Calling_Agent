@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, Field, Input, PageHeader, Select, Skeleton } from '@/components/ui'
+import { Stagger } from '@/lib/motion'
 import { api } from '@/lib/api'
 import { formatDate } from '@/lib/utils'
 
@@ -74,9 +75,9 @@ export default function ProfilePage() {
         actions={<Button onClick={logout}><LogOut />Sign out</Button>} />
 
       {isLoading || !p ? <div className="grid gap-4 lg:grid-cols-3"><Skeleton className="h-64 lg:col-span-2" /><Skeleton className="h-64" /></div> : (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <Stagger className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
           <div className="min-w-0 space-y-4">
-            <Card>
+            <Card className="reveal reveal-in reveal-up">
               <div className="flex flex-wrap items-center gap-4 border-b border-border px-5 py-5">
                 <span className="grid size-16 place-items-center rounded-2xl bg-fg text-2xl font-extrabold text-bg uppercase">{name.slice(0, 1)}</span>
                 <div className="min-w-0 flex-1">
@@ -115,7 +116,7 @@ export default function ProfilePage() {
               </form>
             </Card>
 
-            <Card>
+            <Card className="reveal reveal-in reveal-up" style={{ animationDelay: '55ms' }}>
               <CardHeader title="Password" description={p.password_source === 'dashboard' ? `Last changed ${fromEpoch(p.password_changed_at)}` : 'Currently the ADMIN_PASSWORD from the server environment. Changing it here stores a secure hash that replaces it.'} />
               <form onSubmit={(e) => { e.preventDefault(); if (!pwError) changePw.mutate() }} className="grid gap-4 px-5 pb-5 sm:grid-cols-3">
                 <Field label="Current password"><Input type="password" autoComplete="current-password" required value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} /></Field>
@@ -132,7 +133,7 @@ export default function ProfilePage() {
           </div>
 
           <div className="space-y-4">
-            <Card>
+            <Card className="reveal reveal-in reveal-up" style={{ animationDelay: '110ms' }}>
               <CardHeader title="Security" />
               <dl className="divide-y divide-border text-sm">
                 {[
@@ -149,11 +150,11 @@ export default function ProfilePage() {
                 ))}
               </dl>
             </Card>
-            <Card className="p-5 text-sm text-muted">
+            <Card className="reveal reveal-in reveal-up p-5 text-sm text-muted" style={{ animationDelay: '165ms' }}>
               Sign in with <b className="text-fg">{p.login_email || 'your email'}</b> and your password. Sessions use an HttpOnly signed cookie; the server can also preset the email with <code>ADMIN_EMAIL</code>.
             </Card>
           </div>
-        </div>
+        </Stagger>
       )}
     </>
   )

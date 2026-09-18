@@ -4,6 +4,8 @@ import { useState, type ReactNode } from 'react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button, Card, CardHeader, EmptyState, Meter, PageHeader, Skeleton, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
+import { ChartNowDot } from '@/components/Live'
+import { AnimatedNumber, Stagger } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
 import type { AnalyticsKpis, AnalyticsReport, AnalyticsUsage } from '@/lib/types'
 import { cn, DAYS, formatDuration, titleCase } from '@/lib/utils'
@@ -26,12 +28,12 @@ function Kpi({ icon, label, value, curr, prev, sub, invert }: {
   icon: ReactNode; label: string; value: ReactNode; curr?: number | null; prev?: number | null; sub?: ReactNode; invert?: boolean
 }) {
   return (
-    <Card className="p-5">
+    <Card className="glint group p-5 transition duration-300 hover:-translate-y-0.5 hover:shadow-pop">
       <div className="flex items-center justify-between gap-2">
         <span className="text-[13px] font-semibold text-muted">{label}</span>
-        <span className="grid size-8 place-items-center rounded-xl bg-surface-2 text-fg-2 ring-1 ring-border [&_svg]:size-4">{icon}</span>
+        <span className="grid size-8 place-items-center rounded-xl bg-surface-2 text-fg-2 ring-1 ring-border transition-transform duration-300 group-hover:-rotate-6 group-hover:scale-110 [&_svg]:size-4">{icon}</span>
       </div>
-      <div className="mt-2 text-[28px] leading-none font-extrabold tracking-tight tabular-nums">{value}</div>
+      <div className="mt-2 text-[28px] leading-none font-extrabold tracking-tight tabular-nums">{typeof value === 'number' ? <AnimatedNumber value={value} /> : value}</div>
       <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs text-muted">
         {curr !== undefined && <Delta curr={curr} prev={prev} invert={invert} />}
         {sub}
@@ -44,6 +46,8 @@ function Heatmap({ cells }: { cells: AnalyticsReport['heatmap'] }) {
   const hours = Array.from({ length: 13 }, (_, i) => i + 8) // 08:00 - 20:00 IST
   const map = new Map(cells.map((c) => [`${c.weekday}-${c.hour}`, c]))
   const max = Math.max(1, ...cells.map((c) => c.calls))
+  // The slot with the best connect rate (3+ calls) keeps a pulse: it is the answer this chart exists for.
+  const best = [...cells].filter((c) => c.calls >= 3).sort((a, b) => b.connected / b.calls - a.connected / a.calls)[0]
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[560px] border-separate border-spacing-1 text-[11px]">
@@ -57,7 +61,8 @@ function Heatmap({ cells }: { cells: AnalyticsReport['heatmap'] }) {
                 const rate = c?.calls ? Math.round((100 * c.connected) / c.calls) : null
                 return (
                   <td key={h} title={c ? `${d} ${h}:00 · ${c.calls} calls · ${rate}% connected` : `${d} ${h}:00 · no calls`}
-                    className="h-7 rounded-md ring-1 ring-border/60" style={{ background: c ? `color-mix(in srgb, var(--fg) ${Math.round(12 + (78 * c.calls) / max)}%, transparent)` : 'var(--surface-2)' }}>
+                    className={cn('heat-cell h-7 rounded-md ring-1 ring-border/60 transition-transform hover:scale-110', c === best && 'heat-best')}
+                    style={{ animationDelay: `${(w + (h - 8)) * 28}ms`, background: c ? `color-mix(in srgb, var(--fg) ${Math.round(12 + (78 * c.calls) / max)}%, transparent)` : 'var(--surface-2)' }}>
                     {c && rate !== null && c.calls >= 3 && <span className="block text-center text-[9.5px] font-bold text-bg mix-blend-difference">{rate}</span>}
                   </td>
                 )
@@ -104,7 +109,7 @@ export default function Analytics() {
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} className="h-32" />)}</div>
       ) : (
         <div className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Stagger className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" step={60}>
             <Kpi icon={<PhoneCall />} label="Calls" value={k.calls} curr={k.calls} prev={p?.calls} sub={`${k.connected} connected`} />
             <Kpi icon={<TrendingUp />} label="Connect rate" value={pct(k.connect_rate)} curr={k.connect_rate} prev={p?.connect_rate}
               sub={k.connect_rate != null && <Meter value={k.connect_rate} tone="success" className="w-16" />} />
@@ -114,13 +119,13 @@ export default function Analytics() {
             <Kpi icon={<BarChart3 />} label="Avg. conversation" value={k.avg_duration != null ? formatDuration(k.avg_duration) : '—'} curr={k.avg_duration} prev={p?.avg_duration} />
             <Kpi icon={<Gauge />} label="AI response time" value={k.avg_latency_ms != null ? `${(k.avg_latency_ms / 1000).toFixed(1)}s` : '—'} curr={k.avg_latency_ms} prev={p?.avg_latency_ms} invert />
             <Kpi icon={<UserPlus />} label="New leads" value={data.new_leads} sub={`Added in the last ${days} days`} />
-          </div>
+          </Stagger>
 
           {data.usage && <UsageCard usage={data.usage} />}
 
           <Card>
             <CardHeader title="Daily activity" description="Calls placed, calls connected and meetings booked per day (IST)" />
-            <div className="h-72 px-2 pb-3">
+            <div className="draw-in h-72 px-2 pb-3">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={data.series} margin={{ top: 8, right: 12, bottom: 0, left: -16 }}>
                   <defs><linearGradient id="aCalls" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--fg)" stopOpacity={0.16} /><stop offset="100%" stopColor="var(--fg)" stopOpacity={0} /></linearGradient></defs>
@@ -128,7 +133,8 @@ export default function Analytics() {
                   <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(5)} tick={{ fill: 'var(--muted)', fontSize: 11 }} tickLine={false} axisLine={false} minTickGap={16} />
                   <YAxis allowDecimals={false} tick={{ fill: 'var(--muted)', fontSize: 11 }} tickLine={false} axisLine={false} />
                   <Tooltip contentStyle={tooltipStyle} labelStyle={{ fontWeight: 700 }} />
-                  <Area type="monotone" dataKey="calls" name="Calls" stroke="var(--fg)" fill="url(#aCalls)" strokeWidth={2.5} dot={false} isAnimationActive={false} />
+                  <Area type="monotone" dataKey="calls" name="Calls" stroke="var(--fg)" fill="url(#aCalls)" strokeWidth={2.5} isAnimationActive={false}
+                    dot={(d: { cx?: number; cy?: number; index?: number }) => <ChartNowDot key={d.index} {...d} last={data.series.length - 1} />} />
                   <Area type="monotone" dataKey="connected" name="Connected" stroke="var(--success)" fill="transparent" strokeWidth={2} dot={false} isAnimationActive={false} />
                   <Area type="monotone" dataKey="meetings" name="Meetings" stroke="var(--muted)" fill="transparent" strokeWidth={1.5} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
                 </AreaChart>
@@ -148,10 +154,10 @@ export default function Analytics() {
                   <div key={f.stage}>
                     <div className="mb-1 flex items-baseline justify-between text-[13px]">
                       <span className="font-semibold text-fg-2">{f.stage}</span>
-                      <span className="flex items-baseline gap-2"><b className="text-base tabular-nums">{f.count}</b>
+                      <span className="flex items-baseline gap-2"><b className="text-base tabular-nums"><AnimatedNumber value={f.count} /></b>
                         <span className="w-10 text-right text-[11px] text-muted">{i && data.funnel[i - 1]!.count ? `${Math.round((100 * f.count) / data.funnel[i - 1]!.count)}%` : ''}</span></span>
                     </div>
-                    <div className="h-2.5 overflow-hidden rounded-full bg-surface-2"><div className="h-full rounded-full bg-fg" style={{ width: `${funnelTop ? Math.max((100 * f.count) / funnelTop, f.count ? 3 : 0) : 0}%`, opacity: 1 - i * 0.15 }} /></div>
+                    <div className="h-2.5 overflow-hidden rounded-full bg-surface-2"><div className="grow-x flow h-full rounded-full bg-fg" style={{ width: `${funnelTop ? Math.max((100 * f.count) / funnelTop, f.count ? 3 : 0) : 0}%`, opacity: 1 - i * 0.15, animationDelay: `${i * 110}ms` }} /></div>
                   </div>
                 ))}
               </div>
@@ -162,11 +168,11 @@ export default function Analytics() {
             <Card>
               <CardHeader title="Outcomes" description="What each completed conversation achieved" />
               <div className="space-y-2.5 px-5 pb-5">
-                {outcomes.length ? outcomes.map(([name, v]) => (
+                {outcomes.length ? outcomes.map(([name, v], i) => (
                   <div key={name} className="grid grid-cols-[1fr_auto] gap-x-3 text-[13px]">
-                    <span className="truncate font-semibold text-fg-2">{titleCase(name)}</span><span className="font-bold tabular-nums">{v} <span className="text-xs font-semibold text-muted">{Math.round((100 * v) / outcomeTotal)}%</span></span>
+                    <span className="truncate font-semibold text-fg-2">{titleCase(name)}</span><span className="font-bold tabular-nums"><AnimatedNumber value={v} /> <span className="text-xs font-semibold text-muted">{Math.round((100 * v) / outcomeTotal)}%</span></span>
                     <div className="col-span-2 mt-1 h-1.5 overflow-hidden rounded-full bg-surface-2">
-                      <div className={cn('h-full rounded-full', name === 'meeting_booked' ? 'bg-success' : ['not_interested', 'do_not_call'].includes(name) ? 'bg-danger' : 'bg-fg/70')} style={{ width: `${(100 * v) / outcomeTotal}%` }} />
+                      <div className={cn('grow-x flow h-full rounded-full', name === 'meeting_booked' ? 'bg-success' : ['not_interested', 'do_not_call'].includes(name) ? 'bg-danger' : 'bg-fg/70')} style={{ width: `${(100 * v) / outcomeTotal}%`, animationDelay: `${i * 90}ms` }} />
                     </div>
                   </div>
                 )) : <EmptyState icon={<PhoneCall />} title="No outcomes yet" />}
@@ -178,14 +184,14 @@ export default function Analytics() {
               <div className="space-y-5 px-5 pb-5">
                 <div className="grid grid-cols-3 gap-2 text-center">
                   {[['Hot', 'text-danger'], ['Warm', 'text-warning'], ['Cold', 'text-info']].map(([t, cls]) => (
-                    <div key={t} className="rounded-xl bg-surface-2 py-3 ring-1 ring-border"><div className={cn('text-2xl font-extrabold tabular-nums', cls)}>{qual[t!] ?? 0}</div><div className="text-[11px] font-semibold text-muted">{t}</div></div>
+                    <div key={t} className="rounded-xl bg-surface-2 py-3 ring-1 ring-border transition hover:-translate-y-0.5 hover:ring-border-strong"><div className={cn('text-2xl font-extrabold tabular-nums', cls)}><AnimatedNumber value={qual[t!] ?? 0} /></div><div className="text-[11px] font-semibold text-muted">{t}</div></div>
                   ))}
                 </div>
                 <div>
                   <div className="mb-2 text-[12px] font-bold text-muted uppercase">Sentiment</div>
                   <div className="flex h-3 overflow-hidden rounded-full bg-surface-2">
-                    {sentimentTotal ? [['positive', 'bg-success'], ['neutral', 'bg-border-strong'], ['negative', 'bg-danger']].map(([s, cls]) => (
-                      <div key={s} className={cls} style={{ width: `${(100 * (sentiment[s!] ?? 0)) / sentimentTotal}%` }} />
+                    {sentimentTotal ? [['positive', 'bg-success'], ['neutral', 'bg-border-strong'], ['negative', 'bg-danger']].map(([s, cls], i) => (
+                      <div key={s} className={cn('grow-x flow', cls)} style={{ width: `${(100 * (sentiment[s!] ?? 0)) / sentimentTotal}%`, animationDelay: `${150 + i * 140}ms` }} />
                     )) : null}
                   </div>
                   <div className="mt-2 flex justify-between text-xs text-muted">
@@ -200,8 +206,8 @@ export default function Analytics() {
               <div className="px-5 pb-5">
                 {data.failures.length ? (
                   <ul className="divide-y divide-border">
-                    {data.failures.map((f) => (
-                      <li key={f.reason} className="flex items-center justify-between gap-3 py-2 text-[13px]"><span className="min-w-0 [overflow-wrap:anywhere] text-fg-2">{f.reason}</span><b className="shrink-0 tabular-nums">{f.count}</b></li>
+                    {data.failures.map((f, i) => (
+                      <li key={f.reason} style={{ animationDelay: `${i * 60}ms` }} className="reveal reveal-in reveal-left flex items-center justify-between gap-3 py-2 text-[13px]"><span className="min-w-0 [overflow-wrap:anywhere] text-fg-2">{f.reason}</span><b className="shrink-0 tabular-nums"><AnimatedNumber value={f.count} /></b></li>
                     ))}
                   </ul>
                 ) : <p className="py-10 text-center text-sm text-muted">Every call connected. 🎉</p>}
@@ -213,7 +219,7 @@ export default function Analytics() {
             <Card className="overflow-hidden">
               <CardHeader title="By trigger" description="Manual, bulk, auto-dial, retry and inbound" />
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[420px] text-sm">
+                <table className="rows-in w-full min-w-[420px] text-sm">
                   <thead><tr className="border-y border-border bg-surface-2/50 text-left text-[11px] font-bold tracking-wider text-muted uppercase"><th className="px-5 py-2.5">Trigger</th><th className="px-3 py-2.5 text-right">Calls</th><th className="px-3 py-2.5 text-right">Connected</th><th className="px-5 py-2.5 text-right">Meetings</th></tr></thead>
                   <tbody className="divide-y divide-border">
                     {data.triggers.map((t) => (
@@ -228,7 +234,7 @@ export default function Analytics() {
             <Card className="overflow-hidden">
               <CardHeader title="Lead sources" description="Where this agent's best leads come from" />
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[420px] text-sm">
+                <table className="rows-in w-full min-w-[420px] text-sm">
                   <thead><tr className="border-y border-border bg-surface-2/50 text-left text-[11px] font-bold tracking-wider text-muted uppercase"><th className="px-5 py-2.5">Source</th><th className="px-3 py-2.5 text-right">Leads</th><th className="px-3 py-2.5 text-right">Hot</th><th className="px-5 py-2.5 text-right">Meetings</th></tr></thead>
                   <tbody className="divide-y divide-border">
                     {data.sources.map((s) => (
@@ -264,12 +270,12 @@ function UsageCard({ usage: u }: { usage: AnalyticsUsage }) {
         action={u.rates_configured && <div className="text-right"><div className="text-xl font-extrabold tabular-nums">{money(u.total_cost)}</div>
           <div className="text-xs text-muted">{u.cost_per_connected_call != null ? `${money(u.cost_per_connected_call)} per connected call` : 'estimated'}</div></div>} />
       <div className="grid gap-3 px-5 pb-5 sm:grid-cols-2 lg:grid-cols-4">
-        {rows.map(([label, amount, cost]) => (
-          <div key={label} className="rounded-xl border border-border p-3">
+        {rows.map(([label, amount, cost], i) => (
+          <div key={label} style={{ animationDelay: `${i * 70}ms` }} className="reveal reveal-in reveal-up glint rounded-xl border border-border p-3 transition hover:-translate-y-0.5 hover:border-border-strong">
             <div className="text-xs text-muted">{label}</div>
             <div className="mt-1 font-bold tabular-nums">{amount}</div>
             {u.rates_configured && <>
-              <div className="mt-2 h-1.5 rounded-full bg-surface-2"><div className="h-full rounded-full bg-fg" style={{ width: `${(100 * cost) / max}%` }} /></div>
+              <div className="mt-2 h-1.5 rounded-full bg-surface-2"><div className="grow-x h-full rounded-full bg-fg" style={{ width: `${(100 * cost) / max}%` }} /></div>
               <div className="mt-1 text-xs text-muted tabular-nums">{money(cost)}</div>
             </>}
           </div>

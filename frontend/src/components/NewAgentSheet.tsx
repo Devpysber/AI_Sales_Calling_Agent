@@ -161,9 +161,10 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
           )}
           {!copyFrom && (
             <div className="grid gap-2 sm:grid-cols-2">
-              {TEMPLATES.map((t) => (
-                <button key={t.id} type="button" onClick={() => setTemplate(t.id)}
-                  className={cn('rounded-xl border p-3 text-left transition', template === t.id ? 'border-fg bg-surface-2 ring-1 ring-fg' : 'border-border hover:border-border-strong')}>
+              {TEMPLATES.map((t, i) => (
+                <button key={t.id} type="button" onClick={() => setTemplate(t.id)} style={{ animationDelay: `${120 + i * 40}ms` }}
+                  className={cn('reveal reveal-in reveal-up rounded-xl border p-3 text-left transition duration-200 hover:-translate-y-0.5 active:scale-[.98]',
+                    template === t.id ? 'beam beam-on border-fg bg-surface-2 ring-1 ring-fg' : 'border-border hover:border-border-strong hover:shadow-card')}>
                   <div className="text-sm font-medium">{t.label}</div>
                   <div className="mt-1 line-clamp-2 text-xs text-muted">{t.objective}</div>
                 </button>

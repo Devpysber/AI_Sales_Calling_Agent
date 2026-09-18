@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarClock, Clock, Copy, Globe, HeartHandshake, Mail, PhoneForwarded, Play, RefreshCw, RotateCcw, Save, ShieldCheck, Zap } from 'lucide-react'
+import { CalendarClock, Copy, Globe, HeartHandshake, Mail, PhoneForwarded, Play, RefreshCw, RotateCcw, Save, ShieldCheck, Zap } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { Badge, Button, Card, Field, Input, PageHeader, Select, Skeleton, Switch, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
+import { Stagger } from '@/lib/motion'
 import type { AutomationSettings } from '@/lib/types'
 import { cn, DAYS, timeAgo } from '@/lib/utils'
 import { useAgent } from '@/lib/agent'
@@ -57,7 +58,7 @@ export default function Automation() {
           {dirty && <Button onClick={() => setForm(data.settings)}><RotateCcw />Discard</Button>}
           <Button variant="primary" disabled={!dirty} loading={save.isPending} onClick={() => save.mutate(form)}><Save />Save changes</Button>
         </>}>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <Stagger className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6" step={60}>
           {([
             ['Auto-dial', form.auto_dial_enabled, form.auto_dial_enabled ? `Every ${form.auto_dial_interval_minutes} min · ${form.max_calls_per_run}/run` : 'Off', 'auto_dial'],
             ['Retries', form.retry_enabled, form.retry_enabled ? `Up to ${form.max_retries} tries · ${form.retry_min_gap_minutes} min apart` : 'Off', 'retry_calls'],
@@ -66,13 +67,15 @@ export default function Automation() {
             ['Speed to lead', form.speed_to_lead_enabled, form.speed_to_lead_enabled ? `Calls ${Math.round(form.speed_to_lead_min_seconds / 60 * 10) / 10}–${Math.round(form.speed_to_lead_max_seconds / 60 * 10) / 10} min after the form` : 'Off', 'callbacks'],
             ['Follow-ups', form.nurture_enabled, form.nurture_enabled ? `After ${form.nurture_after_days} days · ${form.nurture_max_attempts}×` : 'Off', 'nurture'],
           ] as const).map(([label, on, detail, job]) => (
-            <div key={label} className="rounded-2xl border border-border bg-surface p-4 shadow-card">
-              <div className="flex items-center justify-between"><span className="text-[13px] font-bold">{label}</span><Badge tone={on ? 'success' : 'neutral'} dot={on}>{on ? 'On' : 'Off'}</Badge></div>
+            <div key={label} className={cn('glint relative overflow-hidden rounded-2xl border bg-surface p-4 shadow-card transition duration-300 hover:-translate-y-0.5 hover:shadow-pop', on ? 'border-success/30' : 'border-border')}>
+              {/* A running job has a light travelling along its top edge; an idle one is still. */}
+              {on && <span className="job-track absolute inset-x-0 top-0 h-0.5" />}
+              <div className="flex items-center justify-between"><span className="text-[13px] font-bold">{label}</span><Badge tone={on ? 'success' : 'neutral'} dot={on} pulse={on}>{on ? 'On' : 'Off'}</Badge></div>
               <div className="mt-1.5 truncate text-xs text-muted">{detail}</div>
               <div className="mt-1 truncate text-[11px] text-muted">{data.jobs[job]?.at ? `Last run ${timeAgo(data.jobs[job]!.at!)}` : 'Never run'}</div>
             </div>
           ))}
-        </div>
+        </Stagger>
       </PageHeader>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -143,7 +146,7 @@ export default function Automation() {
 
         <WebsiteIntake />
       </div>
-      <p className="mt-4 flex items-center gap-1.5 text-xs text-muted"><Clock className="size-3.5" />The scheduler checks every 20 seconds. Toggles save instantly; field edits need Save.</p>
+      <p className="mt-4 flex items-center gap-1.5 text-xs text-muted"><SchedulerPulse />The scheduler checks every 20 seconds. Toggles save instantly; field edits need Save.</p>
     </>
   )
 }
@@ -152,9 +155,12 @@ function JobCard({ icon, title, description, enabled, onToggle, children, footer
   icon: ReactNode; title: string; description: string; enabled: boolean; onToggle: (v: boolean) => void; children: ReactNode; footer: ReactNode
 }) {
   return (
-    <Card className={cn('flex flex-col transition', enabled && 'ring-1 ring-fg/40')}>
+    <Card className={cn('flex flex-col transition duration-300', enabled && 'beam beam-on ring-1 ring-fg/40')}>
       <div className="flex items-start gap-4 p-5">
-        <span className={cn('grid size-10 shrink-0 place-items-center rounded-xl [&_svg]:size-5', enabled ? 'bg-brand text-brand-fg' : 'bg-surface-2 text-muted')}>{icon}</span>
+        <span className="relative grid size-10 shrink-0 place-items-center">
+          {enabled && <span className="job-spinner absolute -inset-1 rounded-[14px]" aria-hidden />}
+          <span className={cn('relative grid size-10 place-items-center rounded-xl transition-colors duration-300 [&_svg]:size-5', enabled ? 'bg-brand text-brand-fg' : 'bg-surface-2 text-muted')}>{icon}</span>
+        </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2"><h3 className="font-bold">{title}</h3>{enabled && <Badge tone="success" pulse>On</Badge>}</div>
           <p className="text-sm text-muted">{description}</p>
@@ -225,5 +231,16 @@ function WebsiteIntake() {
         }}><RefreshCw />New link</Button>
       </div>
     </Card>
+  )
+}
+
+/** A ring that fills once every 20 s: the cadence the scheduler runs at, drawn rather than stated. */
+function SchedulerPulse() {
+  return (
+    <svg viewBox="0 0 16 16" className="size-3.5 -rotate-90" aria-hidden>
+      <circle cx="8" cy="8" r="6" fill="none" stroke="var(--border-strong)" strokeWidth="2" />
+      <circle cx="8" cy="8" r="6" fill="none" stroke="var(--success)" strokeWidth="2" strokeLinecap="round"
+        className="scheduler-ring" pathLength={100} strokeDasharray="100" />
+    </svg>
   )
 }

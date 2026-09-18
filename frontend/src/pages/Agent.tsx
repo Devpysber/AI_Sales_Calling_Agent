@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlertTriangle, BookOpen, Bot, Check, CircleDashed, Copy, Mic, MicOff, Play, RotateCcw, Save, SendHorizontal,
-  Sparkles, Square, Target, User, UserRound, Volume2,
+  AlertTriangle, BookOpen, Bot, Check, CircleDashed, Mic, MicOff, Play, RotateCcw, Save, SendHorizontal,
+  Sparkles, Square, Target, UserRound, Volume2,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
@@ -11,7 +11,9 @@ import { Badge, Button, Card, CardHeader, Field, Input, PageHeader, Select, Skel
 import { api } from '@/lib/api'
 import type { AgentProfile, AgentTurnResult, KnowledgeDoc, Lead, Page, Turn } from '@/lib/types'
 import { cn, LANGUAGES, titleCase } from '@/lib/utils'
-import { VoiceOrb, Waveform } from '@/components/VoiceViz'
+import { Stagger } from '@/lib/motion'
+import { VoiceOrb } from '@/components/VoiceViz'
+import { AgentAvatar } from '@/components/AgentAvatar'
 import { useAgent } from '@/lib/agent'
 
 type ProfileResponse = { profile: AgentProfile; voices: string[]; languages: Record<string, string> }
@@ -19,30 +21,6 @@ type KnowledgeResponse = { documents: KnowledgeDoc[]; stats: { chunks: number; d
 type Section = 'playground' | 'persona' | 'playbook'
 
 const PLACEHOLDERS = ['name', 'agent', 'company']
-type CoverageTopics = Record<string, { summary: string }>
-
-/** Prospect lines to rehearse, built from this agent's knowledge, objections and call to action. */
-function quickReplies(profile: AgentProfile, topics: CoverageTopics, hindi: boolean, inbound: boolean): string[] {
-  const has = (k: string) => Boolean(topics[k]?.summary)
-  const c = profile.company_name || 'your company'
-  const out: string[] = hindi
-    ? [inbound ? `हाँ, मुझे ${c} के बारे में जानना था।` : 'हाँ बोलिए, क्या बात है?', `${c} क्या करती है?`]
-    : [inbound ? `Hi, I wanted to know more about ${c}.` : 'Yes, go ahead.', `What does ${c} do exactly?`]
-  if (has('services')) out.push(hindi ? 'आपकी सर्विसेज़ में क्या-क्या आता है?' : 'Which services do you offer?')
-  if (has('pricing')) out.push(hindi ? 'इसका खर्चा कितना है?' : 'How much does it cost?')
-  if (has('proof')) out.push(hindi ? 'किसी क्लाइंट का उदाहरण बताइए।' : 'Can you share a client example?')
-  if (has('faq')) out.push(hindi ? 'इसमें कितना समय लगता है?' : 'How long does it take?')
-  // Rehearse the objections this agent's playbook prepares for
-  for (const line of (profile.objection_handling || '').split('\n').slice(0, 3)) {
-    const topic = line.split(':')[0]?.trim().toLowerCase() ?? ''
-    if (/price|cost|expensive|budget/.test(topic)) out.push(hindi ? 'यह बहुत महंगा है।' : 'That sounds expensive.')
-    else if (/vendor|already|competitor/.test(topic)) out.push(hindi ? 'हमारे पास पहले से एक वेंडर है।' : 'We already have a vendor.')
-    else if (/email|details|send/.test(topic)) out.push(hindi ? 'मुझे ईमेल पर डिटेल्स भेज दीजिए।' : 'Just send me details on email.')
-  }
-  if (profile.call_to_action) out.push(hindi ? 'ठीक है, कल सुबह 11 बजे बात कर लेते हैं।' : 'Okay, let us do it tomorrow at 11 am.')
-  out.push(hindi ? 'अभी बिज़ी हूँ, बाद में कॉल कीजिए।' : 'I am busy, call me later.', hindi ? 'मुझे इंटरेस्ट नहीं है।' : 'Not interested.')
-  return [...new Set(out)]
-}
 
 const unknownPlaceholders = (t: string) =>
   [...t.matchAll(/\{(\w*)\}/g)].map((m) => m[1]!).filter((p) => !PLACEHOLDERS.includes(p))
@@ -149,7 +127,7 @@ function AgentSummary({ profile, saved, voices, languages, docs, checks, onGo }:
   ]
 
   return (
-    <Card className="mb-4 overflow-hidden">
+    <Card className="mb-4 overflow-hidden reveal reveal-in reveal-up">
       <div className="flex flex-wrap items-center gap-x-8 gap-y-4 p-5">
         <div className="flex min-w-0 items-center gap-3">
           <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-brand text-brand-fg shadow-sm"><Bot className="size-5" /></span>
@@ -246,7 +224,7 @@ function ProfileEditor({ section, draft, setDraft, data }: {
   const insert = (key: 'greeting_en' | 'greeting_hi', token: string) => set(key, `${draft[key]}${draft[key].endsWith(' ') || !draft[key] ? '' : ' '}{${token}}`)
 
   const aside = (
-    <Card className="p-5 text-sm">
+    <Card className="p-5 text-sm reveal reveal-in reveal-right" style={{ animationDelay: '200ms' }}>
       <div className="flex items-center gap-2 font-medium"><BookOpen className="size-4 text-brand" />Playbook vs knowledge</div>
       <p className="mt-1.5 text-muted">Put <b className="font-medium text-fg-2">how</b> to sell here — tone, process, objection handling. Put <b className="font-medium text-fg-2">what</b> you sell — services, prices, FAQs — in the Knowledge Base, so the agent quotes facts instead of inventing them.</p>
       <Link to={path('/knowledge')} className="mt-3 inline-block font-medium text-brand">Open Knowledge Base →</Link>
@@ -255,7 +233,7 @@ function ProfileEditor({ section, draft, setDraft, data }: {
 
   if (section === 'playbook') return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
-      <div className="space-y-4">
+      <Stagger className="space-y-4" step={60}>
         <Section title="Goal" description="What a successful call achieves. The agent steers every conversation toward this.">
           <div className="grid gap-4">
             <Field label="Call objective"><Counted rows={2} max={600} value={draft.objective} onChange={(e) => set('objective', e.target.value)} placeholder="Qualify the prospect's need for software development and book a discovery meeting." /></Field>
@@ -274,14 +252,14 @@ function ProfileEditor({ section, draft, setDraft, data }: {
             <Field label="Never say or promise" hint="Enforced on every reply"><Counted rows={3} max={1500} value={draft.forbidden_topics} onChange={(e) => set('forbidden_topics', e.target.value)} placeholder="Discounts, guaranteed delivery dates, competitor criticism" /></Field>
           </div>
         </Section>
-      </div>
+      </Stagger>
       <div className="space-y-4 xl:sticky xl:top-20 xl:h-fit">{aside}</div>
     </div>
   )
 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
-      <div className="space-y-4">
+      <Stagger className="space-y-4" step={60}>
         <Section title="Identity" description="How the agent introduces itself and your business.">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Agent name"><Input value={draft.agent_name} maxLength={60} onChange={(e) => set('agent_name', e.target.value)} /></Field>
@@ -345,7 +323,7 @@ function ProfileEditor({ section, draft, setDraft, data }: {
           <div><div className="font-medium">Voicemail detection</div><div className="text-sm text-muted">Hang up automatically when an answering machine picks up. Can misfire on Indian caller tunes, so keep it off unless you see voicemail calls.</div></div>
           <Switch checked={draft.detect_voicemail} onChange={(v) => set('detect_voicemail', v)} label="Voicemail detection" />
         </Card>
-      </div>
+      </Stagger>
       <div className="space-y-4 xl:sticky xl:top-20 xl:h-fit">{aside}</div>
     </div>
   )
@@ -353,27 +331,54 @@ function ProfileEditor({ section, draft, setDraft, data }: {
 
 /* ============================== Playground ============================== */
 
-interface SpeechRecognitionLike { lang: string; interimResults: boolean; onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void; onend: () => void; onerror: () => void; start: () => void; stop: () => void }
+interface SpeechRecognitionLike { lang: string; interimResults: boolean; onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void; onend: () => void; onerror: (e: { error: string }) => void; start: () => void; stop: () => void }
 type ChatTurn = Turn & { meta?: AgentTurnResult }
 
 function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfile; unsaved: boolean; onSave: () => void; saving: boolean }) {
   const { base } = useAgent()
   // Rehearsing a call should use the agent's own word for the person on the line.
   const caller = (profile.customer_noun || 'customer').trim()
-  const Caller = caller.charAt(0).toUpperCase() + caller.slice(1)
   const [history, setHistory] = useState<ChatTurn[]>([])
   const [text, setText] = useState('')
   const [lang, setLang] = useState(profile.default_language || 'en-IN')
   const [direction, setDirection] = useState<'outbound' | 'inbound'>('outbound')
   const inbound = direction === 'inbound'
-  const coverage = useQuery({ queryKey: ['knowledge'], queryFn: () => api<{ coverage?: { topics: CoverageTopics } }>(`${base}/knowledge`), staleTime: 60_000 })
-  const suggestions = quickReplies(profile, coverage.data?.coverage?.topics ?? {}, lang !== 'en-IN', direction === 'inbound')
   const [leadId, setLeadId] = useState<number | ''>('')
-  // Voice off by default: text rehearsals cost no TTS; switch on to hear the agent
-  const [speak, setSpeak] = useState(false)
+  const [speak, setSpeak] = useState(true) // Voice is now primary
   const [listening, setListening] = useState(false)
+  const [time, setTime] = useState(new Date())
+
+  // Real-time clock update
+  useEffect(() => {
+    const timer = setInterval(() => setTime(new Date()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
   const [selected, setSelected] = useState<number | null>(null)
   const [ended, setEnded] = useState(false)
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const mouthTimer = useRef<number>(0)
+  // Voice loudness sampled from the playing audio, read by the avatar every frame to move the mouth in time.
+  const level = useRef(0)
+  const analyser = useRef<{ ctx: AudioContext; raf: number } | null>(null)
+  const meter = (a: HTMLAudioElement) => {
+    try {
+      const ctx = analyser.current?.ctx ?? new AudioContext()
+      const node = ctx.createAnalyser(); node.fftSize = 512
+      ctx.createMediaElementSource(a).connect(node); node.connect(ctx.destination)
+      void ctx.resume()
+      const buf = new Uint8Array(node.fftSize)
+      if (analyser.current) cancelAnimationFrame(analyser.current.raf)
+      const tick = () => {
+        node.getByteTimeDomainData(buf)
+        let sum = 0
+        for (const v of buf) { const d = (v - 128) / 128; sum += d * d }
+        level.current = Math.sqrt(sum / buf.length)
+        analyser.current!.raf = requestAnimationFrame(tick)
+      }
+      analyser.current = { ctx, raf: requestAnimationFrame(tick) }
+    } catch { level.current = 0 }
+  }
   const bottom = useRef<HTMLDivElement>(null)
   const recog = useRef<SpeechRecognitionLike | null>(null)
   const audio = useRef<HTMLAudioElement | null>(null)
@@ -389,9 +394,20 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
   })
   useEffect(() => { if (greeting.data && history.length === 0) setHistory([{ role: 'assistant', text: greeting.data.text }]) }, [greeting.data, history.length])
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }) }, [history])
-  useEffect(() => () => { audio.current?.pause(); recog.current?.stop() }, [])
+  useEffect(() => () => { audio.current?.pause(); recog.current?.stop(); window.clearTimeout(mouthTimer.current); if (analyser.current) { cancelAnimationFrame(analyser.current.raf); void analyser.current.ctx.close() } }, [])
 
-  const play = (url: string) => { audio.current?.pause(); audio.current = new Audio(url); void audio.current.play() }
+  const play = (url: string) => { 
+    audio.current?.pause(); 
+    window.clearTimeout(mouthTimer.current)
+    audio.current = new Audio(url); 
+    audio.current.onplay = () => setIsSpeaking(true);
+    audio.current.crossOrigin = 'anonymous'
+    meter(audio.current)
+    audio.current.onended = () => { setIsSpeaking(false); level.current = 0 };
+    audio.current.onerror = () => setIsSpeaking(false);
+    audio.current.onpause = () => setIsSpeaking(false);
+    void audio.current.play() 
+  }
 
   const send = useMutation({
     mutationFn: ({ message, prior }: { message: string; prior: ChatTurn[] }) => api<AgentTurnResult>(`${base}/playground`, {
@@ -400,6 +416,12 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
     onSuccess: (res) => {
       setHistory((h) => { setSelected(h.length); return [...h, { role: 'assistant', text: res.reply, meta: res }] })
       if (res.audio_url) play(res.audio_url)
+      else {
+        // No voice (TTS outage): still mouth the reply for roughly as long as it would take to say it.
+        setIsSpeaking(true)
+        window.clearTimeout(mouthTimer.current)
+        mouthTimer.current = window.setTimeout(() => setIsSpeaking(false), Math.min(12000, 600 + res.reply.length * 55))
+      }
       if (res.audio_error) toast.warning('Voice unavailable', { description: res.audio_error })
       if (res.end_call) setEnded(true)
     },
@@ -429,27 +451,39 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
     r.interimResults = false
     r.onresult = (e) => submit(e.results[0]![0]!.transcript)
     r.onend = () => setListening(false)
-    r.onerror = () => { setListening(false); toast.error('Could not hear you — check microphone permission') }
+    r.onerror = (e: { error: string }) => { 
+      setListening(false); 
+      if (e.error === 'no-speech') {
+        // Fail silently on timeout, they just didn't speak
+      } else if (e.error === 'audio-capture') {
+        toast.error('No microphone found, or another app is using it.')
+      } else if (e.error === 'not-allowed') {
+        toast.error('Microphone access denied by browser.')
+      } else {
+        toast.error('Browser speech error: ' + e.error) 
+      }
+    }
     recog.current = r
     r.start()
     setListening(true)
   }
 
-  const reset = () => { audio.current?.pause(); setHistory([]); setSelected(null); setEnded(false); void greeting.refetch() }
-
-  const copyTranscript = async () => {
-    const lines = history.map((t) => `${t.role === 'assistant' ? profile.agent_name : lead?.name ?? Caller}: ${t.text}`)
-    try { await navigator.clipboard.writeText(lines.join('\n')); toast.success('Transcript copied') } catch { toast.error('Clipboard unavailable') }
-  }
+  const reset = () => { audio.current?.pause(); window.clearTimeout(mouthTimer.current); setIsSpeaking(false); setHistory([]); setSelected(null); setEnded(false); void greeting.refetch() }
 
   const turns = history.filter((t) => t.meta)
   const inspected = (selected !== null ? history[selected]?.meta : undefined) ?? turns.at(-1)?.meta
   const avgMs = turns.length ? Math.round(turns.reduce((a, t) => a + t.meta!.total_ms, 0) / turns.length) : null
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-      <Card className="flex h-[calc(100vh-290px)] min-h-[540px] flex-col overflow-hidden">
-        <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+    <div className="grid gap-4 grid-cols-1">
+      <Card className="relative flex h-[calc(100vh-290px)] min-h-[540px] flex-col overflow-hidden">
+        
+        {/* 3D Spline Avatar Background */}
+        <div className="absolute inset-0 z-0 bg-surface-1" aria-hidden>
+          <AgentAvatar zoomOut={true} isSpeaking={isSpeaking || send.isPending} isListening={listening} level={level} />
+        </div>
+
+        <div className="relative z-10 flex flex-wrap items-center gap-2 border-b border-border/50 bg-elevated/40 px-4 py-3 backdrop-blur-xl">
           <div className="mr-auto flex min-w-0 items-center gap-2.5">
             {/* The agent's orb: calm while it waits for you, spinning up while it thinks of a reply. */}
             <VoiceOrb state={send.isPending ? 'speaking' : ended ? 'idle' : 'listening'} size={40} />
@@ -468,80 +502,48 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
             {Object.entries(LANGUAGES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </Select>
           <label className="flex h-8 items-center gap-2 rounded-lg border border-border px-2 text-[13px] text-muted"><Volume2 className="size-3.5" />Voice<Switch checked={speak} onChange={setSpeak} label="Speak replies" /></label>
-          <Button size="sm" variant="ghost" onClick={copyTranscript} disabled={history.length < 2} aria-label="Copy transcript"><Copy /></Button>
           <Button size="sm" variant="ghost" onClick={reset}><RotateCcw />Restart</Button>
+          {/* IST clock lives in the toolbar so it can wrap with the other controls instead of floating over them. */}
+          <div className="flex h-8 items-center gap-2 rounded-full border border-border bg-black/30 px-3 text-[13px] font-medium tabular-nums">
+            <div className="size-2 rounded-full bg-green-500 animate-pulse" />
+            {time.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' })} IST
+          </div>
         </div>
 
         {unsaved && (
-          <div className="flex flex-wrap items-center gap-2 border-b border-warning/30 bg-warning-soft px-4 py-2 text-[13px] text-warning">
+          <div className="relative z-10 flex flex-wrap items-center gap-2 border-b border-warning/30 bg-warning-soft/80 px-4 py-2 text-[13px] text-warning backdrop-blur-md">
             <AlertTriangle className="size-4" /><span className="mr-auto">The playground uses your saved agent. Save your edits to test them.</span>
             <Button size="sm" variant="primary" loading={saving} onClick={onSave}><Save />Save</Button>
           </div>
         )}
 
-        <div className="flex-1 space-y-4 overflow-y-auto bg-surface-2/40 px-4 py-5 sm:px-6">
-          {greeting.isLoading && <Skeleton className="h-12 w-2/3 rounded-2xl" />}
-          {history.map((t, i) => {
-            const isAgent = t.role === 'assistant'
-            return (
-              // Each bubble enters from the side it belongs to, so a new turn is seen without
-              // watching the scroll position.
-              <div key={i} className={cn('reveal reveal-in flex gap-2.5', isAgent ? 'reveal-left' : 'reveal-right flex-row-reverse')}>
-                <span className={cn('mt-0.5 grid size-7 shrink-0 place-items-center rounded-full', isAgent ? 'bg-brand text-brand-fg' : 'bg-surface text-fg-2 ring-1 ring-border')}>
-                  {isAgent ? <Bot className="size-3.5" /> : <User className="size-3.5" />}
-                </span>
-                <div className={cn('max-w-[80%]', !isAgent && 'text-right')}>
-                  <button type="button" disabled={!t.meta} onClick={() => setSelected(i)}
-                    className={cn('inline-block rounded-2xl px-4 py-2.5 text-left text-[15px] leading-relaxed transition',
-                      isAgent ? 'rounded-tl-sm bg-surface shadow-xs ring-1 ring-border' : 'rounded-tr-sm bg-brand text-brand-fg',
-                      t.meta && 'cursor-pointer hover:ring-brand/50', t.meta && inspected === t.meta && 'ring-2 ring-brand')}>
-                    {t.text}
-                  </button>
-                  {t.meta && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
-                      <Badge tone="brand">{titleCase(t.meta.intent)}</Badge>
-                      <QualificationBadge value={t.meta.qualification} />
-                      <span className="tabular-nums">{(t.meta.total_ms / 1000).toFixed(1)}s</span>
-                      {t.meta.knowledge.length > 0 && <span className="flex items-center gap-1"><BookOpen className="size-3" />{t.meta.knowledge.length}</span>}
-                      {t.meta.audio_url && <button onClick={() => play(t.meta!.audio_url!)} className="flex items-center gap-1 text-brand hover:underline"><Play className="size-3" />Replay</button>}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-          {send.isPending && (
-            <div className="reveal reveal-in reveal-left flex gap-2.5"><span className="grid size-7 place-items-center rounded-full bg-brand text-brand-fg"><Bot className="size-3.5" /></span>
-              <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm bg-surface px-4 py-2.5 text-xs text-muted ring-1 ring-border"><Waveform bars={7} className="h-4 text-fg" />Thinking…</div>
+        {/* Bottom Right UI Controls (Moved to avoid overlap) */}
+        <div className="absolute bottom-6 right-6 z-20 flex flex-col items-end pointer-events-auto gap-3">
+          
+          {listening && (
+            <div className="bg-red-500 text-white text-xs font-bold px-3 py-1 rounded-full animate-pulse shadow-lg mr-2">
+              Listening...
             </div>
           )}
-          {ended && (
-            <div className="flex items-center justify-center gap-3 py-2 text-xs text-muted">
-              <span className="h-px flex-1 bg-border" />The agent would hang up here<Button size="sm" variant="ghost" onClick={reset}><RotateCcw />Start over</Button><span className="h-px flex-1 bg-border" />
-            </div>
-          )}
-          <div ref={bottom} />
-        </div>
 
-        <div className="border-t border-border">
-          {!ended && history.length <= 6 && (
-            <div className="flex gap-1.5 overflow-x-auto px-3 pt-3">
-              {suggestions.map((q) => <button key={q} type="button" disabled={send.isPending} onClick={() => submit(q)} className="shrink-0 rounded-full border border-border px-3 py-1 text-[13px] text-fg-2 transition hover:border-brand hover:text-brand disabled:opacity-50">{q}</button>)}
-            </div>
-          )}
-          <form onSubmit={(e) => { e.preventDefault(); submit(text) }} className="flex items-center gap-2 p-3">
-            <Button type="button" size="icon" variant={listening ? 'danger' : 'secondary'} onClick={toggleMic} disabled={ended} aria-label={listening ? 'Stop listening' : 'Speak'}>{listening ? <MicOff /> : <Mic />}</Button>
-            <Input value={text} onChange={(e) => setText(e.target.value)} disabled={ended} maxLength={1000}
-              placeholder={ended ? 'Call ended — restart to try again' : listening ? 'Listening…' : `Reply as ${lead?.name ?? `the ${caller}`}…`} className="h-10" autoFocus />
-            <Button type="submit" variant="primary" size="lg" disabled={!text.trim() || ended} loading={send.isPending} aria-label="Send">{!send.isPending && <SendHorizontal />}</Button>
-          </form>
+          <div className="flex items-center gap-3">
+            <form onSubmit={(e) => { e.preventDefault(); submit(text) }} className="flex w-64 items-center rounded-full bg-white/10 p-1.5 backdrop-blur-md border border-white/20 transition-all focus-within:w-80 focus-within:bg-white/20">
+              <Input value={text} onChange={(e) => setText(e.target.value)} disabled={ended} maxLength={1000} placeholder={listening ? 'Listening...' : 'Type reply...'} className="h-9 flex-1 bg-transparent border-none text-[13px] text-white shadow-none focus-visible:ring-0 placeholder:text-gray-300" />
+              <Button type="submit" variant="primary" size="sm" className="rounded-full px-3" disabled={!text.trim() || ended} loading={send.isPending}><SendHorizontal className="size-3.5" /></Button>
+            </form>
+
+            <button type="button" onClick={toggleMic} disabled={ended} aria-label={listening ? 'Stop listening' : 'Speak'}
+              className={cn("flex size-14 shrink-0 items-center justify-center rounded-full text-white shadow-2xl transition-all active:scale-95", listening ? 'bg-red-500 animate-pulse shadow-red-500/50' : 'bg-gray-800 shadow-black/50 hover:bg-gray-700')}>
+              {listening ? <MicOff className="size-5" /> : <Mic className="size-5" />}
+            </button>
+          </div>
         </div>
       </Card>
 
       <div className="space-y-4">
         <Card>
           <CardHeader title={<span className="flex items-center gap-2"><Sparkles className="size-4 text-brand" />Turn inspector</span>}
-            description={inspected ? 'Click any agent reply to inspect it' : undefined}
+            description={inspected ? 'What the agent understood on its latest reply' : undefined}
             action={avgMs !== null && <Badge tone={avgMs < 2500 ? 'success' : avgMs < 4500 ? 'warning' : 'danger'}>avg {(avgMs / 1000).toFixed(1)}s</Badge>} />
           {inspected ? <Inspector turn={inspected} /> : (
             <div className="space-y-3 p-5 text-sm text-muted">
@@ -581,15 +583,6 @@ function Inspector({ turn }: { turn: AgentTurnResult }) {
 
       <div>
         <div className="mb-1.5 flex justify-between text-xs text-muted"><span>Response time</span><span className="tabular-nums">{(turn.total_ms / 1000).toFixed(2)}s total</span></div>
-        <div className="flex h-2 overflow-hidden rounded-full bg-surface-2">
-          <div className="bg-brand" style={{ width: `${Math.min(100, (turn.llm_ms / Math.max(turn.total_ms, 1)) * 100)}%` }} />
-          <div className="flex-1 bg-info/50" />
-        </div>
-        <div className="mt-1.5 flex gap-4 text-xs text-muted">
-          <span className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-brand" />LLM {turn.llm_ms} ms</span>
-          <span className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-info/50" />Voice & retrieval {Math.max(0, turn.total_ms - turn.llm_ms)} ms</span>
-        </div>
-        <div className="mt-1 truncate text-xs text-muted">Model <span className="font-mono">{turn.provider}</span></div>
       </div>
 
       {turn.end_call && <div className="flex items-center gap-2 rounded-lg bg-warning-soft px-3 py-2 text-xs font-medium text-warning"><AlertTriangle className="size-3.5" />Agent decided to end the call</div>}
@@ -606,10 +599,7 @@ function Inspector({ turn }: { turn: AgentTurnResult }) {
       <div>
         <div className="mb-1.5 text-xs font-medium text-muted uppercase">Knowledge used</div>
         {turn.knowledge.length ? turn.knowledge.map((k, i) => (
-          <div key={i} className="mb-2 rounded-lg border border-border p-3">
-            <div className="flex items-center justify-between gap-2 text-xs"><span className="truncate font-medium">{k.title}</span><Badge tone={k.score > 0.5 ? 'success' : 'neutral'}>{Math.round(k.score * 100)}%</Badge></div>
-            <p className="mt-1 line-clamp-3 text-xs text-muted">{k.text}</p>
-          </div>
+          <div key={i} className="mb-1.5 flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs"><BookOpen className="size-3.5 shrink-0 text-muted" /><span className="truncate font-medium">{k.title}</span></div>
         )) : <p className="text-muted">No documents matched. <Link to={path('/knowledge')} className="text-brand">Add knowledge</Link> so the agent can answer specifics.</p>}
       </div>
     </div>

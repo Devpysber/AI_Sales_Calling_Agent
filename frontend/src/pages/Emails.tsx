@@ -12,6 +12,8 @@ import {
   EmptyState, Input, PageHeader, Select, Skeleton, Switch, Tabs, Textarea,
 } from "@/components/ui"
 import { api } from "@/lib/api"
+import { AnimatedNumber, Stagger } from "@/lib/motion"
+import { Aurora, VoiceOrb, Waveform } from "@/components/VoiceViz"
 import { useAgent } from "@/lib/agent"
 import { cn } from "@/lib/utils"
 import type { ActivityEvent, Lead, Page } from "@/lib/types"
@@ -199,7 +201,7 @@ export default function Emails() {
         }
       />
 
-      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <Stagger className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4" step={70}>
         {[
           { label: "Total sent", value: stats.total,  icon: Mail, tone: "bg-brand-soft text-brand" },
           { label: "AI emails",  value: stats.ai,     icon: Bot,  tone: "bg-brand-soft text-brand" },
@@ -208,15 +210,15 @@ export default function Emails() {
             ? { label: "Failed", value: stats.failed, icon: X, tone: "bg-danger-soft text-danger" }
             : { label: "Reports", value: stats.system, icon: Cpu, tone: "bg-surface-2 text-fg-2" },
         ].map(({ label, value, icon: Icon, tone }) => (
-          <Card key={label} className="flex items-center gap-3 p-4">
-            <div className={`rounded-xl p-2 ${tone}`}><Icon className="size-4" /></div>
+          <Card key={label} className="glint group flex items-center gap-3 p-4 transition duration-300 hover:-translate-y-0.5 hover:shadow-pop">
+            <div className={`rounded-xl p-2 transition-transform duration-300 group-hover:-rotate-6 group-hover:scale-110 ${tone}`}><Icon className="size-4" /></div>
             <div>
               <p className="text-xs text-muted">{label}</p>
-              <p className="text-xl font-bold">{feedQuery.isLoading ? "–" : value}</p>
+              <p className="text-xl font-bold tabular-nums">{feedQuery.isLoading ? "–" : <AnimatedNumber value={value} />}</p>
             </div>
           </Card>
         ))}
-      </div>
+      </Stagger>
 
       <Tabs
         value={tab}
@@ -232,13 +234,15 @@ export default function Emails() {
         {tab === "logs" && (
           <div className="grid gap-5 lg:grid-cols-[240px_1fr]">
             <div className="space-y-4 lg:sticky lg:top-4 lg:self-start">
-              <Card className="p-4">
-                <div className="mb-3">
-                  <h3 className="flex items-center gap-2 text-sm font-bold"><Bot className="size-4 text-brand" />Autonomous AI Emails</h3>
+              <Card className={cn('relative overflow-hidden p-4', aiAutoEmails && 'beam beam-on')}>
+                {aiAutoEmails && <Aurora className="opacity-50" />}
+                <div className="relative mb-3">
+                  <h3 className="flex items-center gap-2 text-sm font-bold">
+                    {aiAutoEmails ? <VoiceOrb state="listening" size={22} /> : <Bot className="size-4 text-brand" />}Autonomous AI Emails</h3>
                   <p className="mt-1 text-xs text-muted leading-relaxed">AI sends personalised follow-ups after every call automatically.</p>
                 </div>
-                <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-border bg-surface-2 px-3 py-2.5">
-                  <span className="text-sm font-medium">{aiAutoEmails ? "Enabled" : "Disabled"}</span>
+                <label className="relative flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-border bg-surface-2 px-3 py-2.5">
+                  <span className="flex items-center gap-2 text-sm font-medium">{aiAutoEmails && <Waveform bars={4} className="h-3 text-success" />}{aiAutoEmails ? "Enabled" : "Disabled"}</span>
                   <Switch checked={aiAutoEmails} onChange={(v) => saveAuto.mutate(v)} disabled={saveAuto.isPending} />
                 </label>
               </Card>
@@ -270,11 +274,11 @@ export default function Emails() {
                         <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10px] font-bold text-muted">{g.events.length}</span>
                       </div>
                       <Card className="divide-y divide-border overflow-hidden">
-                        {g.events.map((e) => {
+                        {g.events.map((e, i) => {
                           const actor = ACTOR_MAP[e.actor] ?? { label: e.actor, tone: "neutral" as const }
                           return (
-                            <div key={e.id} className="flex items-start gap-4 px-5 py-4 transition hover:bg-surface-2/50">
-                              <div className={cn('mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full',
+                            <div key={e.id} style={{ animationDelay: `${Math.min(i, 10) * 50}ms` }} className="reveal reveal-in reveal-up group flex items-start gap-4 px-5 py-4 transition hover:bg-surface-2/50">
+                              <div className={cn('mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:rotate-[-8deg]',
                                 failed(e) ? 'bg-danger-soft text-danger' : 'bg-brand-soft text-brand')}>
                                 <Mail className="size-3.5" />
                               </div>

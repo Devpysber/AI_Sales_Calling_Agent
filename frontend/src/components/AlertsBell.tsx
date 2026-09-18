@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom'
 import { Link, useLocation } from 'react-router-dom'
 import { Button, Dialog } from '@/components/ui'
 import { api } from '@/lib/api'
+import { Stagger } from '@/lib/motion'
 import { cn, timeAgo } from '@/lib/utils'
 
 type Level = 'danger' | 'warning' | 'success' | 'info'
@@ -94,49 +95,55 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
             {tab === 'reminders' && (items.length ? sections.map(([title, list]) => list.length > 0 && (
               <div key={title} className="mb-1">
                 <div className="px-2 pt-1 pb-1 text-[10.5px] font-bold tracking-wider text-muted uppercase">{title}</div>
-                {list.map((a) => {
-                  const Icon = ICONS[a.kind] ?? Bell
-                  return (
-                    <div key={a.key} className="group flex items-start gap-2.5 rounded-xl px-2 py-2 hover:bg-surface-2">
-                      <span className={cn('mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg', TONE[a.level])}><Icon className="size-3.5" /></span>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[13px] leading-snug">{a.text}</div>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11.5px]">
-                          {a.agent && <span className="truncate text-muted">{a.agent}</span>}
-                          {a.action && (a.external
-                            ? <a href={a.to} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-semibold text-brand hover:underline">{a.action}<ExternalLink className="size-3" /></a>
-                            : <Link to={link(a)} className="font-semibold text-brand hover:underline">{a.action} →</Link>)}
-                          <span className="ml-auto flex gap-1 opacity-0 transition group-hover:opacity-100">
-                            {[['1h', 1], ['Tomorrow', 16]].map(([l, h]) => (
-                              <button key={l} type="button" onClick={() => snooze.mutate({ key: a.key, hours: h as number })}
-                                className="rounded-md border border-border px-1.5 py-px text-[10.5px] text-muted hover:text-fg">Snooze {l}</button>
-                            ))}
-                          </span>
+                <Stagger>
+                  {list.map((a) => {
+                    const Icon = ICONS[a.kind] ?? Bell
+                    return (
+                      <div key={a.key} className="group flex items-start gap-2.5 rounded-xl px-2 py-2 hover:bg-surface-2">
+                        <span className={cn('mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg', TONE[a.level])}><Icon className="size-3.5" /></span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[13px] leading-snug">{a.text}</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11.5px]">
+                            {a.agent && <span className="truncate text-muted">{a.agent}</span>}
+                            {a.action && (a.external
+                              ? <a href={a.to} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-semibold text-brand hover:underline">{a.action}<ExternalLink className="size-3" /></a>
+                              : <Link to={link(a)} className="font-semibold text-brand hover:underline">{a.action} →</Link>)}
+                            <span className="ml-auto flex gap-1 opacity-0 transition group-hover:opacity-100">
+                              {[['1h', 1], ['Tomorrow', 16]].map(([l, h]) => (
+                                <button key={l} type="button" onClick={() => snooze.mutate({ key: a.key, hours: h as number })}
+                                  className="rounded-md border border-border px-1.5 py-px text-[10.5px] text-muted hover:text-fg">Snooze {l}</button>
+                              ))}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  )
-                })}
+                    )
+                  })}
+                </Stagger>
               </div>
             )) : <p className="px-2 py-8 text-center text-sm text-muted">All clear. Nothing needs your attention.</p>)}
 
-            {tab === 'balances' && (Array.isArray(data?.balances) ? data.balances : []).map((b) => (
-              <div key={b.provider} className="mb-2 rounded-xl border border-border p-3">
-                <div className="flex items-center gap-2">
-                  <span className={cn('size-2 rounded-full', LEVEL_DOT[b.level])} />
-                  <span className="text-sm font-bold">{b.provider}</span>
-                  <span className="truncate text-xs text-muted">{b.label}</span>
-                  <span className={cn('ml-auto text-sm font-extrabold tabular-nums', b.level === 'critical' ? 'text-danger' : b.level === 'low' ? 'text-warning' : 'text-fg')}>{b.value}</span>
-                </div>
-                <p className="mt-1 text-xs text-fg-2">{b.detail}</p>
-                {b.facts?.length > 0 && (
-                  <dl className="mt-2 space-y-0.5 text-[11.5px]">
-                    {b.facts.map(([k, v]) => <div key={k} className="flex gap-2"><dt className="w-28 shrink-0 text-muted">{k}</dt><dd className="min-w-0 text-fg-2">{v}</dd></div>)}
-                  </dl>
-                )}
-                {b.action && <a href={b.action.url} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-brand hover:underline">{b.action.label}<ExternalLink className="size-3" /></a>}
-              </div>
-            ))}
+            {tab === 'balances' && (
+              <Stagger>
+                {(Array.isArray(data?.balances) ? data.balances : []).map((b) => (
+                  <div key={b.provider} className="mb-2 rounded-xl border border-border p-3">
+                    <div className="flex items-center gap-2">
+                      <span className={cn('size-2 rounded-full', LEVEL_DOT[b.level])} />
+                      <span className="text-sm font-bold">{b.provider}</span>
+                      <span className="truncate text-xs text-muted">{b.label}</span>
+                      <span className={cn('ml-auto text-sm font-extrabold tabular-nums', b.level === 'critical' ? 'text-danger' : b.level === 'low' ? 'text-warning' : 'text-fg')}>{b.value}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-fg-2">{b.detail}</p>
+                    {b.facts?.length > 0 && (
+                      <dl className="mt-2 space-y-0.5 text-[11.5px]">
+                        {b.facts.map(([k, v]) => <div key={k} className="flex gap-2"><dt className="w-28 shrink-0 text-muted">{k}</dt><dd className="min-w-0 text-fg-2">{v}</dd></div>)}
+                      </dl>
+                    )}
+                    {b.action && <a href={b.action.url} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-brand hover:underline">{b.action.label}<ExternalLink className="size-3" /></a>}
+                  </div>
+                ))}
+              </Stagger>
+            )}
           </div>
         </div>
       , document.body)}

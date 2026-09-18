@@ -143,7 +143,7 @@ const DIRECTIONS = { up: 'reveal-up', down: 'reveal-down', left: 'reveal-left', 
 export function Reveal<T extends ElementType = 'div'>({
   as, index = 0, delay = 0, from = 'up', immediate = false, className, style, children, ...rest
 }: RevealProps<T>) {
-  const Tag = (as || 'div') as ElementType
+  const Tag = (as || 'div') as any
   const reduced = useReducedMotion()
   const { ref, seen } = useInView<HTMLElement>()
   const play = reduced || immediate || seen

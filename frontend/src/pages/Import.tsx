@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, Field, Input, PageHeader, Select, Switch } from '@/components/ui'
 import { api } from '@/lib/api'
+import { Stagger } from '@/lib/motion'
 import { cn, LANGUAGES } from '@/lib/utils'
 import { useAgent } from '@/lib/agent'
 
@@ -195,7 +196,7 @@ export default function Import() {
                       const st = analysis?.row_status[i]
                       const ui = st ? STATE_UI[st.state] : null
                       return (
-                        <tr key={i} className={cn(st?.state === 'invalid' && 'bg-danger-soft/40')}>
+                        <tr key={i} className={cn('reveal reveal-in reveal-up', st?.state === 'invalid' && 'bg-danger-soft/40')} style={{ animationDelay: `${i * 25}ms` }}>
                           <td className="px-3 py-2" title={st?.detail}>
                             {ui && <span className={cn('inline-flex items-center gap-1 text-xs font-semibold', ui.className)}><ui.icon className="size-3.5" />{ui.label}</span>}
                           </td>
@@ -248,12 +249,12 @@ export default function Import() {
             {result.batch_tag && (result.created > 0 || (result.updated ?? 0) > 0) && <p className="mt-2 text-sm text-muted">Tagged <Badge>{result.batch_tag}</Badge> so you can find this import later.</p>}
             <p className="mt-1 text-muted">New leads start as <Badge tone="brand">New</Badge>{opts.queue ? ' and are queued: auto-dial calls them within calling hours.' : '. Queue them from Leads or switch on auto-dial.'}</p>
           </div>
-          <div className="mx-auto mt-8 grid max-w-3xl gap-4 sm:grid-cols-4">
+          <Stagger className="mx-auto mt-8 grid max-w-3xl gap-4 sm:grid-cols-4">
             {[['Imported', result.created, 'text-success'], ['Updated', result.updated ?? 0, 'text-fg'], ['Duplicates skipped', result.skipped_duplicates, 'text-fg'],
               ['Invalid rows', result.errors.length, result.errors.length ? 'text-danger' : 'text-fg']].map(([l, v, c]) => (
               <div key={l as string} className="rounded-xl border border-border bg-surface p-4 text-center"><div className={`text-3xl font-semibold tabular-nums ${c}`}>{v}</div><div className="mt-1 text-sm text-muted">{l}</div></div>
             ))}
-          </div>
+          </Stagger>
           {result.created === 0 && (result.updated ?? 0) === 0 && result.skipped_duplicates > 0 && (
             <p className="mx-auto mt-6 max-w-2xl rounded-xl bg-warning-soft p-3 text-center text-sm text-warning">
               Every phone number is already in this agent's leads, so nothing new was added. Import again with “Update it” to refresh those leads, or use different numbers.

@@ -105,3 +105,14 @@ export function useArrivals<T extends string | number>(ids: T[]) {
   }, [ids.join('|')]) // eslint-disable-line react-hooks/exhaustive-deps
   return fresh
 }
+
+/** Today's point on a chart: a solid dot with a ring leaving it. Every other point draws nothing. */
+export function ChartNowDot({ cx, cy, index, last }: { cx?: number; cy?: number; index?: number; last: number }) {
+  if (index !== last || cx === undefined || cy === undefined) return <g />
+  return (
+    <g>
+      <circle cx={cx} cy={cy} r={4} fill="var(--fg)" className="now-ring" />
+      <circle cx={cx} cy={cy} r={4} fill="var(--fg)" stroke="var(--surface)" strokeWidth={2} />
+    </g>
+  )
+}

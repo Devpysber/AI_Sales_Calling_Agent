@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { AgentMark } from '@/components/AppShell'
 import { Button, Card, CardHeader, Field, Input, PageHeader, Textarea, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
+import { Stagger } from '@/lib/motion'
 import { forgetAgent, useAgent } from '@/lib/agent'
 import { formatDate } from '@/lib/utils'
 
@@ -57,7 +58,7 @@ export default function AgentSettings() {
   return (
     <>
     <PageHeader eyebrow={<>{agent.name} · Workspace</>} title="Agent settings" description="Identity, phone number and lifecycle of this agent's workspace." />
-    <div className="mx-auto max-w-3xl space-y-6">
+    <Stagger className="mx-auto max-w-3xl space-y-6" step={60}>
 
       <Card>
         <CardHeader title="Identity" description="How this agent appears to your team." />
@@ -87,8 +88,8 @@ export default function AgentSettings() {
           [CalendarClock, 'Automation', 'Auto-dial, retries, hours', '/automation']].map(([Icon, t, d, to]) => {
           const I = Icon as typeof Bot
           return (
-            <Link key={to as string} to={path(to as string)}>
-              <Card className="h-full p-4 transition hover:border-border-strong"><I className="size-4" /><div className="mt-2 text-sm font-bold">{t as string}</div><div className="text-xs text-muted">{d as string}</div></Card>
+            <Link key={to as string} to={path(to as string)} className="group glint relative overflow-hidden rounded-[var(--radius-card)]">
+              <Card className="h-full p-4 transition duration-300 hover:-translate-y-0.5 hover:shadow-pop border-border hover:border-border-strong"><I className="size-4" /><div className="mt-2 text-sm font-bold">{t as string}</div><div className="text-xs text-muted">{d as string}</div></Card>
             </Link>
           )
         })}
@@ -128,7 +129,7 @@ export default function AgentSettings() {
           }}><Trash2 />Delete agent</Button>
         </div>
       </Card>
-    </div>
+    </Stagger>
     </>
   )
 }

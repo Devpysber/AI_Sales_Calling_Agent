@@ -15,6 +15,7 @@ from app.services import agent, agents, analytics, events, scheduler, tts
 from app.services.call_service import within_calling_hours
 from app.services.crm_service import CRMService
 from app.services.llm import LLMError
+from app.services.tts import TTSError
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
@@ -210,14 +211,19 @@ async def playground(body: PlaygroundMessage, agent_id: int = Depends(workspace)
     goal = agent.call_goal(lead, body.purpose)
     if goal:
         lead = {**lead, "call_purpose": body.purpose, "call_goal": goal}
-    history = [t.model_dump() for t in body.history]
+    history = list(body.history)
     try:
         res = await asyncio.to_thread(agent.respond, agent_id, history, body.message, lead)
-        audio_id = await asyncio.to_thread(tts.cached_audio_id, res["reply"], res.get("language") or "en-IN", agents.get_profile(agent_id)["voice_speaker"])
-        res["audio_url"] = tts.audio_url(audio_id) if audio_id else ""
-        return res
     except LLMError as e:
         raise HTTPException(502, str(e))
+    # A voice outage (quota, network) must not hide the text reply: return it without audio and say why.
+    try:
+        audio_id = await asyncio.to_thread(tts.cached_audio_id, res["reply"], res.get("language") or "en-IN", agents.get_profile(agent_id)["voice_speaker"])
+        res["audio_url"] = tts.audio_url(audio_id) if audio_id else ""
+    except TTSError as e:
+        res["audio_url"] = ""
+        res["audio_error"] = str(e)
+    return res
 
 
 @router.get("/{agent_id}/greeting")
