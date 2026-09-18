@@ -17,7 +17,7 @@ def send_email_tool(to: str, subject: str, body: str, agent_id: int) -> str:
 def check_records_tool(query: str, agent_id: int) -> str:
     """Query the CRM for past calls, leads, and histories."""
     crm = CRMService(agent_id)
-    leads = crm.search(query, page=1, page_size=5).get("items", [])
+    leads = crm.list_leads(search=query, page=1, page_size=5).get("items", [])
     if not leads:
         return f"No records found for query: {query}"
     
