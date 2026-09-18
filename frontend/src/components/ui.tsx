@@ -360,12 +360,16 @@ export function Meter({ value, className, tone = 'brand' }: { value: number; cla
 export function Ring({ value, size = 44, stroke = 5, children }: { value: number; size?: number; stroke?: number; children?: ReactNode }) {
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
+  // Fills from empty on the frame after mount, like Meter: the sweep is what shows how complete it is.
+  const [shown, setShown] = useState(0)
+  useEffect(() => { const id = requestAnimationFrame(() => setShown(value)); return () => cancelAnimationFrame(id) }, [value])
   return (
     <span className="relative inline-grid place-items-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90">
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--surface-2)" strokeWidth={stroke} />
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--brand)" strokeWidth={stroke} strokeLinecap="round"
-          strokeDasharray={c} strokeDashoffset={c * (1 - Math.max(0, Math.min(1, value)))} className="transition-all duration-700" />
+          strokeDasharray={c} strokeDashoffset={c * (1 - Math.max(0, Math.min(1, shown)))}
+          className="transition-[stroke-dashoffset] duration-1000 ease-[var(--ease-entrance)]" />
       </svg>
       <span className="absolute text-[11px] font-bold tabular-nums">{children}</span>
     </span>

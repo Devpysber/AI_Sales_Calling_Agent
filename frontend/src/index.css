@@ -303,3 +303,30 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
   -webkit-background-clip: text; background-clip: text; color: transparent;
   animation: text-sheen 6s linear infinite;
 }
+
+
+/* ---------------- Data drawing in ----------------
+   Charts and bars reveal their data from the baseline or the left edge on first paint, so a
+   trend is read as it arrives. Each plays once per mount; a background poll does not replay it. */
+@keyframes draw-in { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes grow-x { from { transform: scaleX(0); } }
+@keyframes line-down { from { transform: scaleY(0); } }
+@keyframes check-draw { from { stroke-dashoffset: 24; } to { stroke-dashoffset: 0; } }
+@keyframes scan { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
+@keyframes status-glow { 50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--success) 45%, transparent), 0 0 28px -4px color-mix(in srgb, var(--success) 55%, transparent); } }
+
+.draw-in { animation: draw-in 1.2s var(--ease-entrance) both; }
+.grow-x { transform-origin: left; animation: grow-x .9s var(--ease-entrance) both; }
+.line-down { transform-origin: top; animation: line-down .9s var(--ease-entrance) both; }
+.check-draw { stroke-dasharray: 24; animation: check-draw .6s .2s var(--ease-entrance) both; }
+
+/* A card whose agent is on a call right now: a slow green glow, not a flashing border. */
+.is-live-card { animation: status-glow 2.4s ease-in-out infinite; border-color: color-mix(in srgb, var(--success) 45%, var(--border)); }
+
+/* A thin light that sweeps across a panel waiting for something: "idle, but watching". */
+.scan-line { position: relative; overflow: hidden; }
+.scan-line::after {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 25%;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--fg) 6%, transparent), transparent);
+  animation: scan 3.6s ease-in-out infinite;
+}

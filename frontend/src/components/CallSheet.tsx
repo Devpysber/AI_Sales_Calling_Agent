@@ -12,6 +12,7 @@ import { useAgent } from '@/lib/agent'
 const LIVE = ['Queued', 'Ringing', 'In Progress']
 
 import LiveSupervision from '@/components/LiveSupervision'
+import { VoiceOrb, Waveform } from '@/components/VoiceViz'
 
 export default function CallSheet({ callId, onClose, onOpenLead }: { callId: number | null; onClose: () => void; onOpenLead?: (id: number) => void }) {
   const { base } = useAgent()
@@ -84,7 +85,9 @@ export default function CallSheet({ callId, onClose, onOpenLead }: { callId: num
             {call.transcript?.length ? (
               <div className="space-y-3">
                 {call.transcript.map((t, i) => (
-                  <div key={i} className={cn('flex gap-2.5', t.role === 'customer' && 'flex-row-reverse')}>
+                  // Keyed by position, so only turns that arrive on a later poll play their entrance:
+                  // on a live call the transcript visibly grows instead of being redrawn.
+                  <div key={i} className={cn('reveal reveal-in flex gap-2.5', t.role === 'customer' ? 'reveal-right flex-row-reverse' : 'reveal-left')}>
                     <span className={cn('grid size-7 shrink-0 place-items-center rounded-full text-xs',
                       t.role === 'assistant' ? 'bg-brand text-brand-fg' : 'bg-surface-2 text-fg-2 ring-1 ring-border')}>
                       {t.role === 'assistant' ? <Bot className="size-3.5" /> : <User className="size-3.5" />}
@@ -95,8 +98,17 @@ export default function CallSheet({ callId, onClose, onOpenLead }: { callId: num
                     </div>
                   </div>
                 ))}
+                {live && (
+                  <div className="flex items-center gap-2 pl-9 text-xs text-muted">
+                    <Waveform bars={5} className="h-3.5 text-success" />Conversation in progress
+                  </div>
+                )}
               </div>
-            ) : <p className="text-sm text-muted">{live ? 'Waiting for the conversation to start…' : 'No conversation was captured on this call.'}</p>}
+            ) : live ? (
+              <div className="flex flex-col items-center gap-3 py-6 text-sm text-muted">
+                <VoiceOrb state="listening" size={56} />Waiting for the conversation to start…
+              </div>
+            ) : <p className="text-sm text-muted">No conversation was captured on this call.</p>}
           </section>
 
           {call.events && call.events.length > 0 && (

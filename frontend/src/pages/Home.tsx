@@ -14,7 +14,7 @@ import { CallStatusBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, Input, PageHeader, Ring, Select, Skeleton, StatTile, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
 import { Stagger } from '@/lib/motion'
-import { VoiceOrb } from '@/components/VoiceViz'
+import { VoiceOrb, Waveform } from '@/components/VoiceViz'
 import type { AgentOverviewItem, AgentsOverview } from '@/lib/types'
 import { callParty, cn, formatDuration, LANGUAGES, timeAgo } from '@/lib/utils'
 
@@ -44,8 +44,9 @@ function PipelineBar({ pipeline }: { pipeline: Record<string, number> }) {
   if (!total) return <div className="h-2 rounded-full bg-surface-2" />
   return (
     <div className="flex h-2 gap-0.5 overflow-hidden rounded-full">
-      {Object.entries(pipeline).filter(([, v]) => v).map(([k, v]) => (
-        <div key={k} title={`${k}: ${v}`} style={{ width: `${(100 * v) / total}%`, background: STAGE_COLORS[k] }} />
+      {Object.entries(pipeline).filter(([, v]) => v).map(([k, v], i) => (
+        <div key={k} title={`${k}: ${v}`} className="grow-x"
+          style={{ width: `${(100 * v) / total}%`, background: STAGE_COLORS[k], animationDelay: `${i * 90}ms` }} />
       ))}
     </div>
   )
@@ -70,7 +71,8 @@ function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?
   const missing = Object.entries(agent.setup).filter(([, v]) => !v).map(([k]) => SETUP_LABELS[k])
   const base = `/a/${agent.id}`
   return (
-    <Card className={cn('group relative flex min-w-0 flex-col overflow-hidden transition hover:-translate-y-0.5 hover:shadow-pop', paused && 'opacity-90', className)}>
+    <Card className={cn('group relative flex min-w-0 flex-col overflow-hidden transition hover:-translate-y-0.5 hover:shadow-pop',
+      paused && 'opacity-90', s.live > 0 && !paused && 'is-live-card', className)}>
       <Link to={base} className="absolute inset-0 z-0" aria-label={`Open ${agent.name}`} />
 
       <div className="relative p-5 pb-0">
@@ -101,7 +103,7 @@ function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?
       </div>
 
       <div className="relative mt-3 h-16 px-1">
-        {p.calls ? <Sparkline data={agent.series} color="var(--fg)" id={`spark-${agent.id}`} />
+        {p.calls ? <div className="draw-in h-full"><Sparkline data={agent.series} color="var(--fg)" id={`spark-${agent.id}`} /></div>
           : <div className="dot-grid mx-4 grid h-full place-items-center rounded-xl text-[11px] font-semibold text-muted">No calls in 14 days</div>}
       </div>
 
@@ -144,7 +146,10 @@ function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?
         )}
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11.5px] text-muted">
           <span className="flex min-w-0 items-center gap-1.5"><Phone className="size-3 shrink-0" /><span className="truncate font-mono">{o?.caller_id ?? agent.phone_number ?? '—'}</span>{o?.number_is_default && <span className="shrink-0 rounded bg-surface-2 px-1 text-[10px]">default</span>}</span>
-          <span className="shrink-0">{s.last_call_at ? `Last call ${timeAgo(s.last_call_at)}` : 'Never called'}</span>
+          <span className="flex shrink-0 items-center gap-1.5">
+            <VoiceOrb state={paused ? 'idle' : s.live > 0 ? 'live' : 'listening'} size={18} />
+            {s.live > 0 ? <b className="text-success">On a call now</b> : s.last_call_at ? `Last call ${timeAgo(s.last_call_at)}` : 'Never called'}
+          </span>
         </div>
         {missing.length > 0 && (
           <div className="flex flex-wrap items-center gap-1 text-[11px]">
@@ -345,7 +350,7 @@ export default function Home() {
 
       <Stagger className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatTile label="Live now" value={<LiveNumber value={totals.live} />} icon={<PhoneCall />} tone="success" sub={totals.live ? 'Across all agents' : 'All lines quiet'}
-          trend={totals.live > 0 ? <LiveDot on /> : undefined} />
+          trend={<Waveform bars={6} active={totals.live > 0} className={cn('h-5', totals.live > 0 ? 'text-success' : 'text-muted/50')} />} />
         <Card className="relative overflow-hidden p-5 sm:col-span-2 xl:col-span-2">
           <div className="flex items-start justify-between">
             <div>
@@ -357,7 +362,7 @@ export default function Home() {
             </div>
             <span className="grid size-9 place-items-center rounded-xl bg-info-soft text-info ring-1 ring-info/20"><Phone className="size-4" /></span>
           </div>
-          <div className="mt-3 h-16">
+          <div className="draw-in mt-3 h-16">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={data?.series} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
                 <defs>
@@ -459,7 +464,7 @@ export default function Home() {
                   </Link>
                 )
               }) : (
-                <div className="dot-grid grid h-28 place-items-center rounded-xl text-xs font-semibold text-muted"><span className="flex items-center gap-3"><VoiceOrb state="listening" size={48} />Waiting for the next call</span></div>
+                <div className="dot-grid scan-line grid h-28 place-items-center rounded-xl text-xs font-semibold text-muted"><span className="flex items-center gap-3"><VoiceOrb state="listening" size={48} />Waiting for the next call</span></div>
               )}
             </div>
           </Card>
@@ -475,16 +480,25 @@ export default function Home() {
                   <ArrowUpRight className="size-4 text-muted opacity-0 group-hover:opacity-100" />
                 </Link>
               ))}
-              {!attention.length && <p className="px-2 pb-2 text-sm text-muted">Nothing needs your attention.</p>}
+              {!attention.length && (
+                <p className="flex items-center gap-2.5 px-2 pb-2 text-sm text-muted">
+                  <svg viewBox="0 0 24 24" className="size-6 shrink-0 text-success" fill="none" aria-hidden>
+                    <circle cx="12" cy="12" r="10.5" stroke="currentColor" strokeOpacity=".3" strokeWidth="1.5" />
+                    <path className="check-draw" d="M7.5 12.5l3 3 6-6.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Nothing needs your attention.
+                </p>
+              )}
             </div>
           </Card>
 
           <Card>
             <CardHeader title="Recent activity" description="Latest events from all agents" />
             <ol className="px-5 pb-5">
-              {activity.map((e) => {
+              {activity.map((e, i) => {
                 return (
-                  <li key={e.id} className={cn('relative border-l border-border pb-4 pl-4 last:pb-0',
+                  <li key={e.id} style={{ animationDelay: `${Math.min(i, 8) * 60}ms` }}
+                    className={cn('reveal reveal-in reveal-left relative border-l border-border pb-4 pl-4 last:pb-0',
                     newEvents.has(e.id) && 'animate-rise')}>
                     <span className={cn('absolute top-1 -left-[5px] size-2.5 rounded-full ring-2 ring-surface',
                       newEvents.has(e.id) && 'animate-ping-once')} style={{ background: newEvents.has(e.id) ? 'var(--color-success)' : 'var(--fg)' }} />

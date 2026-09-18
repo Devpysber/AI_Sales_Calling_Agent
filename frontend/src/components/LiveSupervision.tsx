@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { Badge, Button, Input, useConfirm } from '@/components/ui'
 import { useAgent } from '@/lib/agent'
 import { cn } from '@/lib/utils'
+import { VoiceOrb, Waveform } from '@/components/VoiceViz'
 
 type LiveState = {
   type: 'state'; mode: 'ai' | 'human'; agent_speaking: boolean; caller_speaking: boolean; thinking: boolean
@@ -147,12 +148,20 @@ export default function LiveSupervision({ callId }: { callId: number }) {
   return (
     <div className="space-y-4 rounded-2xl border border-success/30 bg-surface p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="relative flex size-2.5"><span className="absolute inline-flex size-full animate-ping rounded-full bg-success opacity-60" /><span className="relative inline-flex size-2.5 rounded-full bg-success" /></span>
+        <span className="relative flex size-2.5"><span className="absolute inline-flex size-full animate-live-ring rounded-full bg-success opacity-60" /><span className="relative inline-flex size-2.5 rounded-full bg-success" /></span>
         <h3 className="text-sm font-bold">Live supervision</h3>
         <Badge tone={state.mode === 'human' ? 'warning' : 'success'}>{state.mode === 'human' ? 'You have the call' : 'AI has the call'}</Badge>
         <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-muted"><Radio className={cn('size-3.5', (state.caller_speaking || state.agent_speaking) && 'text-success')} />{activity}</span>
       </div>
-      {lastHeard && <p className="truncate rounded-lg bg-surface-2 px-3 py-2 text-xs text-fg-2">Caller: “{lastHeard}”</p>}
+      {/* Two speaker lanes driven by the stream's own VAD state: whoever is talking right now moves. */}
+      <div className="grid grid-cols-2 gap-2">
+        <SpeakerLane label="Caller" active={state.caller_speaking} tone="caller"
+          detail={state.caller_speaking ? 'Speaking' : 'Quiet'} />
+        <SpeakerLane label={state.mode === 'human' ? 'You' : 'AI agent'} active={state.agent_speaking || talking || state.thinking}
+          tone="agent" thinking={state.thinking && !state.agent_speaking}
+          detail={talking ? 'You are speaking' : state.thinking ? 'Thinking' : state.agent_speaking ? 'Speaking' : 'Listening'} />
+      </div>
+      {lastHeard && <p key={lastHeard} className="reveal reveal-in reveal-up truncate rounded-lg bg-surface-2 px-3 py-2 text-xs text-fg-2">Caller: “{lastHeard}”</p>}
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Button variant={listen ? 'primary' : 'secondary'} onClick={toggleListen}>{listen ? <Ear /> : <EarOff />}{listen ? 'Listening' : 'Listen in'}</Button>
@@ -177,6 +186,27 @@ export default function LiveSupervision({ callId }: { callId: number }) {
           <Button disabled={!say.trim()} onClick={() => { send({ action: 'say', text: say }); setSay('') }}>Say</Button>
         </div>
       </div>
+    </div>
+  )
+}
+
+
+function SpeakerLane({ label, detail, active, thinking, tone }: {
+  label: string; detail: string; active: boolean; thinking?: boolean; tone: 'caller' | 'agent'
+}) {
+  return (
+    <div className={cn('flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-colors duration-300',
+      active ? (tone === 'agent' ? 'border-info/40 bg-info-soft' : 'border-success/40 bg-success-soft') : 'border-border bg-surface-2')}>
+      {tone === 'agent'
+        ? <VoiceOrb state={thinking ? 'speaking' : active ? 'live' : 'idle'} size={34} />
+        : <span className={cn('grid size-[34px] place-items-center rounded-full', active ? 'bg-success text-white' : 'bg-surface text-muted ring-1 ring-border')}>
+            <Waveform bars={4} active={active} className="h-3.5" />
+          </span>}
+      <div className="min-w-0 flex-1 leading-tight">
+        <div className="text-xs font-bold">{label}</div>
+        <div className="truncate text-[11px] text-muted">{detail}</div>
+      </div>
+      <Waveform bars={9} active={active && !thinking} className={cn('h-5', tone === 'agent' ? 'text-info' : 'text-success')} />
     </div>
   )
 }
