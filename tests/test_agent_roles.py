@@ -41,3 +41,12 @@ def test_every_template_role_builds_a_sensible_prompt():
         text = prompt(agent_role=role, customer_noun=caller)
         assert text.startswith(f"You are Neha, a {role} at City Clinic")
         assert f"speaking with a {caller}" in text
+
+
+def test_a_new_agent_records_when_it_was_created(client):
+    """The column was added without a default once, so every new workspace saved a null date."""
+    created = agents.create({"name": "Created-at check"}, actor="admin")
+    try:
+        assert agents.get(created["id"])["created_at"], "a new agent must carry its creation date"
+    finally:
+        agents.delete(created["id"], actor="admin")
