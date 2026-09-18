@@ -170,27 +170,39 @@ def _stream_sse(url: str, headers: dict, body: dict, first_token_timeout: float)
             raise LLMError("empty stream")
 
 
+def _stream_attempts(tools: list[dict] | None) -> list[tuple[str, str]]:
+    """(provider, model) pairs to try, in order.
+
+    Every OpenRouter model is tried, not just the first: a retired model id or a free-tier 429 on
+    one model used to end the call outright, even with working models configured behind it.
+    """
+    attempts: list[tuple[str, str]] = []
+    for name in [p.strip() for p in settings.llm_providers.split(",") if p.strip()]:
+        if name == "sarvam" and settings.sarvam_api_key and not tools:
+            # Sarvam streaming does not emit standard tool_calls deltas.
+            attempts.append(("sarvam", settings.sarvam_llm_model))
+        elif name == "openrouter" and settings.openrouter_api_key:
+            attempts += [("openrouter", m.strip()) for m in settings.openrouter_models.split(",") if m.strip()]
+    return attempts
+
+
 def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4, tools: list[dict] | None = None):
     """
     Streaming completion for live calls, in LLM_PROVIDERS order. Falls back to the next provider only
     if the current one fails before producing any text (a half-spoken reply is never restarted).
     """
     errors = []
-    for name in [p.strip() for p in settings.llm_providers.split(",") if p.strip()]:
-        if name == "sarvam" and settings.sarvam_api_key:
-            if tools:
-                continue  # Sarvam streaming does not emit standard tool_calls deltas
+    for name, model in _stream_attempts(tools):
+        if name == "sarvam":
             url, headers = "https://api.sarvam.ai/v1/chat/completions", {"api-subscription-key": settings.sarvam_api_key}
             # reasoning_effort null = no hidden thinking: first sentence in ~1s instead of ~3s
-            body = {"model": settings.sarvam_llm_model, "reasoning_effort": settings.sarvam_reasoning_effort or None}
-        elif name == "openrouter" and settings.openrouter_api_key:
+            body = {"model": model, "reasoning_effort": settings.sarvam_reasoning_effort or None}
+        else:
             url = "https://openrouter.ai/api/v1/chat/completions"
             headers = {"Authorization": f"Bearer {settings.openrouter_api_key}", "X-Title": settings.app_name}
-            body = {"model": settings.openrouter_models.split(",")[0].strip(), "reasoning": {"enabled": False}}
+            body = {"model": model, "reasoning": {"enabled": False}}
             if tools:
                 body["tools"] = tools
-        else:
-            continue
         body.update(messages=messages, max_tokens=max_tokens, temperature=temperature)
         produced = False
         try:
@@ -200,10 +212,10 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
             return
         except Exception as e:
             if produced:
-                log.warning("LLM stream %s broke mid-reply: %s", name, e)
+                log.warning("LLM stream %s/%s broke mid-reply: %s", name, model, e)
                 return
-            errors.append(f"{name}: {e}")
-            log.warning("LLM stream %s failed: %s", name, e)
+            errors.append(f"{name}/{model}: {e}")
+            log.warning("LLM stream %s/%s failed: %s", name, model, e)
     raise LLMError("All streaming LLM providers failed — " + " | ".join(errors))
 
 
