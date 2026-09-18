@@ -69,6 +69,33 @@ def list_all_agents_tool() -> str:
         result += f"- Agent {agent.get('id')}: {agent.get('name')} (Owner: {agent.get('owner')})\n"
     return result
 
+def schedule_callback_tool(lead_id: int, date_time: str, agent_id: int) -> str:
+    """Schedule a callback for a lead."""
+    crm = CRMService(agent_id)
+    try:
+        crm.update(lead_id, {"callback_at": date_time, "status": "Pending"}, actor="system")
+        return f"Callback scheduled for lead {lead_id} at {date_time}."
+    except Exception as e:
+        return f"Failed to schedule callback: {str(e)}"
+
+def get_agent_config_tool(target_agent_id: int) -> str:
+    """Get the configuration of any agent (Admin only)."""
+    from app.services.agents import get_profile
+    try:
+        profile = get_profile(target_agent_id)
+        return f"Configuration for Agent {target_agent_id}:\n{json.dumps(profile, indent=2, default=str)}"
+    except Exception as e:
+        return f"Failed to get agent configuration: {str(e)}"
+
+def pause_agent_automation_tool(target_agent_id: int) -> str:
+    """Pause the auto-dialer for an agent (Admin only)."""
+    from app.services.agents import update_automation
+    try:
+        update_automation(target_agent_id, {"auto_dial_enabled": False}, actor="system")
+        return f"Auto-dialer has been paused for Agent {target_agent_id}."
+    except Exception as e:
+        return f"Failed to pause automation: {str(e)}"
+
 TOOLS = [
     {
         "type": "function",
@@ -136,6 +163,21 @@ TOOLS = [
                 "properties": {}
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_callback",
+            "description": "Schedule a callback for a lead at a specific date and time.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "lead_id": {"type": "integer", "description": "The ID of the lead."},
+                    "date_time": {"type": "string", "description": "The date and time for the callback in ISO format (e.g., '2026-10-15T14:30:00Z')."}
+                },
+                "required": ["lead_id", "date_time"]
+            }
+        }
     }
 ]
 
@@ -159,6 +201,34 @@ ADMIN_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_agent_config",
+            "description": "Get the full configuration profile of any specific agent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_agent_id": {"type": "integer", "description": "The ID of the agent to query."}
+                },
+                "required": ["target_agent_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pause_agent_automation",
+            "description": "Pause the auto-dialer for any specific agent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_agent_id": {"type": "integer", "description": "The ID of the agent to pause."}
+                },
+                "required": ["target_agent_id"]
             }
         }
     }
@@ -186,6 +256,8 @@ def execute_tool(name: str, arguments: str, agent_id: int, role: str = "team") -
         return update_lead_status_tool(args.get("lead_id"), args.get("new_status"), agent_id)
     elif name == "check_agent_schedule":
         return check_agent_schedule_tool(agent_id)
+    elif name == "schedule_callback":
+        return schedule_callback_tool(args.get("lead_id"), args.get("date_time"), agent_id)
         
     # Admin tools
     if role == "admin":
@@ -193,5 +265,9 @@ def execute_tool(name: str, arguments: str, agent_id: int, role: str = "team") -
             return system_diagnostics_tool()
         elif name == "list_all_agents":
             return list_all_agents_tool()
+        elif name == "get_agent_config":
+            return get_agent_config_tool(args.get("target_agent_id"))
+        elif name == "pause_agent_automation":
+            return pause_agent_automation_tool(args.get("target_agent_id"))
             
     return f"Access Denied or Unknown tool: {name}"
