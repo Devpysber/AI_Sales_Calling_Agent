@@ -96,6 +96,26 @@ def pause_agent_automation_tool(target_agent_id: int) -> str:
     except Exception as e:
         return f"Failed to pause automation: {str(e)}"
 
+def send_sms_tool(to: str, message: str) -> str:
+    """Send an SMS to a phone number."""
+    # This would integrate with Plivo/Twilio. We return a mock success for now.
+    return f"SMS successfully sent to {to}: '{message}'"
+
+def book_calendar_event_tool(email: str, date_time: str, duration_minutes: int = 30) -> str:
+    """Book a calendar event."""
+    # This would integrate with Google Calendar / Outlook.
+    return f"Calendar event booked with {email} at {date_time} for {duration_minutes} minutes."
+
+def check_active_calls_tool() -> str:
+    """Check how many active calls are currently ongoing in the system (Admin only)."""
+    # Placeholder for querying active calls table.
+    try:
+        from app.services import call_session
+        count = len(call_session.SESSIONS)
+        return f"There are currently {count} active calls in the system."
+    except Exception as e:
+        return f"Failed to check active calls: {str(e)}"
+
 TOOLS = [
     {
         "type": "function",
@@ -178,6 +198,37 @@ TOOLS = [
                 "required": ["lead_id", "date_time"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_sms",
+            "description": "Send an SMS message to a phone number.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": {"type": "string", "description": "The recipient's phone number."},
+                    "message": {"type": "string", "description": "The content of the SMS."}
+                },
+                "required": ["to", "message"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "book_calendar_event",
+            "description": "Book a meeting on the calendar.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "email": {"type": "string", "description": "The email of the attendee."},
+                    "date_time": {"type": "string", "description": "The date and time of the event."},
+                    "duration_minutes": {"type": "integer", "description": "Duration in minutes."}
+                },
+                "required": ["email", "date_time"]
+            }
+        }
     }
 ]
 
@@ -231,6 +282,17 @@ ADMIN_TOOLS = [
                 "required": ["target_agent_id"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_active_calls",
+            "description": "Check how many active calls are currently ongoing in the platform.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
     }
 ]
 
@@ -258,6 +320,10 @@ def execute_tool(name: str, arguments: str, agent_id: int, role: str = "team") -
         return check_agent_schedule_tool(agent_id)
     elif name == "schedule_callback":
         return schedule_callback_tool(args.get("lead_id"), args.get("date_time"), agent_id)
+    elif name == "send_sms":
+        return send_sms_tool(args.get("to"), args.get("message"))
+    elif name == "book_calendar_event":
+        return book_calendar_event_tool(args.get("email"), args.get("date_time"), args.get("duration_minutes", 30))
         
     # Admin tools
     if role == "admin":
@@ -269,5 +335,7 @@ def execute_tool(name: str, arguments: str, agent_id: int, role: str = "team") -
             return get_agent_config_tool(args.get("target_agent_id"))
         elif name == "pause_agent_automation":
             return pause_agent_automation_tool(args.get("target_agent_id"))
+        elif name == "check_active_calls":
+            return check_active_calls_tool()
             
     return f"Access Denied or Unknown tool: {name}"
