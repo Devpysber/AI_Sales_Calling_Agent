@@ -267,7 +267,9 @@ export default function LeadDetail() {
             <CardHeader title={<span className="flex items-center gap-2"><Sparkles className="size-4" />AI analysis</span>}
               description={talked.length ? `Built from ${talked.length} conversation${talked.length > 1 ? 's' : ''} · latest ${formatDate(talked[0]!.created_at)}` : 'Appears after the first answered call.'} />
             <div className="space-y-3 px-5 pb-5">
-              <Insight icon={<Bot />} title="Summary" empty="No summary yet.">{l.summary}</Insight>
+              {/* The lead-level summary is written after a call is analysed; until it lands, show the latest
+                  call's own summary instead of claiming there is nothing, which contradicted the transcript below. */}
+              <Insight icon={<Bot />} title="Summary" empty="No summary yet.">{l.summary || analyzed?.summary}</Insight>
               <div className="grid gap-3 md:grid-cols-2">
                 <Insight icon={<Lightbulb />} title="Requirements" empty="No requirement stated by the customer.">{l.requirements}</Insight>
                 <Insight icon={<ShieldAlert />} title="Objections" empty="No objections raised.">{l.objections}</Insight>
@@ -275,7 +277,7 @@ export default function LeadDetail() {
               {talked[0] && (
                 <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
                   {[['Last outcome', analyzed.outcome ? titleCase(analyzed.outcome) : '—'], ['Sentiment', analyzed.sentiment ? <SentimentDot value={analyzed.sentiment} /> : '—'],
-                    ['Temperature', <QualificationBadge value={l.qualification} />], ['Language', LANGUAGES[l.language] ?? l.language]].map(([k, v]) => (
+                    ['Temperature', <QualificationBadge value={l.qualification ?? analyzed?.qualification} />], ['Language', LANGUAGES[l.language] ?? l.language]].map(([k, v]) => (
                     <div key={k as string} className="rounded-xl border border-border px-3 py-2.5">
                       <div className="text-[11px] font-bold tracking-wider text-muted uppercase">{k as string}</div>
                       <div className="mt-1 font-bold">{v as ReactNode}</div>

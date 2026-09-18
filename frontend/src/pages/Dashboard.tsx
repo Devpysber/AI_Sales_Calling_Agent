@@ -14,7 +14,7 @@ import { Badge, Button, Card, CardHeader, EmptyState, Meter, PageHeader, Skeleto
 import { api } from '@/lib/api'
 import { useAgent } from '@/lib/agent'
 import type { ActivityEvent, Call, CallStats, Lead, LeadStats, Page } from '@/lib/types'
-import { cn, formatDate, formatDuration, LANGUAGES, timeAgo, titleCase } from '@/lib/utils'
+import { callHandledBy, callParty, cn, formatDate, formatDuration, LANGUAGES, timeAgo, titleCase } from '@/lib/utils'
 
 const OUTCOME_ORDER = ['meeting_booked', 'interested', 'callback_requested', 'not_interested', 'do_not_call', 'wrong_person', 'no_conversation', 'other']
 const tooltipStyle = { background: 'var(--elevated)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12, boxShadow: 'var(--shadow-pop)' }
@@ -137,7 +137,7 @@ export default function Dashboard() {
               <button key={call.id} onClick={() => setCallId(call.id)} className="flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left hover:bg-surface-2">
                 <span className="grid size-9 place-items-center rounded-full bg-success-soft text-success"><Phone className="size-4" /></span>
                 <div className="min-w-0 flex-1 leading-tight">
-                  <div className="truncate text-sm font-bold">{call.lead_name ?? call.to_number}</div>
+                  <div className="truncate text-sm font-bold">{callParty(call)}</div>
                   <div className="text-xs text-muted">{call.direction === 'inbound' ? 'Inbound' : 'Outbound'} · started {timeAgo(call.created_at)}</div>
                 </div>
                 <CallStatusBadge status={call.status} />
@@ -216,12 +216,13 @@ export default function Dashboard() {
             <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-sm">
                 <thead><tr className="border-y border-border bg-surface-2/50 text-left text-[11px] font-bold tracking-wider text-muted uppercase">
-                  <th className="px-5 py-2.5">Lead</th><th className="px-3 py-2.5">Summary</th><th className="px-3 py-2.5">Temp.</th><th className="px-3 py-2.5 text-right">Length</th><th className="px-5 py-2.5 text-right">Status</th>
+                  <th className="px-5 py-2.5">Lead</th><th className="px-3 py-2.5">Handled by</th><th className="px-3 py-2.5">Summary</th><th className="px-3 py-2.5">Temp.</th><th className="px-3 py-2.5 text-right">Length</th><th className="px-5 py-2.5 text-right">Status</th>
                 </tr></thead>
                 <tbody className="divide-y divide-border">
                   {recent.data.items.map((call) => (
                     <tr key={call.id} onClick={() => setCallId(call.id)} className="cursor-pointer transition hover:bg-surface-2/60">
-                      <td className="px-5 py-3"><div className="font-bold">{call.lead_name ?? call.to_number}</div><div className="text-xs text-muted">{formatDate(call.created_at)} · {titleCase(call.trigger)}</div></td>
+                      <td className="px-5 py-3"><div className="font-bold">{callParty(call)}</div><div className="text-xs text-muted">{formatDate(call.created_at)} · {titleCase(call.trigger)}</div></td>
+                      <td className="px-3 py-3 text-[13px] whitespace-nowrap text-fg-2">{callHandledBy(call, agent?.name)}</td>
                       <td className="max-w-md px-3 py-3"><span className="line-clamp-2 text-[13px] text-fg-2">{call.summary ?? <span className="text-muted">{call.turns ? `${call.turns} turns` : 'No conversation'}</span>}</span></td>
                       <td className="px-3 py-3"><QualificationBadge value={call.qualification} /></td>
                       <td className="px-3 py-3 text-right text-muted tabular-nums">{formatDuration(call.duration)}</td>

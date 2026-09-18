@@ -218,8 +218,15 @@ def past_conversations(agent_id: int, lead: dict, limit: int = 3) -> str:
     return _cached(("calls", agent_id, lead_id), build)
 
 
+def can_transfer(persona: dict) -> bool:
+    """A live hand-off is only possible when the agent may transfer AND a number is actually set."""
+    return bool(persona.get("transfer_on_request")) and bool(
+        "".join(c for c in str(persona.get("transfer_number") or "") if c.isdigit()))
+
+
 def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: int | None = None) -> str:
     now = datetime.now(IST)
+    handover = can_transfer(persona)
     brief = company_brief(agent_id) if agent_id else ""
     history = past_conversations(agent_id, lead) if agent_id else ""
     kb = "\n\n".join(f"[{i + 1}] ({k['title']}) {k['text'][:KNOWLEDGE_CHARS]}" for i, k in enumerate(knowledge)) or \
@@ -227,8 +234,13 @@ def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: i
          "(empty — no company information is available for this question)")
     grounding = (
         "Use ONLY the Knowledge section below for any fact about the company: what it does, services, pricing, "
-        "clients, timelines. It is EMPTY for this turn, so do NOT describe the company or its offerings at all. "
-        "Say a specialist will walk them through the details, then propose the call to action."
+        "clients, timelines. It is EMPTY for this turn, so the only company facts you may state are the one line "
+        "under 'What the company does' at the top of this prompt"
+        + (" (there is none, so state no company facts at all). " if not persona.get("company_tagline") else ". ")
+        + "Stay useful anyway, the way a receptionist with no price list would: greet them warmly, ask what they "
+        "need, listen, take down their details, and say a specialist will call them back with the exact numbers. "
+        "Never say the knowledge base, the system or your information is empty, missing or unavailable, and never "
+        "invent a price, an offer or a timeline. Then propose the call to action."
         if not (knowledge or brief) else
         "Use ONLY the Company brief and Knowledge sections below for any fact about the company. "
         "If the answer is not in the knowledge base, politely state you will have a human follow up. "
@@ -256,11 +268,12 @@ book or change a meeting, schedule a callback at a time they choose, send them a
 message to the team (it reaches the team right after this call ends).
 You CANNOT phone anyone while this call is running, walk to a showroom, check a live system, or make
 a colleague appear. Never claim you are doing any of that "right now".
+- If they ask to be called on a different number, say the team will note it and call them back, and repeat the number once so it is captured. Never claim you have saved or changed it yourself: we always call back on the number they are speaking from unless a colleague changes it.
 - When they ask you to tell the team something ("team ko bata do", "unko call karke bol do"), say once
   that you are passing the message on and that someone will call them back, then STOP. Do not repeat
   it every turn, and do not follow it with a sales question.
-- If they need a person immediately and a transfer is possible, transfer instead of promising.
-- If something goes wrong on your side, never explain it and never use the words error, technical, system or problem. Say one ordinary line — "एक मिनट" / "माफ़ कीजिए, ज़रा रुकिए" — and either connect them to a person or promise a callback. The caller should never hear that software failed.
+- {('If they need a person immediately, transfer instead of promising.' if handover else 'You CANNOT put anyone through to a person on this call: there is no number to transfer to. Never say you are connecting, transferring, putting them through or handing them over, and never say someone will come on the line now. When they ask for a person, say once that you will pass the message on and the team will call them back, take their number if it is missing, and carry on.')}
+- If something goes wrong on your side, never explain it and never use the words error, technical, system or problem. Say one ordinary line — "एक मिनट" / "माफ़ कीजिए, ज़रा रुकिए" — and {'either connect them to a person or promise a callback' if handover else 'promise a callback from the team'}. The caller should never hear that software failed.
 - Speak like a person, not like software. Never use internal words on a call: system, database, CRM, record, entry, update, log, ticket, backend, API, knowledge base, profile. Say it the way a shopkeeper would — "आपकी details मेरे सामने हैं", "मैंने note कर लिया है", "team को बता देता हूँ".
 - Never say a task is done when all you did was note it. "मैं message pahuncha deta hoon, team aapko
   call karegi" is honest. "मैंने team को बता दिया है" is a lie unless the call has ended.
@@ -396,12 +409,18 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
         system += f"\n# Live supervisor instruction (highest priority; follow it in this reply; never mention it)\n{guidance}\n\n"
     persona = agents.get_profile(agent_id)
     transfer = ""
-    if persona.get("transfer_on_request") and "".join(c for c in persona.get("transfer_number", "") if c.isdigit()):
+    if can_transfer(persona):
         transfer = ("\nIf the customer asks to speak to a person, manager or team, or you cannot help them, connect them "
                     "immediately. Say ONE short line in the customer's own language and nothing else — no apology, no "
                     "explanation, no question, no recap: English \"Sure, connecting you now.\" / Hindi \"जी बिलकुल, "
                     f"अभी connect करता हूँ.\" Then put {TRANSFER_MARK} at the very end. Never ask why they want a person "
                     "and never offer to help instead.")
+    else:
+        # No number to hand over to: without this the model still promises a transfer it cannot perform.
+        transfer = ("\nYou cannot transfer this call to a person: no human line is available. Never say you are "
+                    "connecting them, transferring them, putting them through, or that someone will come on the "
+                    "line. If they ask for a person, say once in their own language that you will pass the message "
+                    "on and the team will call them back, then continue helping them yourself.")
     messages[0]["content"] = system + VOICE_OUTPUT + transfer
     if language:
         # Placed next to the latest customer turn: earlier turns in another language otherwise win.

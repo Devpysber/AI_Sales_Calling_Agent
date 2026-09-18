@@ -41,3 +41,22 @@ def directory_lines() -> list[str]:
         notes = (m.get("notes") or "").strip()
         lines.append(f"- {name} — {role}{' — ' + notes if notes else ''}")
     return lines
+
+
+def name_for(number: str | None, agent_id: int | None = None) -> str | None:
+    """
+    The person behind a phone number: the agent's own team list first, then the shared Sales Team Accounts.
+    Used so a transferred call reads "Ashish Sharma" rather than a bare number.
+    """
+    wanted = _digits(number or "")
+    if not wanted:
+        return None
+    people: list[dict] = []
+    if agent_id is not None:
+        from app.services import agents
+        people.extend(agents.get_profile(agent_id).get("team_members") or [])
+    people.extend(members())
+    for m in people:
+        if _digits(m.get("phone", "")) == wanted and (m.get("name") or "").strip():
+            return m["name"].strip()
+    return None

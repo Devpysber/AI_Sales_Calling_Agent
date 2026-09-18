@@ -65,7 +65,7 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
   const create = useMutation({
     mutationFn: (body: Record<string, unknown>) => api<AgentSummary>('/api/agents', { method: 'POST', json: body }),
     onSuccess: (agent) => {
-      toast.success(`${agent.name} is ready`, { description: 'Add knowledge and leads to start calling.' })
+      toast.success(`${agent.name} is ready`, { description: 'Next: add your knowledge base, then a number or leads.' })
       qc.invalidateQueries({ queryKey: ['agents'] })
       onClose()
       navigate(`/a/${agent.id}/agent`)
@@ -98,6 +98,14 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
       description="Each agent is its own workspace: persona, voice, number, knowledge base, leads, calls and history stay separate."
       footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" type="submit" form="new-agent" loading={create.isPending}>Create agent</Button></>}>
       <form id="new-agent" onSubmit={submit} className="space-y-6">
+        {/* Four starred fields are all it takes to make a working agent: without this people fill the whole sheet. */}
+        <div className="rounded-xl border border-border bg-surface-2 p-3 text-xs text-muted">
+          <span className="font-medium text-fg">Fields marked * are all you need now.</span> Everything else has a
+          sensible default and can be changed later on the agent's own pages. After you create it: add your services
+          and prices to the <span className="text-fg">Knowledge base</span> (until then the agent takes details and
+          promises a callback instead of quoting), point a number at it on <span className="text-fg">Inbound &amp;
+          transfer</span>, and add leads or switch on <span className="text-fg">Automation</span> to start calling.
+        </div>
         <section className="space-y-4">
           <h3 className="text-sm font-semibold">Workspace</h3>
           <Field label="Agent name *" hint="What your team calls this agent, e.g. “Real estate leads” or “Clinic reminders”.">

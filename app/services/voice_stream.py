@@ -177,6 +177,22 @@ def split_sentences(text: str) -> list[str]:
 # ---------------- Sarvam streaming STT ----------------
 
 
+def merge_call_context(session_lead: dict, fresh: dict | None) -> dict:
+    """
+    Refresh the lead from the CRM without losing this call's context. The CRM row carries no `call_goal`, so using
+    it raw drops the instruction that tells the agent which details to ask a new caller for.
+    """
+    if not fresh:
+        return session_lead
+    carried = {k: v for k, v in (session_lead or {}).items()
+               if k in ("collect", "call_purpose", "call_goal") and v is not None}
+    lead = {**fresh, **carried}
+    if lead.get("collect") is not None and lead.get("call_purpose") == "inbound":
+        # Recomputed against the fresh row, so details already saved during this call drop off the ask list.
+        lead["call_goal"] = agent.call_goal(lead, "inbound_new")
+    return lead
+
+
 class SilenceGate:
     """
     Decides which 20 ms frames are worth sending to paid speech-to-text.
@@ -633,7 +649,8 @@ class CallStream:
         await self.checkpoint(hangup=hangup)
 
     def can_transfer(self) -> bool:
-        return bool("".join(c for c in self.persona.get("transfer_number", "") if c.isdigit()))
+        # Same rule the prompt is built from, so a stray <TRANSFER> can never dial a line the operator turned off.
+        return agent.can_transfer(self.persona)
 
     async def transfer_call(self):
         """Hand the caller to the agent's human number. Plivo replaces the stream with a <Dial>, ending this socket."""
@@ -645,8 +662,10 @@ class CallStream:
             await asyncio.to_thread(PlivoService().transfer, self.call_uuid, self.session_id, self.session.get("call_id"))
             self.save_session(transferred=True)
             if self.session.get("call_id"):
-                await asyncio.to_thread(CallService(self.agent_id).mark_transferred, self.session["call_id"],
-                                        f"Transferred to {self.persona.get('transfer_number')}")
+                calls = CallService(self.agent_id)
+                number = self.persona.get("transfer_number")
+                await asyncio.to_thread(calls.mark_transferred, self.session["call_id"],
+                                        f"Transferred to {calls.transfer_label(number)}", "transfer", number)
             log.info("Transferred session %s to %s", self.session_id[:8], self.persona.get("transfer_number"))
         except Exception as e:  # noqa: BLE001 - keep the AI on the line if Plivo refuses
             self.transferred = False
@@ -936,7 +955,8 @@ class CallStream:
         lead = self.session.get("lead") or {}
         if self.session.get("lead_id"):
             with contextlib.suppress(Exception):
-                lead = await asyncio.to_thread(CallService(self.agent_id).crm.get, self.session["lead_id"]) or lead
+                fresh = await asyncio.to_thread(CallService(self.agent_id).crm.get, self.session["lead_id"])
+                lead = merge_call_context(lead, fresh)
 
         loop = asyncio.get_running_loop()
         deltas: asyncio.Queue = asyncio.Queue()

@@ -20,6 +20,8 @@ class Call(Base):
     trigger: Mapped[str] = mapped_column(String(32), default="manual")  # manual | auto_dial | retry | inbound | bulk
     from_number: Mapped[str | None] = mapped_column(String(32))
     to_number: Mapped[str | None] = mapped_column(String(32))
+    # The human line this call was handed to, so the UI can name it instead of our own platform number.
+    transferred_to: Mapped[str | None] = mapped_column(String(32))
     request_uuid: Mapped[str | None] = mapped_column(String(64), index=True)
     call_uuid: Mapped[str | None] = mapped_column(String(64), index=True)
 
@@ -55,6 +57,7 @@ class Call(Base):
             "trigger": self.trigger,
             "from_number": self.from_number,
             "to_number": self.to_number,
+            "transferred_to": self.transferred_to,
             "call_uuid": self.call_uuid or self.request_uuid,
             "status": self.status,
             "hangup_cause": self.hangup_cause,

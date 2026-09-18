@@ -1,0 +1,62 @@
+"""The live call keeps its own context (what to ask a new caller) when the lead is refreshed from the CRM."""
+
+from app.services import agent
+from app.services.voice_stream import merge_call_context
+
+
+def _inbound_lead(**fields):
+    lead = {"phone": "+919000000001", "collect": ["name", "requirement", "city"], "call_purpose": "inbound", **fields}
+    lead["call_goal"] = agent.call_goal(lead, "inbound_new")
+    return lead
+
+
+def test_crm_refresh_keeps_the_new_caller_questions():
+    session_lead = _inbound_lead()
+    merged = merge_call_context(session_lead, {"id": 7, "phone": "+919000000001", "name": "", "status": "New"})
+    assert merged["id"] == 7                       # fresh CRM fields are used
+    assert "their name" in merged["call_goal"]     # and the call's instruction survives
+    assert "their city" in merged["call_goal"]
+
+
+def test_details_already_saved_drop_off_the_ask_list():
+    merged = merge_call_context(_inbound_lead(), {"id": 7, "name": "Ashish", "city": "Indore"})
+    assert "their name" not in merged["call_goal"]
+    assert "their city" not in merged["call_goal"]
+    assert "what they are looking for" in merged["call_goal"]
+
+
+def test_no_crm_row_leaves_the_session_lead_untouched():
+    session_lead = _inbound_lead()
+    assert merge_call_context(session_lead, None) is session_lead
+
+
+def test_outbound_goal_is_not_rewritten():
+    merged = merge_call_context({"call_goal": "Confirm the booked meeting.", "call_purpose": "confirm_meeting"},
+                                {"id": 3, "name": "Neha"})
+    assert merged["call_goal"] == "Confirm the booked meeting."
+
+
+def test_transfer_label_names_the_colleague(monkeypatch):
+    from app.services import call_service, team_service
+
+    monkeypatch.setattr(team_service, "members",
+                        lambda: [{"name": "Ashish Sharma", "phone": "+919584516352", "email": "a@b.c"}])
+    calls = call_service.CallService(None)
+    assert calls.transfer_label("+919584516352") == "Ashish Sharma (+919584516352)"
+    assert calls.transfer_label("+919000000000") == "+919000000000"   # unknown number stays a number
+    assert calls.transfer_label("") == "your team"
+
+
+def test_ai_cannot_change_the_number_we_dial(client, base):
+    """A number a caller says must never become the number we call back on."""
+    from app.services.crm_service import CRMService
+
+    crm = CRMService(int(base.rsplit("/", 1)[1]))
+    lead = crm.create({"name": "Caller", "phone": "+917879417266"}, actor="system")
+
+    after_ai = crm.update(lead["id"], {"phone": "+919000000123", "summary": "Asked for a callback"}, actor="ai")
+    assert after_ai["phone"] == "+917879417266"          # dial target untouched
+    assert after_ai["summary"] == "Asked for a callback"  # the rest of the AI update still applies
+
+    after_admin = crm.update(lead["id"], {"phone": "+919000000123"}, actor="admin")
+    assert after_admin["phone"] == "+919000000123"       # a person can still correct it

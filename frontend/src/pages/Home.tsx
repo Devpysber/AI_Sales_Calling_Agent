@@ -13,7 +13,7 @@ import { CallStatusBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, Input, PageHeader, Ring, Select, Skeleton, StatTile, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
 import type { AgentOverviewItem, AgentsOverview } from '@/lib/types'
-import { cn, formatDuration, LANGUAGES, timeAgo } from '@/lib/utils'
+import { callParty, cn, formatDuration, LANGUAGES, timeAgo } from '@/lib/utils'
 
 const STAGE_COLORS: Record<string, string> = {
   New: 'var(--border-strong)', Contacted: 'var(--info)', Interested: 'var(--warning)', 'Follow Up': 'color-mix(in srgb, var(--warning) 60%, var(--danger))',
@@ -443,7 +443,7 @@ export default function Home() {
                   <Link key={c.id} to={`/a/${c.agent_id}/calls?status=active`} className="flex items-center gap-3 rounded-xl px-2 py-2.5 hover:bg-surface-2">
                     {a && <AgentMark agent={a} className="size-8 rounded-lg text-[10px]" />}
                     <div className="min-w-0 flex-1 leading-tight">
-                      <div className="truncate text-sm font-bold">{c.lead_name ?? c.to_number}</div>
+                      <div className="truncate text-sm font-bold">{callParty(c)}</div>
                       <div className="truncate text-xs text-muted">{c.agent_name} · {timeAgo(c.created_at)}</div>
                     </div>
                     <CallStatusBadge status={c.status} />
