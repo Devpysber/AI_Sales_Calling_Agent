@@ -14,7 +14,7 @@ import secrets
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 
 from app.api.deps import workspace

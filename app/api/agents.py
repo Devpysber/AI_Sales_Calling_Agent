@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Path
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from app.api.deps import workspace, require_admin, require_admin
+from app.api.deps import workspace, require_admin
 from app.core.auth import actor
 from app.services import agent, agents, analytics, events, scheduler, tts
 from app.services.call_service import within_calling_hours

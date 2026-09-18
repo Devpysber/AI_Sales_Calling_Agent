@@ -5,7 +5,6 @@ Knowledge page shows exactly what is missing. Recomputed in the background after
 upload or delete; runs on the summary (free-first) models.
 """
 
-import json
 import threading
 from datetime import datetime
 

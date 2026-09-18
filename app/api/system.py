@@ -181,7 +181,6 @@ from pydantic import BaseModel, Field
 import hashlib
 import re
 import uuid
-import time
 
 class TeamMemberUpdate(BaseModel):
     name: str
@@ -255,7 +254,6 @@ async def update_secrets(body: dict):
     Credentials go to the encrypted row config reads; pricing and credits stay in SettingsService,
     where analytics and the balance alerts read them. Masked fields keep their stored value.
     """
-    stored = dict(get_all_secrets_from_db())
     plain = SettingsService().get_state("secrets") or {}
     credentials: dict[str, str] = {}
     for key, raw in body.items():
