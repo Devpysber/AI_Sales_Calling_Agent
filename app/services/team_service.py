@@ -54,10 +54,16 @@ def name_for(number: str | None, agent_id: int | None = None) -> str | None:
     people: list[dict] = []
     if agent_id is not None:
         from app.services import agents
-        people.extend(agents.get_profile(agent_id).get("team_members") or [])
-    people.extend(members())
+        local_members = agents.get_profile(agent_id).get("team_members")
+        if isinstance(local_members, list):
+            people.extend(local_members)
+    
+    global_members = members()
+    if isinstance(global_members, list):
+        people.extend(global_members)
+        
     for m in people:
-        if _digits(m.get("phone", "")) == wanted and (m.get("name") or "").strip():
+        if isinstance(m, dict) and _digits(m.get("phone", "")) == wanted and (m.get("name") or "").strip():
             return m["name"].strip()
     return None
 
