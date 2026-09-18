@@ -559,12 +559,16 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
         god_mode_instructions = (
             "\n\n# GOD MODE ACTIVE\n"
             "You have direct access to backend tools and databases. If the caller asks you to check records, send emails, "
-            "schedule callbacks, diagnose the system, or check configs, YOU MUST USE YOUR TOOLS. "
+            "send sms, schedule callbacks, diagnose the system, or check configs, YOU MUST USE YOUR TOOLS. "
             "Do NOT say you cannot help them, and do NOT offer to transfer them to a human. "
             "Simply execute the required tool, and when you receive the result, summarize it back to the caller in their language."
+            "\nCRITICAL: DO NOT fill the 'team_action' field. You are the team! Act immediately by executing a tool call instead of passing a message."
         )
         
-        base_content = system + VOICE_OUTPUT.replace("Never output tool calls, tags", "Never output tags") + god_mode_instructions
+        # Remove team_action instruction from the system prompt
+        clean_system = system.replace('- Fill team_action whenever the customer asked for a human to act ("team ko bata do", "unse baat karke bolo", "koi mujhe aakar mile", "call karke confirm karo"). Quote what they actually need done, not what the agent promised. Set urgent true when they are waiting somewhere or the matter cannot wait an hour.', '')
+        
+        base_content = clean_system + VOICE_OUTPUT.replace("Never output tool calls, tags", "Never output tags") + god_mode_instructions
         
         if purpose == "admin":
             base_content = "You are the Super Admin AI for the entire Psyber platform. You have root access. You can diagnose the website, check any agent's stats, and manage system resources.\n\n" + base_content

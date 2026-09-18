@@ -98,8 +98,13 @@ def pause_agent_automation_tool(target_agent_id: int) -> str:
 
 def send_sms_tool(to: str, message: str) -> str:
     """Send an SMS to a phone number."""
-    # This would integrate with Plivo/Twilio. We return a mock success for now.
-    return f"SMS successfully sent to {to}: '{message}'"
+    try:
+        from app.services.plivo_service import PlivoService
+        plivo = PlivoService()
+        msg_id = plivo.send_sms(to, message)
+        return f"SMS successfully sent to {to}. Message ID: {msg_id}"
+    except Exception as e:
+        return f"Failed to send SMS to {to}. Error: {str(e)}"
 
 def book_calendar_event_tool(email: str, date_time: str, duration_minutes: int = 30) -> str:
     """Book a calendar event."""

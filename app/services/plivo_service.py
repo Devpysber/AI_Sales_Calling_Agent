@@ -29,6 +29,15 @@ class PlivoService:
         query = urlencode({k: v for k, v in params.items() if v is not None})
         return f"{settings.base_url}/api/plivo/{path}" + (f"?{query}" if query else "")
 
+    def send_sms(self, to: str, text: str) -> str:
+        """Send an SMS using Plivo."""
+        response = self.client.messages.create(
+            src=self.caller_id(),
+            dst="".join(c for c in to if c.isdigit()),
+            text=text
+        )
+        return response.message_uuid[0] if response.message_uuid else "Unknown"
+
     def dial(self, phone: str, session_id: str, call_id: int, max_minutes: int, detect_voicemail: bool = False,
              from_number: str | None = None, endpoint: str = "answer") -> str:
         params = {"sid": session_id, "cid": call_id}
