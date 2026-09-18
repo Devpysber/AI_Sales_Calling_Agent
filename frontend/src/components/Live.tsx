@@ -6,6 +6,7 @@
  * dashboard stays usable for people who turn animation off.
  */
 import { useEffect, useRef, useState } from 'react'
+import { useCountUp } from '@/lib/motion'
 import { cn } from '@/lib/utils'
 
 /** A clock that re-renders on an interval, so "updated 4s ago" counts up on its own. */
@@ -49,6 +50,9 @@ export function LiveStamp({ fetching, updatedAt }: { fetching: boolean; updatedA
 export function LiveNumber({ value, className }: { value: number; className?: string }) {
   const previous = useRef(value)
   const [changed, setChanged] = useState<'up' | 'down' | null>(null)
+  // Counts to the new value as well as flashing: the movement shows the size of the change, the
+  // colour shows its direction.
+  const shown = useCountUp(value)
   useEffect(() => {
     if (previous.current === value) return
     setChanged(value > previous.current ? 'up' : 'down')
@@ -59,7 +63,7 @@ export function LiveNumber({ value, className }: { value: number; className?: st
   return (
     <span className={cn('tabular-nums transition-colors duration-500 motion-reduce:transition-none',
       changed === 'up' && 'text-success', changed === 'down' && 'text-muted', className)}>
-      {value}
+      {shown}
     </span>
   )
 }

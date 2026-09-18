@@ -84,7 +84,8 @@ export function AgentMark({ agent, className }: { agent: Pick<AgentSummary, 'nam
 export function LiveDot({ on, className }: { on: boolean; className?: string }) {
   return (
     <span className={cn('relative inline-grid size-2.5 place-items-center', className)}>
-      {on && <span className="absolute inset-0 animate-ping rounded-full bg-success/60" />}
+      {/* A ring that leaves the dot and decelerates: Tailwind's animate-ping is linear and reads as a strobe. */}
+      {on && <span className="absolute inset-0 animate-live-ring rounded-full bg-success/60" />}
       <span className={cn('relative size-2 rounded-full', on ? 'bg-success' : 'bg-ink-muted/50')} />
     </span>
   )
@@ -180,8 +181,14 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
         compact ? 'justify-center' : 'px-3',
         isActive ? 'bg-ink-fg/[0.07] text-ink-fg' : 'text-ink-muted hover:bg-ink-fg/[0.04] hover:text-ink-fg')}>
       {({ isActive }) => <>
-        {isActive && <span className="absolute top-1.5 bottom-1.5 left-0 w-[3px] rounded-r-full bg-ink-fg" />}
-        <Icon className={cn('size-[18px] shrink-0', isActive ? 'text-ink-fg' : 'text-ink-muted group-hover:text-ink-fg')} />
+        {/* The marker grows from the middle of the item, so moving between pages reads as one
+            indicator travelling down the list rather than a block switching on. */}
+        <span className={cn('absolute top-1.5 bottom-1.5 left-0 w-[3px] origin-center rounded-r-full bg-ink-fg',
+          'transition-transform duration-200 ease-[var(--ease-entrance)] motion-reduce:transition-none',
+          isActive ? 'scale-y-100' : 'scale-y-0')} />
+        <Icon className={cn('size-[18px] shrink-0 transition-transform duration-200 ease-[var(--ease-pointer)]',
+          'group-hover:scale-110 motion-reduce:transition-none motion-reduce:group-hover:scale-100',
+          isActive ? 'text-ink-fg' : 'text-ink-muted group-hover:text-ink-fg')} />
         {!compact && <span className="flex-1 truncate">{label}</span>}
         {!compact && count != null && <span className="text-[11px] font-semibold text-ink-muted tabular-nums">{count}</span>}
       </>}
@@ -462,7 +469,9 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
           <div className="flex-1" />
           <Button variant="ghost" size="icon" onClick={() => setPalette(true)} aria-label="Search"><Search /></Button>
         </header>
-        <main className="mx-auto w-full max-w-[1480px] flex-1 px-4 py-6 sm:px-6 lg:px-8">
+        {/* key=pathname: React remounts the page, which replays .page-in, so a route change reads as
+            a new page arriving rather than the old one blinking out. */}
+        <main key={location.pathname} className="page-in mx-auto w-full max-w-[1480px] flex-1 px-4 py-6 sm:px-6 lg:px-8">
           <Suspense fallback={<div className="grid h-64 place-items-center"><Spinner className="size-6" /></div>}>{children}</Suspense>
         </main>
       </div>

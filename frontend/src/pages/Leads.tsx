@@ -280,7 +280,7 @@ export default function Leads() {
         )}
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1040px] text-sm">
+          <table className="rows-in w-full min-w-[1040px] text-sm">
             <thead className="border-b border-border bg-surface-2/50">
               <tr>
                 <th className="w-11 px-4"><input type="checkbox" aria-label="Select all" checked={allSelected}

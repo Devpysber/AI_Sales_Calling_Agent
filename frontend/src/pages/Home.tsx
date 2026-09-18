@@ -13,6 +13,7 @@ import NewAgentSheet from '@/components/NewAgentSheet'
 import { CallStatusBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, Input, PageHeader, Ring, Select, Skeleton, StatTile, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
+import { Stagger } from '@/lib/motion'
 import type { AgentOverviewItem, AgentsOverview } from '@/lib/types'
 import { callParty, cn, formatDuration, LANGUAGES, timeAgo } from '@/lib/utils'
 
@@ -184,7 +185,7 @@ function AgentTable({ agents }: { agents: AgentOverviewItem[] }) {
   const navigate = useNavigate()
   return (
     <Card className="overflow-x-auto">
-      <table className="w-full min-w-[860px] text-sm">
+      <table className="rows-in w-full min-w-[860px] text-sm">
         <thead>
           <tr className="border-b border-border text-left text-[11px] font-bold tracking-wider text-muted uppercase">
             <th className="px-5 py-3">Agent</th><th className="px-3 py-3">Status</th><th className="px-3 py-3 text-right">Leads</th>
@@ -340,7 +341,7 @@ export default function Home() {
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <Stagger className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatTile label="Live now" value={<LiveNumber value={totals.live} />} icon={<PhoneCall />} tone="success" sub={totals.live ? 'Across all agents' : 'All lines quiet'}
           trend={totals.live > 0 ? <LiveDot on /> : undefined} />
         <Card className="relative overflow-hidden p-5 sm:col-span-2 xl:col-span-2">
@@ -367,9 +368,9 @@ export default function Home() {
             </ResponsiveContainer>
           </div>
         </Card>
-        <StatTile label="Meetings booked" value={totals.meetings} icon={<CalendarCheck />} tone="success" sub={`${totals.hot} hot lead${totals.hot === 1 ? '' : 's'} in play`} />
-        <StatTile label="Leads" value={totals.leads} icon={<Users />} tone="info" sub={`Talk time ${formatDuration(totals.talk)} · 14d`} />
-      </div>
+        <StatTile label="Meetings booked" count={totals.meetings} icon={<CalendarCheck />} tone="success" sub={`${totals.hot} hot lead${totals.hot === 1 ? '' : 's'} in play`} />
+        <StatTile label="Leads" count={totals.leads} icon={<Users />} tone="info" sub={`Talk time ${formatDuration(totals.talk)} · 14d`} />
+      </Stagger>
 
       <div className="mt-6 grid gap-6 2xl:grid-cols-[1fr_360px]">
         <div className="min-w-0 space-y-4">
@@ -400,7 +401,7 @@ export default function Home() {
           </div>
 
           {view === 'table' ? (shown.length ? <AgentTable agents={shown} /> : null) : (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <Stagger className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {shown.map((a) => <AgentCard key={a.id} agent={a} role={role} />)}
               {!q && status !== 'paused' && role !== 'team' && (
                 <button type="button" onClick={() => setCreating(true)}
@@ -412,7 +413,7 @@ export default function Home() {
                   </div>
                 </button>
               )}
-            </div>
+            </Stagger>
           )}
           {!shown.length && <Card className="py-14 text-center text-sm text-muted">No agent matches these filters.</Card>}
 
@@ -435,7 +436,7 @@ export default function Home() {
           )}
         </div>
 
-        <div className="space-y-4">
+        <Stagger className="space-y-4" from="right" step={70}>
           <Card>
             <CardHeader title={<span className="flex items-center gap-2"><LiveDot on={!!liveCalls.length} />Live calls</span>}
               description={liveCalls.length ? 'In progress across every agent' : 'Nothing on the line right now'} />
@@ -498,7 +499,7 @@ export default function Home() {
               {!activity.length && <p className="text-sm text-muted">No activity yet.</p>}
             </ol>
           </Card>
-        </div>
+        </Stagger>
       </div>
 
       <NewAgentSheet open={creating} onClose={() => setCreating(false)} />

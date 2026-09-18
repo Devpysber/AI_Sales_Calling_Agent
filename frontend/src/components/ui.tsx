@@ -5,6 +5,7 @@ import {
   type SelectHTMLAttributes, type TextareaHTMLAttributes,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { AnimatedNumber } from '@/lib/motion'
 import { cn, initials } from '@/lib/utils'
 
 /* ---------------- Button ---------------- */
@@ -30,7 +31,8 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     <button
       ref={ref}
       disabled={disabled || loading}
-      className={cn('inline-flex shrink-0 items-center justify-center rounded-xl font-semibold whitespace-nowrap transition',
+      className={cn('inline-flex shrink-0 items-center justify-center rounded-xl font-semibold whitespace-nowrap',
+        'transition duration-150 ease-[var(--ease-pointer)] active:scale-[.975] motion-reduce:active:scale-100',
         'disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4', variants[variant], sizes[size], className)}
       {...props}
     >
@@ -115,8 +117,10 @@ export function Badge({ tone = 'neutral', dot, pulse, children, className }: { t
   )
 }
 
-export function Card({ className, ...p }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn('rounded-[var(--radius-card)] border border-border bg-surface shadow-card', className)} {...p} />
+export function Card({ interactive, className, ...p }: HTMLAttributes<HTMLDivElement> & { interactive?: boolean }) {
+  // interactive: the card is a link or opens something, so it lifts towards the pointer.
+  return <div className={cn('rounded-[var(--radius-card)] border border-border bg-surface shadow-card',
+    interactive && 'lift cursor-pointer', className)} {...p} />
 }
 
 export function CardHeader({ title, description, action, className }: { title: ReactNode; description?: ReactNode; action?: ReactNode; className?: string }) {
@@ -144,7 +148,9 @@ export function ShowMore({ text, lines = 3, limit = 220, className }: { text: st
   )
 }
 
-export const Skeleton = ({ className }: { className?: string }) => <div className={cn('animate-pulse rounded-xl bg-surface-2', className)} />
+export const Skeleton = ({ className }: { className?: string }) => (
+  <div className={cn('sheen rounded-xl bg-surface-2', className)} />
+)
 
 export const Spinner = ({ className }: { className?: string }) => <Loader2 className={cn('size-4 animate-spin text-muted', className)} />
 
@@ -186,12 +192,17 @@ export function PageHeader({ title, description, actions, eyebrow, children }: {
 }
 
 export function Tabs<T extends string>({ value, onChange, items }: { value: T; onChange: (v: T) => void; items: { value: T; label: ReactNode }[] }) {
+  const active = Math.max(0, items.findIndex((i) => i.value === value))
   return (
-    <div className="inline-flex rounded-xl border border-border bg-surface-2 p-1">
+    <div className="relative inline-flex rounded-xl border border-border bg-surface-2 p-1">
+      {/* One pill that travels to the selected tab: the movement is what shows which way you went. */}
+      <span aria-hidden
+        className="absolute top-1 bottom-1 left-1 rounded-lg bg-surface shadow-sm ring-1 ring-border transition-transform duration-250 ease-[var(--ease-entrance)] motion-reduce:transition-none"
+        style={{ width: `calc((100% - 0.5rem) / ${items.length})`, transform: `translateX(${active * 100}%)` }} />
       {items.map((i) => (
         <button key={i.value} type="button" onClick={() => onChange(i.value)}
-          className={cn('rounded-lg px-3 py-1.5 text-[13px] font-semibold transition',
-            value === i.value ? 'bg-surface text-brand shadow-sm ring-1 ring-border' : 'text-muted hover:text-fg')}>
+          className={cn('relative z-10 flex-1 rounded-lg px-3 py-1.5 text-[13px] font-semibold transition-colors',
+            value === i.value ? 'text-brand' : 'text-muted hover:text-fg')}>
           {i.label}
         </button>
       ))}
@@ -296,17 +307,28 @@ export const useConfirm = () => useContext(ConfirmContext)
 
 /* ---------------- Metrics ---------------- */
 
-export function StatTile({ label, value, sub, icon, tone = 'brand', trend, className }: {
-  label: string; value: ReactNode; sub?: ReactNode; icon?: ReactNode; tone?: Tone; trend?: ReactNode; className?: string
+export function StatTile({ label, value, count, decimals, prefix, suffix, sub, icon, tone = 'brand', trend, className }: {
+  label: string; value?: ReactNode; sub?: ReactNode; icon?: ReactNode; tone?: Tone; trend?: ReactNode; className?: string
+  /** A number: counts up on first paint and re-counts whenever it changes, instead of jumping. */
+  count?: number | null; decimals?: number; prefix?: string; suffix?: string
 }) {
+  const counted = count !== undefined
   return (
-    <Card className={cn('relative overflow-hidden p-5', className)}>
+    <Card className={cn('group relative overflow-hidden p-5', className)}>
       <div className="flex items-start justify-between gap-3">
         <span className="text-[13px] font-semibold text-muted">{label}</span>
-        {icon && <span className={cn('grid size-9 place-items-center rounded-xl ring-1 ring-inset [&_svg]:size-4', tones[tone])}>{icon}</span>}
+        {icon && (
+          <span className={cn('grid size-9 place-items-center rounded-xl ring-1 ring-inset [&_svg]:size-4',
+            'transition-transform duration-300 ease-[var(--ease-entrance)] group-hover:-rotate-6 group-hover:scale-105',
+            'motion-reduce:transition-none motion-reduce:group-hover:rotate-0 motion-reduce:group-hover:scale-100', tones[tone])}>
+            {icon}
+          </span>
+        )}
       </div>
       <div className="mt-2 flex items-baseline gap-2">
-        <span className="text-[30px] leading-none font-extrabold tracking-tight tabular-nums">{value}</span>
+        <span className="text-[30px] leading-none font-extrabold tracking-tight tabular-nums">
+          {counted ? <AnimatedNumber value={count} decimals={decimals} prefix={prefix} suffix={suffix} /> : value}
+        </span>
         {trend}
       </div>
       {sub && <div className="mt-2 text-xs text-muted">{sub}</div>}
@@ -316,9 +338,14 @@ export function StatTile({ label, value, sub, icon, tone = 'brand', trend, class
 
 export function Meter({ value, className, tone = 'brand' }: { value: number; className?: string; tone?: Tone }) {
   const bar: Record<Tone, string> = { neutral: 'bg-muted', brand: 'bg-brand', success: 'bg-success', warning: 'bg-warning', danger: 'bg-danger', info: 'bg-info' }
+  // Starts at zero and transitions to `value` on the frame after mount: a bar that is already full
+  // when it appears says nothing about how full it is.
+  const [width, setWidth] = useState(0)
+  useEffect(() => { const id = requestAnimationFrame(() => setWidth(value)); return () => cancelAnimationFrame(id) }, [value])
   return (
     <div className={cn('h-1.5 overflow-hidden rounded-full bg-surface-2', className)}>
-      <div className={cn('h-full rounded-full transition-all duration-500', bar[tone])} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+      <div className={cn('h-full origin-left rounded-full transition-[width] duration-700 ease-[var(--ease-entrance)]', bar[tone])}
+        style={{ width: `${Math.max(0, Math.min(100, width))}%` }} />
     </div>
   )
 }

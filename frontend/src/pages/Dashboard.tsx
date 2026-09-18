@@ -12,6 +12,7 @@ import { LeadFormSheet, LeadSheet } from '@/components/LeadSheets'
 import { CallStatusBadge, QualificationBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, EmptyState, Meter, PageHeader, Skeleton, StatTile, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
+import { Stagger } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
 import type { ActivityEvent, Call, CallStats, Lead, LeadStats, Page } from '@/lib/types'
 import { callHandledBy, callParty, cn, formatDate, formatDuration, LANGUAGES, timeAgo, titleCase } from '@/lib/utils'
@@ -91,18 +92,18 @@ export default function Dashboard() {
         </>}
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        {c && l ? <>
-          <StatTile label="Calls today" value={c.today.total} icon={<PhoneCall />} tone="neutral"
-            sub={c.active ? <span className="flex items-center gap-1.5"><LiveDot on />{c.active} on the line</span> : 'No live calls'} />
-          <StatTile label="Connected today" value={c.today.connected} icon={<PhoneIncoming />} tone="success"
-            sub={todayRate !== null ? <span className="flex items-center gap-2"><Meter value={todayRate} tone="success" className="w-16" />{todayRate}% answer rate</span> : 'Nothing dialled yet'} />
-          <StatTile label="Talk time today" value={formatDuration(c.today.talk_seconds)} icon={<Clock />} tone="neutral"
-            sub={c.avg_latency_ms ? `AI replies in ${(c.avg_latency_ms / 1000).toFixed(1)}s on average` : 'No AI latency data yet'} />
-          <StatTile label="Meetings booked" value={l.meetings} icon={<CalendarCheck />} tone="success" sub={`${l.pending} lead${l.pending === 1 ? '' : 's'} waiting to be called`} />
-          <StatTile label="Hot leads" value={q.Hot ?? 0} icon={<Flame />} tone="danger" sub={`${q.Warm ?? 0} warm · ${q.Cold ?? 0} cold`} />
-        </> : Array.from({ length: 5 }, (_, i) => <Skeleton key={i} className="h-[124px]" />)}
-      </div>
+      <Stagger className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        {c && l ? [
+          <StatTile key="calls" label="Calls today" count={c.today.total} icon={<PhoneCall />} tone="neutral"
+            sub={c.active ? <span className="flex items-center gap-1.5"><LiveDot on />{c.active} on the line</span> : 'No live calls'} />,
+          <StatTile key="connected" label="Connected today" count={c.today.connected} icon={<PhoneIncoming />} tone="success"
+            sub={todayRate !== null ? <span className="flex items-center gap-2"><Meter value={todayRate} tone="success" className="w-16" />{todayRate}% answer rate</span> : 'Nothing dialled yet'} />,
+          <StatTile key="talk" label="Talk time today" value={formatDuration(c.today.talk_seconds)} icon={<Clock />} tone="neutral"
+            sub={c.avg_latency_ms ? `AI replies in ${(c.avg_latency_ms / 1000).toFixed(1)}s on average` : 'No AI latency data yet'} />,
+          <StatTile key="meetings" label="Meetings booked" count={l.meetings} icon={<CalendarCheck />} tone="success" sub={`${l.pending} lead${l.pending === 1 ? '' : 's'} waiting to be called`} />,
+          <StatTile key="hot" label="Hot leads" count={q.Hot ?? 0} icon={<Flame />} tone="danger" sub={`${q.Warm ?? 0} warm · ${q.Cold ?? 0} cold`} />,
+        ] : Array.from({ length: 5 }, (_, i) => <Skeleton key={i} className="h-[124px]" />)}
+      </Stagger>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_380px]">
         <Card>

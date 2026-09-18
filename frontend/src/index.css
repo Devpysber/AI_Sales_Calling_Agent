@@ -47,6 +47,15 @@
   --animate-pop-in: pop-in .16s cubic-bezier(.2,.8,.2,1);
   --animate-rise: rise .35s cubic-bezier(.2,.8,.2,1) both;
   --animate-ping-once: ping-once 1.2s cubic-bezier(0,0,.2,1) 2;
+  --animate-sheen: sheen 1.5s ease-in-out infinite;
+  --animate-live-ring: live-ring 1.8s cubic-bezier(.2,.8,.2,1) infinite;
+  --animate-page-in: page-in .3s cubic-bezier(.22,1,.36,1) both;
+  --animate-bar-grow: bar-grow .6s cubic-bezier(.2,.8,.2,1) both;
+
+  /* One easing for entrances, one for anything the pointer drives. Mixing curves is what makes an
+     interface feel assembled from parts. */
+  --ease-entrance: cubic-bezier(.22,1,.36,1);
+  --ease-pointer: cubic-bezier(.4,0,.2,1);
 }
 
 @keyframes pulse-dot { 50% { opacity: .35; transform: scale(.85); } }
@@ -56,6 +65,17 @@
 @keyframes rise { from { transform: translateY(8px); opacity: 0; } }
 /* One attention pulse on a freshly arrived row, then it settles: a permanent ping is noise. */
 @keyframes ping-once { 70%, 100% { transform: scale(2.2); opacity: 0; } }
+/* Skeletons read as "loading" rather than "broken" when the light travels across them. */
+@keyframes sheen { 0% { background-position: -140% 0; } 100% { background-position: 240% 0; } }
+/* A call actually in progress: a ring leaving the dot, not a dot changing opacity. */
+@keyframes live-ring { 0% { transform: scale(1); opacity: .55; } 70%, 100% { transform: scale(2.6); opacity: 0; } }
+@keyframes page-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes bar-grow { from { transform: scaleY(0); } }
+@keyframes reveal-up { from { opacity: 0; transform: translate3d(0, 10px, 0); } }
+@keyframes reveal-down { from { opacity: 0; transform: translate3d(0, -10px, 0); } }
+@keyframes reveal-left { from { opacity: 0; transform: translate3d(-12px, 0, 0); } }
+@keyframes reveal-right { from { opacity: 0; transform: translate3d(12px, 0, 0); } }
+@keyframes reveal-none { from { opacity: 0; } }
 
 :root {
   /* Monochrome: warm off-white paper, black ink. Colour is reserved for status. */
@@ -148,6 +168,61 @@ kbd {
   background-size: 18px 18px;
 }
 
+/* ---------------- Motion ----------------
+   Paired with src/lib/motion.tsx. A .reveal is invisible until it also carries .reveal-in, which
+   the component adds on mount or when the element is first scrolled into view. */
+
+.reveal { opacity: 0; will-change: opacity, transform; }
+.reveal-in { animation-duration: .42s; animation-timing-function: var(--ease-entrance); animation-fill-mode: both; }
+.reveal-up.reveal-in { animation-name: reveal-up; }
+.reveal-down.reveal-in { animation-name: reveal-down; }
+.reveal-left.reveal-in { animation-name: reveal-left; }
+.reveal-right.reveal-in { animation-name: reveal-right; }
+.reveal-none.reveal-in { animation-name: reveal-none; }
+
+/* Each route change replays this on <main>, so a new page arrives instead of blinking into place. */
+.page-in { animation: var(--animate-page-in); }
+
+/* Cards that lead somewhere lift towards the pointer; cards that are only read do not. */
+.lift {
+  transition: transform .22s var(--ease-pointer), box-shadow .22s var(--ease-pointer), border-color .22s var(--ease-pointer);
+}
+.lift:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); border-color: var(--border-strong); }
+.lift:active { transform: translateY(0); transition-duration: .08s; }
+
+/* Light travelling across a loading placeholder. */
+.sheen {
+  background-image: linear-gradient(100deg,
+    transparent 20%,
+    color-mix(in srgb, var(--fg) 7%, transparent) 42%,
+    transparent 64%);
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: var(--animate-sheen);
+}
+
+/* A number that just changed: a brief highlight, so a background refresh is noticed without a toast. */
+@keyframes value-bump { 0% { transform: translateY(2px); opacity: .55; } }
+.value-bump { animation: value-bump .28s var(--ease-entrance) both; }
+
+/* Chart bars grow from their baseline on first paint. */
+.bar-grow { transform-origin: bottom; animation: var(--animate-bar-grow); }
+
+/* A table whose rows arrive in order. Opt in with .rows-in on the <table>; only the first screenful
+   is staggered, because a row 40 deep must not wait two seconds to exist. */
+.rows-in tbody tr {
+  animation: reveal-up .34s var(--ease-entrance) both;
+}
+.rows-in tbody tr:nth-child(1) { animation-delay: 0ms; }
+.rows-in tbody tr:nth-child(2) { animation-delay: 28ms; }
+.rows-in tbody tr:nth-child(3) { animation-delay: 56ms; }
+.rows-in tbody tr:nth-child(4) { animation-delay: 84ms; }
+.rows-in tbody tr:nth-child(5) { animation-delay: 112ms; }
+.rows-in tbody tr:nth-child(6) { animation-delay: 140ms; }
+.rows-in tbody tr:nth-child(7) { animation-delay: 168ms; }
+.rows-in tbody tr:nth-child(8) { animation-delay: 196ms; }
+.rows-in tbody tr:nth-child(n+9) { animation-delay: 220ms; }
+
 /* Management reports print cleanly */
 @media print {
   aside, header, .no-print { display: none !important; }
@@ -158,6 +233,9 @@ kbd {
 
 /* Respect the OS setting: the dashboard still updates, it just stops moving. */
 @media (prefers-reduced-motion: reduce) {
+  /* Belt and braces: a reveal must be visible even if its animation never runs at all. */
+  .reveal { opacity: 1 !important; }
+  .lift:hover { transform: none; }
   *, *::before, *::after {
     animation-duration: .001ms !important;
     animation-iteration-count: 1 !important;

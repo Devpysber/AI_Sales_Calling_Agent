@@ -485,7 +485,9 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
           {history.map((t, i) => {
             const isAgent = t.role === 'assistant'
             return (
-              <div key={i} className={cn('flex gap-2.5', !isAgent && 'flex-row-reverse')}>
+              // Each bubble enters from the side it belongs to, so a new turn is seen without
+              // watching the scroll position.
+              <div key={i} className={cn('reveal reveal-in flex gap-2.5', isAgent ? 'reveal-left' : 'reveal-right flex-row-reverse')}>
                 <span className={cn('mt-0.5 grid size-7 shrink-0 place-items-center rounded-full', isAgent ? 'bg-brand text-brand-fg' : 'bg-surface text-fg-2 ring-1 ring-border')}>
                   {isAgent ? <Bot className="size-3.5" /> : <User className="size-3.5" />}
                 </span>
@@ -510,7 +512,7 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
             )
           })}
           {send.isPending && (
-            <div className="flex gap-2.5"><span className="grid size-7 place-items-center rounded-full bg-brand text-brand-fg"><Bot className="size-3.5" /></span>
+            <div className="reveal reveal-in reveal-left flex gap-2.5"><span className="grid size-7 place-items-center rounded-full bg-brand text-brand-fg"><Bot className="size-3.5" /></span>
               <div className="flex items-center gap-1 rounded-2xl rounded-tl-sm bg-surface px-4 py-3 ring-1 ring-border">{[0, 1, 2].map((d) => <span key={d} className="size-1.5 animate-pulse-dot rounded-full bg-muted" style={{ animationDelay: `${d * 150}ms` }} />)}</div>
             </div>
           )}

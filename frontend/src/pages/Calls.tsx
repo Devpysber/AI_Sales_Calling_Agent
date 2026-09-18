@@ -108,7 +108,7 @@ export default function Calls() {
             <span className="ml-auto text-xs font-semibold text-muted">{data ? `${data.total} call${data.total === 1 ? '' : 's'}` : ''}</span>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] text-sm">
+            <table className="rows-in w-full min-w-[980px] text-sm">
               <thead className="border-b border-border bg-surface-2/50">
                 <tr>{['Lead', 'Result', 'AI summary', 'Temp.', 'Length', 'Trigger', 'When'].map((h) => <th key={h} className="px-4 py-3 text-left text-[11px] font-bold tracking-wider whitespace-nowrap text-muted uppercase">{h}</th>)}</tr>
               </thead>
