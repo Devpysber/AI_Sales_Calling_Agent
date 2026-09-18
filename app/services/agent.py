@@ -362,6 +362,50 @@ Return ONLY a JSON object, no prose:
 
 END_MARK = "<END>"
 TRANSFER_MARK = "<TRANSFER>"
+# Words that belong to the software, not to a phone call. The prompt already forbids them, but a prompt
+# is advice: this is the last gate before the text becomes speech, so a slip never reaches the caller.
+# Each pair keeps the sentence grammatical — "update the CRM" becomes "update my notes", not a hole.
+_PLAIN_SPEECH = [
+    # "in the CRM" / "to our database" -> "in my notes": the preposition already in the sentence still fits.
+    (r"\b(?:the|our|your)\s+(?:CRM|database|data\s?base|back\s?end|backend|server|portal|dashboard|knowledge\s?base|system)\b", "my notes"),
+    (r"\b(?:CRM|database|data\s?base|back\s?end|backend|knowledge\s?base)\b", "my notes"),
+    (r"\bAPI\b", "our team"),
+    # Only the noun: "we record every call" is ordinary speech and must survive untouched.
+    (r"\b(the|your|our|my|their|this|that)\s+records\b", r"\1 notes"),
+    (r"\b(the|your|our|my|their|this|that|a)\s+record\b", r"\1 note"),
+    (r"\bentries\b", "notes"),
+    (r"\b(the|your|our|my|their|this|that|an)\s+entry\b", r"\1 note"),
+    (r"\b(?:support\s+)?tickets\b", "requests"),
+    (r"\b(?:support\s+)?ticket\b", "request"),
+    (r"\blogged\s+(?:it\s+)?(?:in|into|to)\b", "noted it in"),
+    # Keep the verb agreeing: "your profile is" must not become "your details is".
+    (r"\b(the|your|our|my|their)\s+profile\s+is\b", r"\1 details are"),
+    (r"\b(the|your|our|my|their)\s+profile\b", r"\1 details"),
+    # Hindi calls mix the same English nouns in, and carry their own words for them.
+    (r"(?:डेटाबेस|डेटा\s?बेस|सिस्टम)\s+में", "मेरे notes में"),
+    (r"डेटाबेस|डेटा\s?बेस|सिस्टम", "मेरे notes"),
+    (r"रिकॉर्ड", "note"),
+]
+_PLAIN_SPEECH = [(re.compile(pattern, re.I), replacement) for pattern, replacement in _PLAIN_SPEECH]
+
+
+def plain_speech(text: str) -> str:
+    """
+    Rewrite software words into what a person would say, keeping the sentence's capitalisation.
+
+    The prompt already forbids these words; this is the last gate before speech, so one slip by the
+    model never reaches a caller's ear.
+    """
+    for pattern, replacement in _PLAIN_SPEECH:
+        def cased(match: "re.Match[str]") -> str:
+            out = match.expand(replacement) if isinstance(replacement, str) else replacement(match)
+            original = match.group(0)
+            # "Your profile" -> "Your details", not "your details": mid-sentence words stay lowercase.
+            return out[:1].upper() + out[1:] if original[:1].isupper() and out[:1].islower() else out
+        text = pattern.sub(cased, text)
+    return text
+
+
 VOICE_OUTPUT = f"""# Output
 Say your reply directly as plain spoken text: 1-2 short sentences, at most 30 words in total. No JSON, quotes, labels or markdown.
 Never output tool calls, tags or crm_update: meetings, emails and follow-ups are saved automatically from the transcript.
@@ -443,7 +487,8 @@ def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, 
         log.warning("Non-JSON LLM reply, using raw text")
         data = {"reply": result.text.strip().strip('"')}
 
-    reply = str(data.get("reply") or "").strip() or "Sorry, could you say that again?"
+    # Same gate as the streaming path: software words never reach a caller, whichever mode answered.
+    reply = plain_speech(str(data.get("reply") or "").strip()) or "Sorry, could you say that again?"
     crm = data.get("crm_update") if isinstance(data.get("crm_update"), dict) else {}
     return {
         "reply": reply,

@@ -414,14 +414,22 @@ def make_tts(language: str, speaker: str | None):
     return LocalTTS(language, speaker) if settings.tts_engine.lower() == "indicf5" else SarvamTTS(language, speaker)
 
 
+# Words the plain-speech rewrites read together with the noun that follows them.
+DETERMINERS = {"the", "our", "your", "my", "their", "a", "an", "this", "that", "these", "those", "support"}
+
+
 class ReplyFilter:
-    """Cleans streamed LLM text for speech: drops <tags> and tool-call markup, detects the end-of-call marker."""
+    """
+    Cleans streamed LLM text for speech: drops <tags> and tool-call markup, detects the end-of-call
+    marker, and rewrites software words into what a person would say before any of it is spoken.
+    """
 
     def __init__(self):
         self.pending = ""
         self.end_call = False
         self.transfer = False
         self.muted = False
+        self.tail = ""   # an unfinished word held back so a rewrite never runs on half a word
 
     def feed(self, delta: str) -> str:
         self.pending += delta
@@ -450,11 +458,30 @@ class ReplyFilter:
                 self.transfer = True
             if "tool" in tag:
                 self.muted = True
-        return out
+        return self.speakable(out)
+
+    def speakable(self, text: str) -> str:
+        """
+        Rewrite whole words only. Deltas arrive mid-word ("data" + "base"), so the trailing fragment is
+        carried to the next call: rewriting it now would miss the word it is about to become.
+
+        A trailing determiner is held back with it, because the rewrites read the pair together — "the
+        database" becomes "my notes", and speaking "the" early would strand it in front of the result.
+        """
+        text = self.tail + text
+        cut = max(text.rfind(" "), text.rfind("\n")) + 1
+        head, tail = text[:cut], text[cut:]
+        held = head.rstrip().rsplit(" ", 1)[-1].lower().strip(",.;:!?")
+        if held in DETERMINERS:
+            keep = len(head.rstrip()) - len(held)
+            head, tail = text[:keep], text[keep:]
+        self.tail = tail
+        return agent.plain_speech(head)
 
     def flush(self) -> str:
         rest, self.pending = ("" if self.muted else self.pending), ""
-        return rest
+        remainder, self.tail = self.tail + rest, ""
+        return agent.plain_speech(remainder)
 
 
 # ---------------- the call ----------------
