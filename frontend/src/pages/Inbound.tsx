@@ -56,7 +56,8 @@ export default function Inbound() {
   const stats = useMemo(() => {
     const answered = items.filter((c) => c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0)).length
     const forwarded = items.filter((c) => c.trigger === 'forwarded').length
-    return { total: calls.data?.total ?? 0, answered, forwarded, missed: items.filter((c) => ['No Answer', 'Busy'].includes(c.status) || (c.status === 'Failed' && c.duration === 0)).length }
+    const internal = items.filter((c) => c.trigger === 'internal').length
+    return { total: Math.max(0, (calls.data?.total ?? 0) - internal), answered: answered - internal, forwarded, missed: items.filter((c) => ['No Answer', 'Busy'].includes(c.status) || (c.status === 'Failed' && c.duration === 0)).length }
   }, [items, calls.data])
 
   if (!form || !data) return <><PageHeader title="Inbound & transfer" /><div className="grid gap-4 lg:grid-cols-2"><Skeleton className="h-80" /><Skeleton className="h-80" /></div></>
@@ -242,7 +243,9 @@ export default function Inbound() {
                         <span className="block truncate text-sm font-semibold">{c.lead_name || c.from_number}</span>
                         {/* An AI call that was handed over mid-way used to read "Answered by AI", hiding the transfer. */}
                         <span className="block truncate text-xs text-muted">
-                          {c.trigger === 'forwarded'
+                          {c.trigger === 'internal'
+                            ? `Team check-in · ${data.profile.agent_name} (AI)`
+                            : c.trigger === 'forwarded'
                             ? `Forwarded to ${c.transferred_to_name || c.transferred_to || 'your team'}`
                             : c.transferred_to
                               ? `${data.profile.agent_name} (AI), handed to ${c.transferred_to_name || c.transferred_to}`

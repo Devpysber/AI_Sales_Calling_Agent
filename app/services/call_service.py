@@ -235,8 +235,14 @@ class CallService:
         if agent_id is None:
             return None
         crm = CRMService(agent_id)
-        lead = crm.find_by_phone(from_number)
-        if lead is None:
+        # Checked before anything is saved: a colleague trying the agent out must not become a lead,
+        # or every test call lands in the CRM and counts as a customer in the pipeline.
+        from app.services import team_service
+        internal = team_service.is_team_number(from_number, agent_id)
+        team_name = team_service.name_for(from_number, agent_id)
+
+        lead = None if internal else crm.find_by_phone(from_number)
+        if lead is None and not internal:
             # Unknown to this agent: reuse what another agent already knows about the number, then save the caller
             known_elsewhere = CRMService(None).find_by_phone(from_number) or {}
             seed = {k: known_elsewhere[k] for k in ("name", "company", "city", "email", "language") if known_elsewhere.get(k)}
@@ -245,10 +251,9 @@ class CallService:
         persona = agents.get_profile(agent_id)
         language = (lead or {}).get("language") or persona["default_language"]
         # A colleague ringing their own agent gets a walkthrough, not a sales call.
-        from app.services import team_service
-        team_name = team_service.name_for(from_number, agent_id)
-        if team_service.is_team_number(from_number, agent_id):
-            context = {**(lead or {"phone": from_number}), "call_purpose": "team", "team_name": team_name or ""}
+        if internal:
+            context = {"phone": from_number, "call_purpose": "team", "team_name": team_name or "",
+                       "name": team_name or ""}
             context["call_goal"] = agent.call_goal(context, "team")
         else:
             collect = persona.get("inbound_collect") or ["name", "requirement"]
@@ -258,12 +263,14 @@ class CallService:
         session = call_session.create(agent_id=agent_id, lead_id=lead and lead["id"], lead=context, language=language)
         with get_db() as db:
             call = Call(agent_id=agent_id, lead_id=lead and lead["id"], session_id=session["id"], direction="inbound",
-                        trigger="inbound", from_number="+" + from_number.lstrip("+"), to_number="+" + to_number.lstrip("+"),
+                        trigger="internal" if internal else "inbound",
+                        from_number="+" + from_number.lstrip("+"), to_number="+" + to_number.lstrip("+"),
                         call_uuid=call_uuid, status="In Progress", answered_at=_utcnow())
             db.add(call)
             db.flush()
             call_id = call.id
-        events.record("call.inbound", f"Inbound call from {(lead or {}).get('name') or '+' + from_number.lstrip('+')}",
+        who = team_name or (lead or {}).get("name") or "+" + from_number.lstrip("+")
+        events.record("call.inbound", f"{'Team check-in from' if internal else 'Inbound call from'} {who}",
                       agent_id=agent_id, lead_id=lead and lead["id"], call_id=call_id)
         return call_session.update(session["id"], call_id=call_id)
 

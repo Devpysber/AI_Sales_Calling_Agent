@@ -59,3 +59,40 @@ def test_a_caller_is_never_transferred_to_their_own_line():
 
     stream.persona = {"transfer_number": "+919584516352,+919000000111"}
     assert stream.has_human_line(), "a second colleague is still reachable"
+
+
+def test_a_colleagues_call_never_becomes_a_lead(client, monkeypatch):
+    """Trying the agent out must not put the tester in the CRM or the pipeline."""
+    from app.services import call_service, team_service
+    from app.services.crm_service import CRMService
+
+    agent = client.post("/api/agents", json={"name": "Team check", "phone_number": "+91 80 5555 0000"}).json()
+    monkeypatch.setattr(team_service, "members",
+                        lambda: [{"id": "m1", "name": "Ashish Sharma", "phone": "+919584516352", "email": "a@b.c"}])
+
+    before = CRMService(agent["id"]).list_leads()["total"]
+    session = call_service.CallService().create_inbound("919584516352", "918055550000", "uuid-team")
+    assert session is not None
+
+    assert CRMService(agent["id"]).list_leads()["total"] == before, "a colleague must not be saved as a lead"
+    assert session["lead_id"] is None
+    assert session["lead"]["call_purpose"] == "team"
+
+    # Looked up by id: which agent owns the number depends on what else exists, and this test is
+    # about the call's own shape, not about routing.
+    call = call_service.CallService().get(session["call_id"])
+    assert call["trigger"] == "internal", "the call says what it was"
+
+
+def test_a_customer_call_still_creates_a_lead(client, monkeypatch):
+    from app.services import call_service, team_service
+    from app.services.crm_service import CRMService
+
+    agent = client.post("/api/agents", json={"name": "Customer check", "phone_number": "+91 80 5555 0001"}).json()
+    monkeypatch.setattr(team_service, "members", lambda: [])
+
+    session = call_service.CallService().create_inbound("917879417266", "918055550001", "uuid-customer")
+    assert session["lead_id"], "an ordinary caller is saved so the agent can call them back"
+    lead = CRMService(None).get(session["lead_id"])
+    assert lead["phone"] == "+917879417266"
+    assert call_service.CallService().get(session["call_id"])["trigger"] == "inbound"
