@@ -12,6 +12,7 @@ Everything comes from real sources:
 Balances are cached briefly (force refresh available); reminders can be snoozed per item.
 """
 
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -29,6 +30,9 @@ from app.services.settings_service import SettingsService
 
 log = get_logger(__name__)
 CREDITS_TTL = 180
+# How long a previous answer may still be shown while a fresh one is fetched behind the request.
+CREDITS_STALE_TTL = 24 * 3600
+_refreshing = threading.Semaphore(1)
 IST_OFFSET = timedelta(hours=5, minutes=30)
 LOW_MINUTES = 300      # warn when the Plivo balance covers fewer connected minutes than this
 CRITICAL_MINUTES = 60  # popup: calls are about to stop
@@ -133,10 +137,8 @@ def _sarvam() -> dict | None:
     }
 
 
-def credits(force: bool = False) -> dict:
-    cached = None if force else store.get_json("alerts:credits:v2")
-    if cached is not None:
-        return cached
+def _fetch_credits() -> dict:
+    """Ask each provider what is left. Three HTTP round trips: never call this on the hot path."""
     out = []
     for name, fetch in (("Plivo", _plivo), ("OpenRouter", _openrouter), ("Sarvam", _sarvam)):
         try:
@@ -149,7 +151,37 @@ def credits(force: bool = False) -> dict:
             out.append(item)
     result = {"providers": out, "checked_at": int(time.time())}
     store.set_json("alerts:credits:v2", result, ttl=CREDITS_TTL)
+    store.set_json("alerts:credits:last", result, ttl=CREDITS_STALE_TTL)
     return result
+
+
+def _refresh_credits_soon() -> None:
+    """Refresh in the background, and only once: three workers missing the cache together made three
+    identical rounds of provider calls, which is what turned a 3-minute cache miss into a slow page."""
+    if not _refreshing.acquire(blocking=False):
+        return
+
+    def run():
+        try:
+            _fetch_credits()
+        finally:
+            _refreshing.release()
+
+    threading.Thread(target=run, daemon=True, name="credits-refresh").start()
+
+
+def credits(force: bool = False) -> dict:
+    if not force:
+        cached = store.get_json("alerts:credits:v2")
+        if cached is not None:
+            return cached
+        # Expired, but the previous answer is still the truth as far as anyone can tell: show it now and
+        # fetch behind the request. Balances move slowly; a page that waits 3s for them is worse.
+        stale = store.get_json("alerts:credits:last")
+        if stale is not None:
+            _refresh_credits_soon()
+            return stale
+    return _fetch_credits()
 
 
 # ---------------- reminders ----------------
