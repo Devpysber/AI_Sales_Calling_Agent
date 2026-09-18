@@ -588,7 +588,8 @@ class CallStream:
             self.save_session()
             await self.checkpoint()
         elif action == "transfer":
-            if not self.can_transfer():
+            # A supervisor asking for this by hand overrides the "transfer when a caller asks" preference.
+            if not self.has_human_line():
                 raise ValueError("Set a transfer number for this agent first (Inbound & transfer page).")
             from app.api.plivo import TRANSFER_LINES
             await self.interrupt(force=True)
@@ -652,9 +653,25 @@ class CallStream:
         # Same rule the prompt is built from, so a stray <TRANSFER> can never dial a line the operator turned off.
         return agent.can_transfer(self.persona)
 
+    def has_human_line(self) -> bool:
+        """
+        A number exists to hand a caller to, whatever the on-request toggle says.
+
+        "Transfer when a caller asks" is a preference about how calls are handled. When every LLM
+        provider has failed there is no agent left to handle the call, so the only alternatives are a
+        person or a dead line: the preference does not apply.
+        """
+        return bool("".join(c for c in str(self.persona.get("transfer_number") or "") if c.isdigit()))
+
     async def transfer_call(self):
-        """Hand the caller to the agent's human number. Plivo replaces the stream with a <Dial>, ending this socket."""
-        if self.transferred or not self.call_uuid or not self.can_transfer():
+        """
+        Hand the caller to the agent's human number. Plivo replaces the stream with a <Dial>, ending this socket.
+
+        Gated on a number existing, not on the on-request preference: every caller who reaches here was
+        already told they are being put through, by the model, a supervisor or the failure path. Refusing
+        now would leave them holding a silent line.
+        """
+        if self.transferred or not self.call_uuid or not self.has_human_line():
             return
         self.transferred = True
         from app.services.plivo_service import PlivoService
@@ -1044,9 +1061,10 @@ class CallStream:
                 self.turn("customer", text)
             self.save_session()
             from app.api.plivo import PROMPTS
-            # Something broke on our side. Hanging up on a caller mid-conversation is the worst
-            # outcome, so hand them to a person when there is one, and promise a callback otherwise.
-            if self.can_transfer():
+            # Something broke on our side (typically every LLM provider refusing in a row). Hanging up
+            # on a caller mid-conversation is the worst outcome, so hand them to a person whenever a
+            # number exists, and promise a callback otherwise. Neither line mentions a fault.
+            if self.has_human_line():
                 await self.say_fixed(PROMPTS["handover"][self.lang_key()])
                 self.turn("assistant", PROMPTS["handover"][self.lang_key()])
                 await self.checkpoint(transfer=True)

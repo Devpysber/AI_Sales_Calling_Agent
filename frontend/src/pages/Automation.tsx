@@ -167,7 +167,19 @@ function JobCard({ icon, title, description, enabled, onToggle, children, footer
   )
 }
 
-type Intake = { url: string; token: string; speed_to_lead: boolean }
+type Intake = { url: string; token: string; speed_to_lead: boolean; auto_dial: boolean
+  speed_to_lead_min_seconds: number; speed_to_lead_max_seconds: number }
+
+/** What actually happens to a form enquiry, given which automations are switched on. */
+function intakeFate(d: Intake): { tone: 'success' | 'warning' | 'neutral'; label: string } {
+  if (d.speed_to_lead) {
+    const low = Math.round(d.speed_to_lead_min_seconds / 60 * 10) / 10
+    const high = Math.round(d.speed_to_lead_max_seconds / 60 * 10) / 10
+    return { tone: 'success', label: `Calls ${low}–${high} min after the form` }
+  }
+  if (d.auto_dial) return { tone: 'success', label: 'Queued for auto-dial' }
+  return { tone: 'warning', label: 'Saved only — switch on an automation to call' }
+}
 
 function WebsiteIntake() {
   const { base, agent } = useAgent()
@@ -192,7 +204,7 @@ function WebsiteIntake() {
         <span className="grid size-10 place-items-center rounded-xl bg-brand-soft text-brand"><Globe className="size-5" /></span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2"><h3 className="font-bold">Website form → {agent?.name}</h3>
-            <Badge tone={data.speed_to_lead ? 'success' : 'neutral'} dot>{data.speed_to_lead ? 'Calls 1–2 min after the form' : 'Queued for auto-dial'}</Badge></div>
+            <Badge tone={intakeFate(data).tone} dot>{intakeFate(data).label}</Badge></div>
           <p className="text-sm text-muted">Send enquiries from any website, landing page, WordPress/Webflow form, Zapier or your backend straight into this agent's leads. Use a separate agent per website to keep each site's leads, script and reports apart.</p>
           <div className="mt-3 flex min-w-0 items-center gap-2 rounded-xl border border-border bg-surface-2 px-3 py-2">
             <code className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{data.url}</code>

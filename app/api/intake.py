@@ -48,7 +48,14 @@ def get_token(agent_id: int, create: bool = True) -> str | None:
 def _info(agent_id: int) -> dict:
     token = get_token(agent_id)
     url = f"{settings.base_url}/api/public/agents/{agent_id}/leads?token={token}"
-    return {"url": url, "token": token, "speed_to_lead": agents.get_automation(agent_id).get("speed_to_lead_enabled", False)}
+    automation = agents.get_automation(agent_id)
+    # Both flags: with speed-to-lead off AND auto-dial off, a form enquiry is only saved, never called,
+    # and the page must say so instead of promising a queue that nothing works through.
+    return {"url": url, "token": token,
+            "speed_to_lead": automation.get("speed_to_lead_enabled", False),
+            "auto_dial": automation.get("auto_dial_enabled", False),
+            "speed_to_lead_min_seconds": automation.get("speed_to_lead_min_seconds", 60),
+            "speed_to_lead_max_seconds": automation.get("speed_to_lead_max_seconds", 120)}
 
 
 @router.get("")
