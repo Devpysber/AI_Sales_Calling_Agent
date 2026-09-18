@@ -12,7 +12,7 @@ import { useAgent } from '@/lib/agent'
 import type { AgentProfile, AutomationSettings, Call, Page } from '@/lib/types'
 import { cn, formatDuration, timeAgo } from '@/lib/utils'
 
-type ProfileResponse = { profile: AgentProfile }
+type ProfileResponse = { profile: AgentProfile; transfer_contacts?: { phone: string; name: string | null }[] }
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
 const hourLabel = (h: number) => `${((h + 11) % 12) + 1}:00 ${h < 12 ? 'AM' : 'PM'}`
 type Routing = Pick<AgentProfile, 'transfer_number' | 'team_members' | 'inbound_mode' | 'transfer_on_request' | 'after_hours_mode' | 'after_hours_message' | 'forward_fallback' | 'notify_missed_calls' | 'inbound_collect'>
@@ -138,6 +138,26 @@ export default function Inbound() {
                 </div>
                 <div className="text-[13px] text-muted mb-2">Team members who should receive urgent alerts and fallback calls.</div>
                 {numberError && <div className="text-xs font-medium text-destructive">{numberError}</div>}
+                {/* What is saved right now, named from Sales Team Accounts. Without this the page could
+                    only show a bare number, or — with a half-filled row — nothing at all. */}
+                {!form.team_members?.length && !!data.transfer_contacts?.length && (
+                  <ul className="space-y-1.5">
+                    {data.transfer_contacts.map((c) => (
+                      <li key={c.phone} className="flex items-center gap-2 rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm">
+                        <UserRound className="size-4 shrink-0 text-fg-2" />
+                        <span className="min-w-0 flex-1 truncate">
+                          <span className="font-semibold">{c.name || 'Unnamed colleague'}</span>
+                          <span className="ml-2 font-mono text-xs text-muted">{c.phone}</span>
+                        </span>
+                        <span className="text-[11px] font-semibold text-muted">Saved</span>
+                      </li>
+                    ))}
+                    <li className="text-[11.5px] text-muted">
+                      Names come from Sales Team Accounts under Integrations &amp; system. Add a row here to override
+                      which numbers this agent rings.
+                    </li>
+                  </ul>
+                )}
                 {((form.team_members && form.team_members.length > 0) ? form.team_members : (form.transfer_number || '').split(',').map(n => ({ name: '', phone: n.trim(), email: '' }))).filter(m => form.team_members?.length || m.phone).map((member, i, arr) => (
                    <div key={i} className="flex items-start gap-2 rounded-xl border border-border p-3 bg-surface-2">
                      <div className="flex-1 space-y-2">

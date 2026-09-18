@@ -150,7 +150,17 @@ def delete_agent(request: Request, agent_id: int = Depends(workspace)):
 
 @router.get("/{agent_id}/profile")
 def get_profile(agent_id: int = Depends(workspace)):
-    return {"profile": agents.get_profile(agent_id), "voices": tts.SPEAKERS, "languages": tts.LANGUAGES}
+    from app.services import team_service
+    profile = agents.get_profile(agent_id)
+    # Who the transfer number actually reaches. The names live in Sales Team Accounts, so a routing
+    # page reading the profile alone could only ever show a bare number, or an empty row.
+    contacts = []
+    for part in str(profile.get("transfer_number") or "").split(","):
+        number = part.strip()
+        if number:
+            contacts.append({"phone": number, "name": team_service.name_for(number, agent_id)})
+    return {"profile": profile, "transfer_contacts": contacts,
+            "voices": tts.SPEAKERS, "languages": tts.LANGUAGES}
 
 
 @router.put("/{agent_id}/profile")
