@@ -98,11 +98,11 @@ export default function Agent() {
   return (
     <div className={cn(dirty && tab !== 'playground' && 'pb-20')}>
       <PageHeader eyebrow={<>{agent?.name} · Build</>} title="Persona & playground"
-        description="Shape how this agent introduces itself, sells and qualifies, then rehearse a call in the browser with its own voice and knowledge before it dials anyone."
+        description="Shape how this agent introduces itself, what it asks and how it handles pushback, then rehearse a call in the browser with its own voice and knowledge before it dials anyone."
         actions={<Tabs value={tab} onChange={setTab} items={[
           { value: 'playground', label: 'Playground' },
           { value: 'persona', label: <span className="flex items-center gap-1.5">Persona & voice{dirty && <span className="size-1.5 rounded-full bg-warning" />}</span> },
-          { value: 'playbook', label: 'Sales playbook' },
+          { value: 'playbook', label: 'Call playbook' },
         ]} />} />
 
       <AgentSummary profile={draft} saved={data.profile} voices={data.voices} languages={data.languages} docs={docs} checks={checks} onGo={setTab} />
@@ -224,6 +224,9 @@ function ProfileEditor({ section, draft, setDraft, data }: {
   const audio = useRef<HTMLAudioElement | null>(null)
   useEffect(() => () => audio.current?.pause(), [])
 
+  // What this agent calls the person on the line: patient, guest, student, customer…
+  const caller = (draft.customer_noun || 'customer').trim()
+
   const fill = (t: string) => t.replace(/\{(\w+)\}/g, (m, k: string) => ({ name: 'Rahul', agent: draft.agent_name, company: draft.company_name })[k] ?? m)
 
   const preview = async (key: string, text: string, language: string) => {
@@ -258,7 +261,7 @@ function ProfileEditor({ section, draft, setDraft, data }: {
             <Field label="Call to action" hint="The single next step the agent asks for"><Input value={draft.call_to_action} maxLength={200} onChange={(e) => set('call_to_action', e.target.value)} placeholder="Book a 20-minute video call with a solutions consultant" /></Field>
           </div>
         </Section>
-        <Section title="Conversation" description="Plain-language instructions, written as you'd brief a new sales rep.">
+        <Section title="Conversation" description="Plain-language instructions, written as you'd brief someone new on their first day.">
           <div className="grid gap-4">
             <Field label="Style & process"><Counted rows={6} max={3000} value={draft.instructions} onChange={(e) => set('instructions', e.target.value)} placeholder={'1. Confirm you are speaking to the decision maker.\n2. Ask about their current challenge.\n3. …'} /></Field>
             <Field label="Objection handling" hint="One objection per line, with how to respond"><Counted rows={6} max={3000} value={draft.objection_handling} onChange={(e) => set('objection_handling', e.target.value)} placeholder={'Too expensive → explain phased delivery and ask about budget range.\nAlready have a vendor → ask what they would improve.'} /></Field>
@@ -282,7 +285,7 @@ function ProfileEditor({ section, draft, setDraft, data }: {
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Agent name"><Input value={draft.agent_name} maxLength={60} onChange={(e) => set('agent_name', e.target.value)} /></Field>
             <Field label="Company name"><Input value={draft.company_name} maxLength={120} onChange={(e) => set('company_name', e.target.value)} /></Field>
-            <Field label="Company tagline" className="sm:col-span-2" hint="One line on what you do — used when the prospect asks “who are you?”">
+            <Field label="Company tagline" className="sm:col-span-2" hint={`One line on what you do — used when the ${caller} asks “who are you?”`}>
               <Input value={draft.company_tagline} maxLength={200} onChange={(e) => set('company_tagline', e.target.value)} placeholder="AI and software development partner for growing businesses" />
             </Field>
             <Field label="Its job" hint="How it describes itself: clinic front desk, order support, admissions counsellor…">
@@ -306,7 +309,7 @@ function ProfileEditor({ section, draft, setDraft, data }: {
           </div>
         </Section>
 
-        <Section title="Opening line" description="The first thing the prospect hears. Keep it under 20 words and end with a question.">
+        <Section title="Opening line" description={`The first thing the ${caller} hears. Keep it under 20 words and end with a question.`}>
           <div className="space-y-5">
             {([['greeting_en', 'English', 'en-IN'], ['greeting_hi', 'Hindi', 'hi-IN']] as const).map(([key, label, lang]) => {
               const bad = unknownPlaceholders(draft[key])
@@ -334,7 +337,7 @@ function ProfileEditor({ section, draft, setDraft, data }: {
         </Section>
 
         <Card className="flex items-center justify-between gap-4 p-5">
-          <div><div className="font-medium">Record calls</div><div className="text-sm text-muted">Save recordings and play them from call history. Tell prospects the call is recorded where the law requires it.</div></div>
+          <div><div className="font-medium">Record calls</div><div className="text-sm text-muted">Save recordings and play them from call history. Tell people the call is recorded where the law requires it.</div></div>
           <Switch checked={draft.record_calls} onChange={(v) => set('record_calls', v)} label="Record calls" />
         </Card>
         <Card className="flex items-center justify-between gap-4 p-5">
@@ -354,6 +357,9 @@ type ChatTurn = Turn & { meta?: AgentTurnResult }
 
 function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfile; unsaved: boolean; onSave: () => void; saving: boolean }) {
   const { base } = useAgent()
+  // Rehearsing a call should use the agent's own word for the person on the line.
+  const caller = (profile.customer_noun || 'customer').trim()
+  const Caller = caller.charAt(0).toUpperCase() + caller.slice(1)
   const [history, setHistory] = useState<ChatTurn[]>([])
   const [text, setText] = useState('')
   const [lang, setLang] = useState(profile.default_language || 'en-IN')
@@ -431,7 +437,7 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
   const reset = () => { audio.current?.pause(); setHistory([]); setSelected(null); setEnded(false); void greeting.refetch() }
 
   const copyTranscript = async () => {
-    const lines = history.map((t) => `${t.role === 'assistant' ? profile.agent_name : lead?.name ?? 'Prospect'}: ${t.text}`)
+    const lines = history.map((t) => `${t.role === 'assistant' ? profile.agent_name : lead?.name ?? Caller}: ${t.text}`)
     try { await navigator.clipboard.writeText(lines.join('\n')); toast.success('Transcript copied') } catch { toast.error('Clipboard unavailable') }
   }
 
@@ -456,7 +462,7 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
           <Tabs value={direction} onChange={(v) => { setDirection(v); setHistory([]); setSelected(null); setEnded(false) }}
             items={[{ value: 'outbound', label: 'Outbound' }, { value: 'inbound', label: 'Inbound' }]} />
           <Select value={leadId} onChange={(e) => { setLeadId(e.target.value ? Number(e.target.value) : ''); reset() }} className="h-8 w-auto max-w-44 text-[13px]" aria-label="Prospect">
-            <option value="">Sample prospect</option>
+            <option value="">Sample {caller}</option>
             {leads.data?.items.map((l) => <option key={l.id} value={l.id}>{l.name || l.phone}</option>)}
           </Select>
           <Select value={lang} onChange={(e) => { setLang(e.target.value); setHistory([]); setSelected(null); setEnded(false) }} className="h-8 w-auto text-[13px]" aria-label="Greeting language">
@@ -525,7 +531,7 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
           <form onSubmit={(e) => { e.preventDefault(); submit(text) }} className="flex items-center gap-2 p-3">
             <Button type="button" size="icon" variant={listening ? 'danger' : 'secondary'} onClick={toggleMic} disabled={ended} aria-label={listening ? 'Stop listening' : 'Speak'}>{listening ? <MicOff /> : <Mic />}</Button>
             <Input value={text} onChange={(e) => setText(e.target.value)} disabled={ended} maxLength={1000}
-              placeholder={ended ? 'Call ended — restart to try again' : listening ? 'Listening…' : `Reply as ${lead?.name ?? 'the prospect'}…`} className="h-10" autoFocus />
+              placeholder={ended ? 'Call ended — restart to try again' : listening ? 'Listening…' : `Reply as ${lead?.name ?? `the ${caller}`}…`} className="h-10" autoFocus />
             <Button type="submit" variant="primary" size="lg" disabled={!text.trim() || ended} loading={send.isPending} aria-label="Send">{!send.isPending && <SendHorizontal />}</Button>
           </form>
         </div>
@@ -538,7 +544,7 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
             action={avgMs !== null && <Badge tone={avgMs < 2500 ? 'success' : avgMs < 4500 ? 'warning' : 'danger'}>avg {(avgMs / 1000).toFixed(1)}s</Badge>} />
           {inspected ? <Inspector turn={inspected} /> : (
             <div className="space-y-3 p-5 text-sm text-muted">
-              <p>Reply as a prospect to see what the agent understood on each turn:</p>
+              <p>Reply as a {caller} to see what the agent understood on each turn:</p>
               <ul className="space-y-2">
                 {[[Target, 'Intent and lead temperature'], [UserRound, 'CRM fields it would update'], [BookOpen, 'Knowledge passages behind the answer']].map(([Icon, l]) => {
                   const I = Icon as typeof Target
