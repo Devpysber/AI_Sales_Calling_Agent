@@ -374,8 +374,11 @@ def draft_email(lead_id: int, agent_id: int = Depends(workspace)):
     from app.models.call import Call
     from app.core.database import SessionLocal
     with SessionLocal() as db:
-        call = db.query(Call).filter_by(lead_id=lead_id).order_by(Call.started_at.desc()).first()
-        summary = call.summary if call else "No prior conversation."
+        # Calls record created_at, answered_at and ended_at; there is no started_at, and asking for one
+        # made this endpoint fail every time it was opened.
+        call = (db.query(Call).filter_by(lead_id=lead_id)
+                .order_by(Call.created_at.desc(), Call.id.desc()).first())
+        summary = (call.summary if call else None) or "No prior conversation."
     
     prompt = f"""You are {persona.get('agent_name', 'an agent')} from {persona.get('company_name', 'our company')}.
 Write a highly professional follow-up email to the prospect '{lead.get('name') or 'there'}'.
