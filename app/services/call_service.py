@@ -371,9 +371,20 @@ class CallService:
             return
         urgent = str(summary.get("urgent") or "").lower() in ("true", "yes", "1")
         lead = (self.crm.get(lead_id) or {}) if lead_id else {}
-        who = lead.get("name") or lead.get("phone") or "A caller"
+        
+        who = lead.get("name") or lead.get("phone")
+        if not who:
+            from app.core.database import get_db
+            from app.models.call import Call
+            from app.services import team_service
+            db = next(get_db())
+            call_obj = db.query(Call).filter(Call.id == call_id).first()
+            if call_obj:
+                who = team_service.name_for(call_obj.phone_number, self.agent_id) or call_obj.phone_number
+        who = who or "A caller"
+
         from app.services.notification_service import notify_team
-        events.record("call.handover", f"Action for the team: {action}", f"from {who}" + (" · urgent" if urgent else ""),
+        events.record("call.handover", f"Action for the team: {action}", f"from {who}" + (" • urgent" if urgent else ""),
                       lead_id=lead_id, call_id=call_id, actor="ai")
         persona = agents.get_profile(self.agent_id)
         lines = [f"{who} asked for someone on the team to act.", "", f"What they need: {action}", ""]
