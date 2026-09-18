@@ -57,6 +57,19 @@ def call_goal(lead: dict, purpose: str | None) -> str | None:
                 f"in this order: Language Preference (ask which language they prefer to speak in), {', '.join(wanted)}. "
                 "Acknowledge each answer briefly. If they ask something first, answer it very briefly, then immediately ask the next detail. "
                 "You must not skip asking for their Name. Once collected, help them and move to the primary call to action.")
+    if purpose == "team":
+        who = (lead.get("team_name") or "").strip()
+        return ("This caller is one of OUR OWN COLLEAGUES" + (f", {who}" if who else "") + ", not a customer. They are "
+                "ringing the agent to check how it works. Do NOT sell, do NOT qualify them, do NOT ask for their name, "
+                "city or requirement, and do NOT try to book a meeting.\n"
+                "Greet them by name if you know it and ask what they would like to check. Then answer plainly and "
+                "honestly about yourself: what you are set up to do, what you do and do not know, what you would say "
+                "to a real customer, how you would handle a question or an objection, and what happens after a call "
+                "(what gets noted, who is told, when someone is rung back).\n"
+                "If they ask something the knowledge base does not cover, say so plainly — it tells them what is "
+                "missing, which is what they called to find out. If they ask you to role-play a customer call, do it "
+                "and stay in character until they stop you. Keep answers short and concrete, the way a colleague "
+                "would explain their own job.")
     if purpose == "inbound":
         return ("The customer called us. Thank them, find out what they need, answer from the knowledge base, "
                 "and move them to the call to action. Ask their name if you do not know it.")
@@ -84,6 +97,12 @@ def spoken_datetime(value: str, hindi: bool) -> str:
         return f"{day}, {part} {hour}{':' + f'{dt.minute:02d}' if dt.minute else ''} बजे"
     return f"{day} at {dt.strftime('%I:%M %p').lstrip('0')}"
 
+
+# A colleague checking their own agent: no company pitch, straight to what they want to look at.
+TEAM_GREETING = {"en": "Hi {name}, {agent} here. What would you like to check?",
+                 "hi": "नमस्ते {name}, {agent} बोल रहा हूँ। बताइए, क्या check करना है?"}
+TEAM_GREETING_ANON = {"en": "Hi, {agent} here. What would you like to check?",
+                      "hi": "नमस्ते, {agent} बोल रहा हूँ। बताइए, क्या check करना है?"}
 
 INBOUND_GREETING = {"en": "Thank you for calling {company}, this is {agent}. How can I help you today?",
                     "hi": "{company} में call करने के लिए धन्यवाद, मैं {agent} बोल रहा हूँ। मैं आपकी क्या मदद कर सकता हूँ?"}
@@ -118,7 +137,11 @@ def greeting(agent_id: int, lead: dict, language: str) -> str:
     template = persona["greeting_en"] if english else persona["greeting_hi"]
     purpose = lead.get("call_purpose") or ""
     key = "en" if english else "hi"
-    if purpose == "inbound":
+    if purpose == "team":
+        team_name = (lead.get("team_name") or "").strip()
+        template = TEAM_GREETING[key] if team_name else TEAM_GREETING_ANON[key]
+        name = team_name or name
+    elif purpose == "inbound":
         template = INBOUND_GREETING[key] if not name else INBOUND_GREETING_NAMED[key]
     elif purpose in CONTINUATION or lead.get("last_contacted_at"):
         # Not a first contact: short opener, then the suffix says why we are calling.

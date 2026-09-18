@@ -244,10 +244,17 @@ class CallService:
                 lead = crm.create({**seed, "phone": from_number, "source": "inbound call", "status": "New"}, actor="system")
         persona = agents.get_profile(agent_id)
         language = (lead or {}).get("language") or persona["default_language"]
-        collect = persona.get("inbound_collect") or ["name", "requirement"]
-        missing = [f for f in collect if not (lead or {}).get(agent.COLLECT_FIELDS.get(f, f))]
-        context = {**(lead or {"phone": from_number}), "call_purpose": "inbound", "collect": collect}
-        context["call_goal"] = agent.call_goal(context, "inbound_new" if missing else "inbound")
+        # A colleague ringing their own agent gets a walkthrough, not a sales call.
+        from app.services import team_service
+        team_name = team_service.name_for(from_number, agent_id)
+        if team_service.is_team_number(from_number, agent_id):
+            context = {**(lead or {"phone": from_number}), "call_purpose": "team", "team_name": team_name or ""}
+            context["call_goal"] = agent.call_goal(context, "team")
+        else:
+            collect = persona.get("inbound_collect") or ["name", "requirement"]
+            missing = [f for f in collect if not (lead or {}).get(agent.COLLECT_FIELDS.get(f, f))]
+            context = {**(lead or {"phone": from_number}), "call_purpose": "inbound", "collect": collect}
+            context["call_goal"] = agent.call_goal(context, "inbound_new" if missing else "inbound")
         session = call_session.create(agent_id=agent_id, lead_id=lead and lead["id"], lead=context, language=language)
         with get_db() as db:
             call = Call(agent_id=agent_id, lead_id=lead and lead["id"], session_id=session["id"], direction="inbound",

@@ -76,3 +76,21 @@ def agent_limit(member: dict) -> int:
     except (TypeError, ValueError):
         return DEFAULT_AGENT_LIMIT
     return max(0, limit)
+
+
+def is_team_number(number: str | None, agent_id: int | None = None) -> bool:
+    """
+    True when this number belongs to the people behind the agent: a team member's line, or the
+    number the agent transfers callers to. They ring their own agent to check it, not to buy.
+    """
+    wanted = _digits(number or "")
+    if not wanted:
+        return False
+    if name_for(number, agent_id) is not None:
+        return True
+    lines = call_numbers()
+    if agent_id is not None:
+        from app.services import agents
+        raw = str(agents.get_profile(agent_id).get("transfer_number") or "")
+        lines = lines + [_digits(part) for part in raw.split(",")]
+    return wanted in [line for line in lines if line]

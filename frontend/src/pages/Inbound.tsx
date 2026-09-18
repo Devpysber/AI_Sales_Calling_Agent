@@ -64,7 +64,7 @@ export default function Inbound() {
   const set = <K extends keyof Routing>(k: K, v: Routing[K]) => setForm((f) => (f ? { ...f, [k]: v } : f))
   // A half-filled team member row must not hide a transfer number that is still saved on the agent: the
   // backend forwards on `transfer_number`, so the badge here has to describe what will actually happen.
-  const memberNums = (form.team_members ?? []).map((m) => m.phone.trim()).filter((n) => n)
+  const memberNums = (form.team_members ?? []).map((m) => (m?.phone ?? '').trim()).filter((n) => n)
   const tNums = memberNums.length > 0 ? memberNums : (form.transfer_number || '').split(',').map((n) => n.trim()).filter((n) => n)
   const hasNumber = tNums.length > 0 && tNums.every(n => { const d = n.replace(/\D/g, ''); return d.length >= 11 && d.length <= 15 })
   const numberError = tNums.length > 0 && !hasNumber
@@ -140,9 +140,9 @@ export default function Inbound() {
                 {((form.team_members && form.team_members.length > 0) ? form.team_members : (form.transfer_number || '').split(',').map(n => ({ name: '', phone: n.trim(), email: '' }))).filter(m => form.team_members?.length || m.phone).map((member, i, arr) => (
                    <div key={i} className="flex items-start gap-2 rounded-xl border border-border p-3 bg-surface-2">
                      <div className="flex-1 space-y-2">
-                       <Input type="text" value={member.name} onChange={e => { const updated = [...arr]; updated[i].name = e.target.value; set('team_members', updated) }} placeholder="Name (e.g. Alice)" className="h-8 text-sm" />
-                       <Input type="tel" value={member.phone} onChange={e => { const updated = [...arr]; updated[i].phone = e.target.value; set('team_members', updated) }} placeholder="Phone (e.g. +91 98765 43210)" maxLength={20} className="h-8 text-sm" />
-                       <Input type="email" value={member.email} onChange={e => { const updated = [...arr]; updated[i].email = e.target.value; set('team_members', updated) }} placeholder="Email (e.g. alice@example.com)" className="h-8 text-sm" />
+                       <Input type="text" value={member?.name ?? ''} onChange={e => { const updated = [...arr]; updated[i].name = e.target.value; set('team_members', updated) }} placeholder="Name (e.g. Alice)" className="h-8 text-sm" />
+                       <Input type="tel" value={member?.phone ?? ''} onChange={e => { const updated = [...arr]; updated[i].phone = e.target.value; set('team_members', updated) }} placeholder="Phone (e.g. +91 98765 43210)" maxLength={20} className="h-8 text-sm" />
+                       <Input type="email" value={member?.email ?? ''} onChange={e => { const updated = [...arr]; updated[i].email = e.target.value; set('team_members', updated) }} placeholder="Email (e.g. alice@example.com)" className="h-8 text-sm" />
                      </div>
                      <button type="button" onClick={() => { const updated = [...arr]; updated.splice(i, 1); set('team_members', updated) }} className="text-muted hover:text-fg p-1 mt-1"><X className="size-4" /></button>
                    </div>
