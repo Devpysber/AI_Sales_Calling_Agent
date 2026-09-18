@@ -8,6 +8,7 @@ import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { AgentMark, LiveDot } from '@/components/AppShell'
+import { CallTimer, LiveNumber, LiveStamp, useArrivals } from '@/components/Live'
 import NewAgentSheet from '@/components/NewAgentSheet'
 import { CallStatusBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, Input, PageHeader, Ring, Select, Skeleton, StatTile, Tabs } from '@/components/ui'
@@ -291,6 +292,10 @@ export default function Home() {
     return out.slice(0, 8)
   }, [data])
 
+  // What landed since the last poll, so arrivals animate in instead of silently replacing the list.
+  const newEvents = useArrivals(activity.map((e) => e.id))
+  const newCalls = useArrivals(liveCalls.map((c) => c.id))
+
   const comparison = agents.map((a) => ({ name: a.name.length > 14 ? `${a.name.slice(0, 13)}…` : a.name, connected: a.period.connected, other: a.period.calls - a.period.connected }))
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
@@ -327,25 +332,21 @@ export default function Home() {
         description={`${agents.length} agent${agents.length > 1 ? 's' : ''} · ${totals.live ? `${totals.live} call${totals.live > 1 ? 's' : ''} live right now` : 'no calls live right now'} · ${totals.today} call${totals.today === 1 ? '' : 's'} today`}
         actions={
           <div className="flex items-center gap-2">
-            <span className={cn('flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold transition-all',
-              isFetching ? 'bg-success/10 text-success' : 'bg-surface-2 text-muted')}>
-              <span className={cn('size-1.5 rounded-full', isFetching ? 'animate-pulse bg-success' : 'bg-border')} />
-              {isFetching ? 'Updating…' : `Updated ${dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}`}
-            </span>
+            <LiveStamp fetching={isFetching} updatedAt={dataUpdatedAt} />
             {role !== 'team' && <Button variant="primary" onClick={() => setCreating(true)}><Plus />New agent</Button>}
           </div>
         }
       />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <StatTile label="Live now" value={totals.live} icon={<PhoneCall />} tone="success" sub={totals.live ? 'Across all agents' : 'All lines quiet'}
+        <StatTile label="Live now" value={<LiveNumber value={totals.live} />} icon={<PhoneCall />} tone="success" sub={totals.live ? 'Across all agents' : 'All lines quiet'}
           trend={totals.live > 0 ? <LiveDot on /> : undefined} />
         <Card className="relative overflow-hidden p-5 sm:col-span-2 xl:col-span-2">
           <div className="flex items-start justify-between">
             <div>
               <div className="text-[13px] font-semibold text-muted">Calls, last {data?.days} days</div>
               <div className="mt-2 flex items-baseline gap-3">
-                <span className="text-[30px] leading-none font-extrabold tabular-nums">{totals.calls}</span>
+                <span className="text-[30px] leading-none font-extrabold"><LiveNumber value={totals.calls} /></span>
                 <span className="text-sm text-muted"><b className="text-fg">{totals.connected}</b> connected{totals.rate !== null && ` · ${totals.rate}%`}</span>
               </div>
             </div>
@@ -440,11 +441,14 @@ export default function Home() {
               {liveCalls.length ? liveCalls.map((c) => {
                 const a = agents.find((x) => x.id === c.agent_id)
                 return (
-                  <Link key={c.id} to={`/a/${c.agent_id}/calls?status=active`} className="flex items-center gap-3 rounded-xl px-2 py-2.5 hover:bg-surface-2">
+                  <Link key={c.id} to={`/a/${c.agent_id}/calls?status=active`}
+                    className={cn('flex items-center gap-3 rounded-xl px-2 py-2.5 hover:bg-surface-2',
+                      newCalls.has(c.id) && 'animate-pop-in bg-success/5')}>
                     {a && <AgentMark agent={a} className="size-8 rounded-lg text-[10px]" />}
                     <div className="min-w-0 flex-1 leading-tight">
                       <div className="truncate text-sm font-bold">{callParty(c)}</div>
-                      <div className="truncate text-xs text-muted">{c.agent_name} · {timeAgo(c.created_at)}</div>
+                      {/* A live call shows its own clock: the panel then reads as running, not as a stale row. */}
+                      <div className="truncate text-xs text-muted">{c.agent_name} · <CallTimer since={c.answered_at ?? c.created_at} /> on the line</div>
                     </div>
                     <CallStatusBadge status={c.status} />
                   </Link>
@@ -475,8 +479,10 @@ export default function Home() {
             <ol className="px-5 pb-5">
               {activity.map((e) => {
                 return (
-                  <li key={e.id} className="relative border-l border-border pb-4 pl-4 last:pb-0">
-                    <span className="absolute top-1 -left-[5px] size-2.5 rounded-full ring-2 ring-surface" style={{ background: 'var(--fg)' }} />
+                  <li key={e.id} className={cn('relative border-l border-border pb-4 pl-4 last:pb-0',
+                    newEvents.has(e.id) && 'animate-rise')}>
+                    <span className={cn('absolute top-1 -left-[5px] size-2.5 rounded-full ring-2 ring-surface',
+                      newEvents.has(e.id) && 'animate-ping-once')} style={{ background: newEvents.has(e.id) ? 'var(--color-success)' : 'var(--fg)' }} />
                     <Link to={`/a/${e.agent_id}/activity`} className="block text-[13px] leading-snug font-semibold hover:text-brand">
                       <span className="line-clamp-2">{e.title}</span>
                     </Link>
