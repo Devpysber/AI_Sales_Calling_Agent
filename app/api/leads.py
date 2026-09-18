@@ -131,10 +131,25 @@ def board(search: str | None = None, qualification: str | None = None, per_colum
 
 
 @router.get("/export")
-def export(agent_id: int = Depends(workspace)):
+def export(search: str | None = None, status: str | None = None, call_status: str | None = None,
+           qualification: str | None = None, view: str | None = None, source: str | None = None,
+           agent_id: int = Depends(workspace)):
+    """The filtered view, not the whole book: the button sits next to the filters that produced it."""
     slug = "".join(c if c.isalnum() else "-" for c in agents.get(agent_id)["name"].lower()).strip("-") or "agent"
-    return Response(CRMService(agent_id).export_csv(), media_type="text/csv",
+    csv = CRMService(agent_id).export_csv(search=search, status=status, call_status=call_status,
+                                          qualification=qualification, view=view, source=source)
+    return Response(csv, media_type="text/csv",
                     headers={"Content-Disposition": f"attachment; filename={slug}-leads.csv"})
+
+
+@router.get("/ids")
+def matching_ids(search: str | None = None, status: str | None = None, call_status: str | None = None,
+                 qualification: str | None = None, view: str | None = None, source: str | None = None,
+                 limit: int = Query(5000, ge=1, le=20000), agent_id: int = Depends(workspace)):
+    """Every id the current filters select, so a bulk action can cover the result set, not one page."""
+    ids = CRMService(agent_id).matching_ids(limit=limit, search=search, status=status, call_status=call_status,
+                                            qualification=qualification, view=view, source=source)
+    return {"ids": ids, "limit": limit}
 
 
 @router.post("")

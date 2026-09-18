@@ -154,20 +154,32 @@ class CRMService:
             return {v: db.scalar(select(func.count()).select_from(self._view(self._scoped(select(Lead)), v).subquery())) or 0
                     for v in ("website", "new_callers", "never_called", "hot_uncalled", "callbacks", "meetings", "attention", "dnc")}
 
+    def _filtered(self, search=None, status=None, call_status=None, qualification=None, view=None, source=None):
+        """The leads a set of filters selects, before ordering or paging."""
+        query = self._view(self._scoped(select(Lead)), view)
+        if source:
+            query = query.where(Lead.source == source)
+        if search and search.strip():
+            query = query.where(lead_search_filter(search))
+        if status:
+            query = query.where(Lead.status == status)
+        if call_status:
+            query = query.where(Lead.call_status == call_status)
+        if qualification:
+            query = query.where(Lead.qualification == qualification)
+        return query
+
+    def matching_ids(self, limit: int = 5000, **filters) -> list[int]:
+        """Every lead id a filter selects, for acting on a whole result set rather than one page."""
+        with get_db() as db:
+            query = self._filtered(**filters).order_by(Lead.id.desc()).limit(limit)
+            return list(db.scalars(query.with_only_columns(Lead.id)).all())
+
     def list_leads(self, search=None, status=None, call_status=None, qualification=None, sort="id", order="desc",
                    page=1, page_size=25, view=None, source=None) -> dict:
         with get_db() as db:
-            query = self._view(self._scoped(select(Lead)), view)
-            if source:
-                query = query.where(Lead.source == source)
-            if search and search.strip():
-                query = query.where(lead_search_filter(search))
-            if status:
-                query = query.where(Lead.status == status)
-            if call_status:
-                query = query.where(Lead.call_status == call_status)
-            if qualification:
-                query = query.where(Lead.qualification == qualification)
+            query = self._filtered(search=search, status=status, call_status=call_status,
+                                   qualification=qualification, view=view, source=source)
             total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
             column = SORTABLE.get(sort, Lead.id)
             query = query.order_by(column.desc().nulls_last() if order == "desc" else column.asc().nulls_last())
@@ -528,9 +540,10 @@ class CRMService:
         return {"created": created, "updated": updated, "skipped_duplicates": skipped, "errors": errors[:500], "mapping": mapping,
                 "batch_tag": batch}
 
-    def export_csv(self) -> str:
+    def export_csv(self, **filters) -> str:
+        """The rows the person is looking at. Exporting everything while a filter is on is a lie."""
         with get_db() as db:
-            rows = [l.to_dict() for l in db.scalars(self._scoped(select(Lead)).order_by(Lead.id))]
+            rows = [l.to_dict() for l in db.scalars(self._filtered(**filters).order_by(Lead.id))]
         for r in rows:
             r["tags"] = ",".join(r["tags"])
         return pd.DataFrame(rows).to_csv(index=False)

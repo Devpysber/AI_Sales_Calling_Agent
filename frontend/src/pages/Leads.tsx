@@ -68,7 +68,10 @@ export default function Leads() {
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const [search, setSearch] = useState(params.get('search') ?? '')
-  const [filters, setFilters] = useState({ status: '', call_status: '', qualification: params.get('qualification') ?? '', view: params.get('view') ?? '' })
+  const [filters, setFilters] = useState({
+    status: params.get('status') ?? '', call_status: params.get('call_status') ?? '',
+    qualification: params.get('qualification') ?? '', view: params.get('view') ?? '',
+  })
   const [sort, setSort] = useState({ key: 'id', order: 'desc' as 'asc' | 'desc' })
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -77,6 +80,15 @@ export default function Leads() {
   const q = useDebounced(search)
 
   useEffect(() => { setPage(1) }, [q, filters])
+  // The address bar describes what is on screen: reload, share or come back and the view is the same.
+  useEffect(() => {
+    const next = new URLSearchParams(params)
+    for (const [key, value] of Object.entries({ search: q, ...filters })) {
+      if (value) next.set(key, value)
+      else next.delete(key)
+    }
+    if (next.toString() !== params.toString()) setParams(next, { replace: true })
+  }, [q, filters]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const open = params.get('open')
     if (open) navigate(path(`/leads/${open}`), { replace: true })
@@ -116,6 +128,21 @@ export default function Leads() {
 
   const s = stats.data
   const items = data?.items ?? []
+  const [selectingAll, setSelectingAll] = useState(false)
+
+  // Acting on a filtered set of 400 leads should not mean paging through it 25 at a time.
+  const selectAllMatching = async () => {
+    setSelectingAll(true)
+    try {
+      const { ids } = await api<{ ids: number[] }>(`${base}/leads/ids`, { params: { search: q, ...filters } })
+      setSelected(new Set(ids))
+      if (data && ids.length < data.total) toast.info(`Selected the first ${ids.length} of ${data.total}`)
+    } catch (e) {
+      toast.error('Could not select them all', { description: (e as Error).message })
+    } finally {
+      setSelectingAll(false)
+    }
+  }
   const allSelected = items.length > 0 && items.every((l) => selected.has(l.id))
   const toggle = (id: number) => setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
   const sortBy = (key: string) => setSort((prev) => ({ key, order: prev.key === key && prev.order === 'desc' ? 'asc' : 'desc' }))
@@ -146,7 +173,9 @@ export default function Leads() {
         title="Leads"
         description="Everyone this agent calls, with the AI's qualification and the result of every conversation. Leads here are never shared with other agents."
         actions={<>
-          <a href={`${base}/leads/export`}><Button><Download />Export CSV</Button></a>
+          <a href={`${base}/leads/export?${new URLSearchParams({ search: q, ...filters }).toString()}`}>
+            <Button><Download />Export{data && data.total !== s?.total ? ` ${data.total}` : ''} CSV</Button>
+          </a>
           <Link to={path('/import')}><Button><Upload />Import</Button></Link>
           <Button variant="primary" onClick={() => setAdding(true)}><Plus />Add lead</Button>
         </>}>
@@ -218,6 +247,12 @@ export default function Leads() {
         {selected.size > 0 && (
           <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-border bg-surface-2 px-4 py-2.5 text-sm text-fg">
             <span className="font-bold">{selected.size} selected</span>
+            {data && data.total > items.length && selected.size < data.total && (
+              <Button size="sm" variant="ghost" loading={selectingAll} onClick={selectAllMatching}>
+                Select all {data.total}
+              </Button>
+            )}
+            {selected.size > 0 && <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>}
             <div className="flex-1" />
             <Button size="sm" loading={bulk.isPending && bulk.variables?.action === 'call'} onClick={async () => {
               if (await confirm({ title: `Call ${selected.size} lead(s) now?`, description: 'Calls start immediately (up to your concurrent call limit), even outside calling hours.', confirmLabel: 'Start calls' }))
