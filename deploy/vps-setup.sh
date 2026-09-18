@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time setup of Psyber Voice on a fresh Ubuntu VPS (Hostinger KVM 2 or similar).
+# One-time setup of Samvaad AI on a fresh Ubuntu VPS (Hostinger KVM 2 or similar).
 #
 #   git clone https://github.com/Devpysber/AI_Sales_Calling_Agent.git /opt/psyber-voice
 #   cd /opt/psyber-voice && sudo bash deploy/vps-setup.sh

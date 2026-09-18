@@ -1,4 +1,4 @@
-# Psyber Voice — AI Sales Voice Agent
+# Samvaad AI — AI Sales Voice Agent
 
 An AI sales agent that phones your leads in English, Hindi and other Indian languages. It answers questions from your company documents (RAG), qualifies each lead, books meetings, and records every conversation in a built-in CRM.
 

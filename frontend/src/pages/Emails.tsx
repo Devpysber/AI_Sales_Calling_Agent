@@ -64,7 +64,7 @@ const TEMPLATES = [
   {
     id: "report", name: "Daily report", description: "End-of-day digest sent to your team inbox", icon: "✨",
     subject: "Daily Agent Activity Report",
-    body: (agent: string, _company: string) => `Hi Team,\n\nHere is the daily summary for ${agent}:\n\n[Click "Draft with AI" to generate today's metrics]\n\nBest,\nPsyber Voice AI`
+    body: (agent: string, _company: string) => `Hi Team,\n\nHere is the daily summary for ${agent}:\n\n[Click "Draft with AI" to generate today's metrics]\n\nBest,\nSamvaad AI`
   },
 ]
 

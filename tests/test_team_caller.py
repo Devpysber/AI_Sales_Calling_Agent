@@ -96,3 +96,28 @@ def test_a_customer_call_still_creates_a_lead(client, monkeypatch):
     lead = CRMService(None).get(session["lead_id"])
     assert lead["phone"] == "+917879417266"
     assert call_service.CallService().get(session["call_id"])["trigger"] == "inbound"
+
+
+def test_the_agent_can_report_on_itself_to_a_colleague(client, monkeypatch):
+    """A colleague asking "how is it going?" gets this workspace's real numbers, not a guess."""
+    from app.services import agent as agent_service
+    from app.services import team_service
+
+    made = client.post("/api/agents", json={"name": "Brief desk"}).json()
+    client.post(f"/api/agents/{made['id']}/leads", json={"name": "Asha", "phone": "+919000000401"})
+
+    brief = agent_service.team_brief(made["id"])
+    assert "Today:" in brief and "Leads: 1 in total" in brief
+    # The gap a colleague most needs to hear about is stated, not hidden.
+    assert "Nothing is loaded" in brief
+
+    # And it reaches the prompt only on a colleague's call.
+    monkeypatch.setattr(team_service, "members",
+                        lambda: [{"id": "m1", "name": "Ashish", "phone": "+919584516352", "email": "a@b.c"}])
+    persona = dict(client.get(f"/api/agents/{made['id']}/profile").json()["profile"])
+
+    team_prompt = agent_service._system_prompt(persona, {"call_purpose": "team"}, [], made["id"])
+    assert "How this agent is doing right now" in team_prompt
+
+    customer_prompt = agent_service._system_prompt(persona, {"call_purpose": "inbound"}, [], made["id"])
+    assert "How this agent is doing right now" not in customer_prompt, "a customer must never hear our numbers"

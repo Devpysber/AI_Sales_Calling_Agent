@@ -49,7 +49,7 @@ def _html_template(body: str) -> str:
             {html_body}
         </div>
         <div style="background: #f9f9f9; padding: 24px 40px; text-align: center; border-top: 1px solid #eaeaea; font-size: 13px; color: #888888;">
-            Sent via Psyber Voice AI Caller<br>
+            Sent via Samvaad AI Caller<br>
             <a href="https://aicaller.psyber.in" style="color: #5b4bf5; text-decoration: none;">aicaller.psyber.in</a>
         </div>
     </div>

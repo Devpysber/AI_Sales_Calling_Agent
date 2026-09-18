@@ -35,7 +35,7 @@ export default function Login() {
         <div className="absolute -right-32 -bottom-40 size-[420px] rounded-full bg-[#00c2a8] opacity-20 blur-[120px]" />
         <div className="relative flex items-center gap-2.5">
           <div className="grid size-9 place-items-center rounded-lg bg-white/10 ring-1 ring-white/20"><AudioWaveform className="size-5" /></div>
-          <span className="text-lg font-semibold">Psyber Voice</span>
+          <span className="text-lg font-semibold">Samvaad AI</span>
         </div>
         <div className="relative mt-auto max-w-md">
           <h2 className="text-4xl leading-tight font-semibold tracking-tight">Your AI sales team that never stops dialling.</h2>

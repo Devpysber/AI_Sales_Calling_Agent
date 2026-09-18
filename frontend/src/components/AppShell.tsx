@@ -192,7 +192,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
     <div className={cn('flex h-full flex-col border-r border-border bg-ink text-ink-fg', mobile ? 'w-72' : compact ? 'w-[76px]' : 'w-[272px]', 'transition-[width] duration-200')}>
       <div className={cn('flex items-center gap-2.5 pt-4 pb-3', compact ? 'flex-col px-2' : 'px-4')}>
         <Link to="/" className="grid size-9 shrink-0 place-items-center rounded-xl bg-ink-fg text-ink shadow-sm"><AudioWaveform className="size-5" /></Link>
-        {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="text-[15px] font-extrabold tracking-tight">Psyber Voice</div><div className="text-[11px] text-ink-muted">Multi-agent calling</div></div>}
+        {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="text-[15px] font-extrabold tracking-tight">Samvaad AI</div><div className="text-[11px] text-ink-muted">Multi-agent calling</div></div>}
         {!mobile && (
           <button type="button" onClick={() => setCompact(!compact)} title={compact ? 'Expand sidebar ( [ )' : 'Collapse sidebar ( [ )'}
             className="grid size-7 place-items-center rounded-lg text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg">
@@ -388,7 +388,7 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
   const pageTitle = id ? TITLES[sub] ?? '' : sub === '/settings' ? 'Integrations & system' : sub === '/profile' ? 'Admin profile' : 'All agents'
   useEffect(() => {
     const live = agents.reduce((n, a) => n + a.stats.live, 0)
-    document.title = `${live ? `(${live} live) ` : ''}${agent ? `${pageTitle} · ${agent.name}` : pageTitle} · Psyber Voice`
+    document.title = `${live ? `(${live} live) ` : ''}${agent ? `${pageTitle} · ${agent.name}` : pageTitle} · Samvaad AI`
   }, [agent, pageTitle, agents])
 
   const go = useCallback((to: string) => navigate(id ? `/a/${id}${to === '/' ? '' : to}` : to), [id, navigate])
