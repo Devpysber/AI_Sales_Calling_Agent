@@ -11,7 +11,7 @@ import { api } from '@/lib/api'
 import { useAgent } from '@/lib/agent'
 import { useDebounced } from '@/lib/useDebounced'
 import type { Call, CallStats, Page } from '@/lib/types'
-import { CALL_STATUSES, cn, formatDate, formatDuration, timeAgo, titleCase } from '@/lib/utils'
+import { callHandledBy, callParty, CALL_STATUSES, cn, formatDate, formatDuration, timeAgo, titleCase } from '@/lib/utils'
 
 function LiveCallCard({ call, onOpen }: { call: Call; onOpen: () => void }) {
   const { base } = useAgent()
@@ -23,7 +23,7 @@ function LiveCallCard({ call, onOpen }: { call: Call; onOpen: () => void }) {
         <span className="relative grid size-10 place-items-center rounded-full bg-success-soft text-success"><PhoneCall className="size-4" />
           <span className="absolute -top-0.5 -right-0.5"><LiveDot on /></span></span>
         <div className="min-w-0 flex-1 leading-tight">
-          <div className="truncate font-bold">{call.lead_name ?? call.to_number}</div>
+          <div className="truncate font-bold">{callParty(call)}</div>
           <div className="text-xs text-muted">{call.direction === 'inbound' ? 'Inbound' : 'Outbound'} · {call.direction === 'inbound' ? call.from_number : call.to_number} · {timeAgo(call.created_at)}</div>
         </div>
         <CallStatusBadge status={call.status} />
@@ -126,6 +126,7 @@ export default function Calls() {
                               ? <button type="button" onClick={(e) => { e.stopPropagation(); navigate(path(`/leads/${c.lead_id}`)) }} className="font-bold hover:underline">{c.lead_name ?? 'Unknown'}</button>
                               : <div className="font-bold">{c.lead_name ?? 'Unknown caller'}</div>}
                             <div className="font-mono text-xs whitespace-nowrap text-muted">{c.direction === 'inbound' ? c.from_number : c.to_number}</div>
+                            <div className="text-[11px] whitespace-nowrap text-muted">{callHandledBy(c, agent?.name)}</div>
                           </div>
                         </div>
                       </td>

@@ -256,17 +256,29 @@ class CallService:
             db.add(call)
             db.flush()
             call_id = call.id
-        events.record("call.inbound", f"Inbound call from {lead['name'] if lead else from_number}",
+        events.record("call.inbound", f"Inbound call from {(lead or {}).get('name') or '+' + from_number.lstrip('+')}",
                       agent_id=agent_id, lead_id=lead and lead["id"], call_id=call_id)
         return call_session.update(session["id"], call_id=call_id)
 
-    def mark_transferred(self, call_id: int, detail: str, trigger: str | None = "transfer"):
+    def transfer_label(self, number: str | None) -> str:
+        """'Ashish Sharma (+919584516352)' when we know the colleague, otherwise just the number."""
+        if not number:
+            return "your team"
+        from app.services import team_service
+        first = number.split(",")[0].strip()
+        name = team_service.name_for(first, self.agent_id)
+        return f"{name} ({first})" if name else first
+
+    def mark_transferred(self, call_id: int, detail: str, trigger: str | None = "transfer", number: str | None = None):
         with get_db() as db:
             call = db.get(Call, call_id)
             if call is None:
                 return
             if trigger == "forward":
                 call.trigger = "forwarded"
+            if number:
+                # Stored on the call so every list can name the line that took over, not our own inbound number.
+                call.transferred_to = number.split(",")[0].strip()[:32]
             agent_id, lead_id = call.agent_id, call.lead_id
         events.record("call.transferred", detail, agent_id=agent_id, lead_id=lead_id, call_id=call_id)
 
@@ -300,11 +312,6 @@ class CallService:
         if session:
             call_session.update(session_id, ended=True)
 
-        customer_turns = sum(1 for m in history if m["role"] == "user")
-        if (status == "Completed" or status == "Failed") and customer_turns > 0:
-            import threading
-            threading.Thread(target=self._summarize, args=(call_id, lead_id, history)).start()
-
         if lead_id:
             lead = self.crm.get(lead_id) or {}
             updates = {"call_status": status}
@@ -329,7 +336,9 @@ class CallService:
         events.record("call.ended", f"Call {status.lower()}", f"{duration}s · {cause or ''}".strip(" ·"),
                       agent_id=agent_id, lead_id=lead_id, call_id=call_id, data={"status": status, "duration": duration})
 
-        customer_turns = sum(1 for t in history if t["role"] == "customer")
+        # Live calls log the caller as "customer", the voicemail path as "user": counting only one of them
+        # used to schedule the summary twice on some calls (double LLM spend, duplicate team alerts).
+        customer_turns = sum(1 for t in history if t["role"] in ("customer", "user"))
         if (status == "Completed" or status == "Failed") and customer_turns:
             _turn_pool.submit(self._summarize, call_id, lead_id, history)
 
@@ -629,13 +638,20 @@ class CallService:
                     setattr(call, key, value)
             return call
 
+    def _with_team_name(self, data: dict) -> dict:
+        """Name the colleague a call was handed to, so lists can say who took it instead of a bare number."""
+        if data.get("transferred_to"):
+            from app.services import team_service
+            data["transferred_to_name"] = team_service.name_for(data["transferred_to"], data.get("agent_id"))
+        return data
+
     def get(self, call_id: int) -> dict | None:
         with get_db() as db:
             row = db.execute(self._scoped(select(Call, Lead.name).outerjoin(Lead, Lead.id == Call.lead_id))
                              .where(Call.id == call_id)).first()
             if not row:
                 return None
-            data = row[0].to_dict(row[1])
+            data = self._with_team_name(row[0].to_dict(row[1]))
             session_id = row[0].session_id
         if data["status"] in ACTIVE:
             session = call_session.get(session_id)
@@ -664,7 +680,7 @@ class CallService:
                 query = query.where(condition)
             total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
             rows = db.execute(query.order_by(Call.id.desc()).offset((page - 1) * page_size).limit(page_size)).all()
-            return {"items": [c.to_dict(n, with_transcript=False) for c, n in rows], "total": total,
+            return {"items": [self._with_team_name(c.to_dict(n, with_transcript=False)) for c, n in rows], "total": total,
                     "page": page, "page_size": page_size}
 
     def active_count(self) -> int:

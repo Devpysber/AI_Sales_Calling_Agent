@@ -53,3 +53,22 @@ export function playAudio(url: string) {
   void audio.play()
   return audio
 }
+
+/** The number on the other end of a call: the caller for inbound, the person we dialled for outbound. */
+export const callerNumber = (call: { direction: string; from_number: string | null; to_number: string | null }) =>
+  (call.direction === 'inbound' ? call.from_number : call.to_number) ?? null
+
+/** Who the row is about: the lead's name, else the other party's number, never our own platform number. */
+export const callParty = (call: { direction: string; lead_name: string | null; from_number: string | null; to_number: string | null }) =>
+  call.lead_name || callerNumber(call) || 'Unknown caller'
+
+/** Who actually spoke to the caller: the human line the call reached, otherwise the AI agent by name. */
+export const callHandledBy = (
+  call: { trigger: string; transferred_to?: string | null; transferred_to_name?: string | null },
+  agentName?: string | null,
+) =>
+  call.transferred_to
+    ? `${call.transferred_to_name || 'Team'} · ${call.transferred_to}`
+    : call.trigger === 'forwarded'
+      ? 'Team · number not recorded'
+      : `${agentName || 'AI agent'} (AI)`

@@ -23,6 +23,8 @@ class Agent(Base):
     # Plivo number used as caller ID and to route inbound calls; empty = PLIVO_PHONE_NUMBER
     phone_number: Mapped[str | None] = mapped_column(String(32), index=True)
     status: Mapped[str] = mapped_column(String(16), default="active")  # active | paused
+    # Team member id that created this workspace ("admin" for the owner): the per-member agent limit counts these.
+    created_by: Mapped[str | None] = mapped_column(String(64), index=True)
     profile: Mapped[str | None] = mapped_column(Text)     # JSON persona (see agents.PROFILE_DEFAULTS)
     automation: Mapped[str | None] = mapped_column(Text)  # JSON schedule (see agents.AUTOMATION_DEFAULTS)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -35,6 +37,7 @@ class Agent(Base):
             "color": self.color,
             "phone_number": self.phone_number,
             "status": self.status,
+            "created_by": self.created_by,
             "created_at": iso(self.created_at),
         }
 

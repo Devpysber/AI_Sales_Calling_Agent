@@ -56,10 +56,23 @@ def create_agent(body: AgentIn, request: Request, response: Response):
     
     if body.copy_from and not agents.exists(body.copy_from):
         raise HTTPException(400, "The agent to copy from does not exist.")
+
+    # A team member may only create the number of workspaces the admin allowed them (one by default).
+    if user == "team":
+        from app.services import team_service
+        member = team_service.by_id(team_id) if team_id else None
+        if not member:
+            raise HTTPException(403, "Your team account was not found. Ask an administrator to sign you in again.")
+        limit = team_service.agent_limit(member)
+        used = agents.created_count(team_id)
+        if used >= limit:
+            raise HTTPException(403, f"You have used all {limit} agent{'s' if limit != 1 else ''} allowed on your account. "
+                                     "Ask an administrator to raise your limit.")
+
     data = body.model_dump(exclude_none=True)
     try:
         from app.core.auth import actor
-        result = agents.create(data, actor=actor(request))
+        result = agents.create(data, actor=actor(request), created_by=team_id if user == "team" else "admin")
         
         unlocked = payload.get("unlocked", [])
         if result["id"] not in unlocked:

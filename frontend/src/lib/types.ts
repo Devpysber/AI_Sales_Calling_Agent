@@ -49,6 +49,8 @@ export interface Call {
   trigger: string
   from_number: string | null
   to_number: string | null
+  transferred_to?: string | null
+  transferred_to_name?: string | null
   call_uuid: string | null
   status: string
   hangup_cause: string | null

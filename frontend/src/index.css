@@ -46,6 +46,7 @@
   --animate-slide-in: slide-in .22s cubic-bezier(.2,.8,.2,1);
   --animate-pop-in: pop-in .16s cubic-bezier(.2,.8,.2,1);
   --animate-rise: rise .35s cubic-bezier(.2,.8,.2,1) both;
+  --animate-ping-once: ping-once 1.2s cubic-bezier(0,0,.2,1) 2;
 }
 
 @keyframes pulse-dot { 50% { opacity: .35; transform: scale(.85); } }
@@ -53,6 +54,8 @@
 @keyframes slide-in { from { transform: translateX(24px); opacity: 0; } }
 @keyframes pop-in { from { transform: translateY(-6px) scale(.98); opacity: 0; } }
 @keyframes rise { from { transform: translateY(8px); opacity: 0; } }
+/* One attention pulse on a freshly arrived row, then it settles: a permanent ping is noise. */
+@keyframes ping-once { 70%, 100% { transform: scale(2.2); opacity: 0; } }
 
 :root {
   /* Monochrome: warm off-white paper, black ink. Colour is reserved for status. */
@@ -151,4 +154,13 @@ kbd {
   body, main { background: #fff !important; }
   main { max-width: none !important; padding: 0 !important; }
   .print-break { break-inside: avoid; }
+}
+
+/* Respect the OS setting: the dashboard still updates, it just stops moving. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
 }

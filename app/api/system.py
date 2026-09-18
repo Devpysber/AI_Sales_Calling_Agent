@@ -177,7 +177,7 @@ async def snooze_alert(body: dict):
 # ---------------- team members ----------------
 
 from app.services.settings_service import SettingsService
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import hashlib
 import re
 import uuid
@@ -187,7 +187,7 @@ class TeamMemberUpdate(BaseModel):
     name: str
     email: str
     password: str | None = None
-    max_agents: int = 2
+    max_agents: int = 1      # workspaces this member may create; the admin raises it per person
     phone: str = ""          # the line a transferred call rings, and where the team is reached
     role: str = "Sales"      # what they handle, shown on the team list
     notes: str = ""
@@ -285,9 +285,14 @@ async def update_secrets(body: dict):
 
 @router.get("/system/team-members", dependencies=[Depends(require_admin)])
 async def get_team_members():
+    from app.services import agents as agent_service
+    from app.services import team_service
     members = SettingsService().get_state("team_members") or []
     for m in members:
         m.pop("password_hash", None)
+        # Shown next to the limit so the admin can see who is out of room before they ask.
+        m["max_agents"] = team_service.agent_limit(m)
+        m["created_agents"] = agent_service.created_count(m.get("id") or "")
     return {"members": members}
 
 @router.post("/system/team-members", dependencies=[Depends(require_admin)])
@@ -315,6 +320,36 @@ async def add_team_member(body: TeamMemberUpdate):
     members.append(new_member)
     SettingsService().set_state("team_members", members)
     return {"ok": True}
+
+class TeamMemberEdit(BaseModel):
+    name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    role: str | None = None
+    notes: str | None = None
+    max_agents: int | None = Field(None, ge=0, le=100)
+
+
+@router.put("/system/team-members/{member_id}", dependencies=[Depends(require_admin)])
+async def update_team_member(member_id: str, body: TeamMemberEdit):
+    members = SettingsService().get_state("team_members") or []
+    member = next((m for m in members if m.get("id") == member_id), None)
+    if not member:
+        raise HTTPException(404, "Member not found.")
+    values = body.model_dump(exclude_none=True)
+    if "email" in values:
+        email = values["email"].strip().lower()
+        if any(m.get("email") == email and m.get("id") != member_id for m in members):
+            raise HTTPException(400, "A team member with this email already exists.")
+        values["email"] = email
+    for key in ("name", "phone", "role", "notes"):
+        if key in values:
+            values[key] = values[key].strip()
+    member.update(values)
+    SettingsService().set_state("team_members", members)
+    safe = {k: v for k, v in member.items() if k != "password_hash"}
+    return {"ok": True, "member": safe}
+
 
 @router.delete("/system/team-members/{member_id}", dependencies=[Depends(require_admin)])
 async def delete_team_member(member_id: str):

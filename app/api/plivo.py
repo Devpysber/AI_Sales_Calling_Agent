@@ -200,7 +200,9 @@ async def answer(request: Request):
     if not p.get("sid"):
         route = inbound_route(persona, agent_id, p.get("From"))
         if route == "forward":
-            await asyncio.to_thread(calls.mark_transferred, session["call_id"], "Forwarded to " + persona["transfer_number"], "forward")
+            await asyncio.to_thread(calls.mark_transferred, session["call_id"],
+                                    "Forwarded to " + calls.transfer_label(persona["transfer_number"]),
+                                    "forward", persona["transfer_number"])
             
             key = lang_key(session)
             text = TRANSFER_LINES[key]

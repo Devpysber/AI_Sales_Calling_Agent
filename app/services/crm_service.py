@@ -11,10 +11,16 @@ import pandas as pd
 from sqlalchemy import func, or_, select
 
 from app.core.database import get_db
+from app.core.logging import get_logger
 from app.models.lead import Lead
 from app.services import events
 
+log = get_logger(__name__)
+
 IST = timezone(timedelta(hours=5, minutes=30))
+
+# Fields the AI may never write: the phone number is what we dial, so it stays under human control.
+AI_PROTECTED = {"phone"}
 
 EDITABLE = {"name", "company", "phone", "email", "city", "language", "source", "tags", "notes", "do_not_call",
             "status", "call_status", "retry_count", "qualification", "summary", "requirements", "objections",
@@ -316,10 +322,15 @@ class CRMService:
     # ---------------- write ----------------
 
     @staticmethod
-    def _apply(lead: Lead, data: dict) -> dict:
+    def _apply(lead: Lead, data: dict, actor: str = "admin") -> dict:
         changes = {}
         for key, value in data.items():
             if key not in EDITABLE:
+                continue
+            if key in AI_PROTECTED and actor == "ai":
+                # Anything a caller says is untrusted input. The dialled number must only ever come from a
+                # person using the CRM, so "call me on 98765..." can never redirect our outbound calls.
+                log.warning("Ignored AI attempt to change %s on lead %s", key, lead.id)
                 continue
             if key == "phone":
                 value = normalize_phone(value)
@@ -361,7 +372,7 @@ class CRMService:
             lead = self._load(db, lead_id)
             if lead is None:
                 raise LookupError(f"Lead {lead_id} not found.")
-            changes = self._apply(lead, data)
+            changes = self._apply(lead, data, actor)
             if touch:
                 lead.last_contacted_at = _now_utc()
             result = lead.to_dict()

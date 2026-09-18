@@ -6,7 +6,7 @@ import { CallStatusBadge, QualificationBadge, SentimentDot } from '@/components/
 import { Badge, Button, Sheet, Skeleton, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
 import type { Call } from '@/lib/types'
-import { cn, formatDate, formatDuration, titleCase } from '@/lib/utils'
+import { callHandledBy, callParty, cn, formatDate, formatDuration, titleCase } from '@/lib/utils'
 import { useAgent } from '@/lib/agent'
 
 const LIVE = ['Queued', 'Ringing', 'In Progress']
@@ -33,8 +33,8 @@ export default function CallSheet({ callId, onClose, onOpenLead }: { callId: num
 
   return (
     <Sheet open={callId !== null} onClose={onClose} width="max-w-2xl"
-      title={call ? <span className="flex items-center gap-2">{call.lead_name ?? call.to_number ?? 'Call'} <CallStatusBadge status={call.status} /></span> : 'Call'}
-      description={call && `${call.direction === 'inbound' ? 'Inbound' : 'Outbound'} · ${formatDate(call.created_at)} · ${call.direction === 'inbound' ? call.from_number : call.to_number}`}
+      title={call ? <span className="flex items-center gap-2">{callParty(call)} <CallStatusBadge status={call.status} /></span> : 'Call'}
+      description={call && `${call.direction === 'inbound' ? 'Inbound' : 'Outbound'} · ${formatDate(call.created_at)} · ${call.direction === 'inbound' ? call.from_number : call.to_number} · ${callHandledBy(call)}`}
       footer={call && <>
         {call.lead_id && onOpenLead && <Button onClick={() => onOpenLead(call.lead_id!)}><User />Open lead</Button>}
         {live && <Button variant="danger" loading={hangup.isPending} onClick={async () => {

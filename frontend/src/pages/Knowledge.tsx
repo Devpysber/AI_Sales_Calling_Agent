@@ -129,7 +129,11 @@ export default function Knowledge() {
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Documents" value={stats?.documents ?? '—'} sub={counts.processing ? `${counts.processing} processing` : counts.failed ? <span className="text-danger">{counts.failed} failed</span> : 'All processed'} />
         <Stat label="Searchable passages" value={stats?.chunks ?? '—'} sub="Chunks the agent retrieves from" />
-        <Stat label="Search mode" value={stats ? (stats.semantic ? 'Semantic' : 'Keyword') : '—'} sub={stats?.semantic ? 'Meaning + keyword match' : 'Exact word match only'} />
+        {/* With nothing uploaded "Keyword" reads like a limitation; it is simply that there is nothing to search yet. */}
+        <Stat label="Search mode"
+          value={!stats || !stats.documents ? '—' : stats.semantic ? 'Hybrid' : 'Keyword'}
+          sub={!stats || !stats.documents ? 'Add a document to switch it on'
+            : stats.semantic ? 'Meaning + keyword, across languages' : 'Exact words only — embeddings unavailable for these documents'} />
         <Stat label="Topic coverage" value={analyzing ? <span className="inline-flex items-center gap-2">{covered}/{TOPICS.length}<Loader2 className="size-4 animate-spin text-muted" /></span> : `${covered}/${TOPICS.length}`}
           sub={analyzing ? 'AI is reading your documents…' : lastUpdate ? `Last added ${timeAgo(lastUpdate)}` : 'Nothing added yet'} />
       </div>

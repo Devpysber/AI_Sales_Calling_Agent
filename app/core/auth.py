@@ -188,11 +188,19 @@ def me(request: Request):
         from app.services.settings_service import SettingsService
         members = SettingsService().get_state("team_members") or []
         member = next((m for m in members if m.get("id") == team_id), None)
+        from app.services import agents as agent_service
+        from app.services import team_service
+        limit = team_service.agent_limit(member) if member else 0
+        used = agent_service.created_count(team_id) if team_id else 0
         return {
             "user": user,
             "auth_enabled": auth_enabled(),
             "display_name": (member.get("name") or member.get("email") or "Team Member") if member else "Team Member",
             "role": "Team Member",
+            # The client hides the create button once the admin's limit is used up.
+            "agent_limit": limit,
+            "agents_created": used,
+            "can_create_agent": used < limit,
         }
     profile = _profile()
     return {"user": user, "auth_enabled": auth_enabled(),

@@ -62,9 +62,10 @@ export default function Inbound() {
   if (!form || !data) return <><PageHeader title="Inbound & transfer" /><div className="grid gap-4 lg:grid-cols-2"><Skeleton className="h-80" /><Skeleton className="h-80" /></div></>
 
   const set = <K extends keyof Routing>(k: K, v: Routing[K]) => setForm((f) => (f ? { ...f, [k]: v } : f))
-  const tNums = form.team_members && form.team_members.length > 0
-    ? form.team_members.map(m => m.phone).filter(n => n)
-    : (form.transfer_number || '').split(',').map(n => n.trim()).filter(n => n)
+  // A half-filled team member row must not hide a transfer number that is still saved on the agent: the
+  // backend forwards on `transfer_number`, so the badge here has to describe what will actually happen.
+  const memberNums = (form.team_members ?? []).map((m) => m.phone.trim()).filter((n) => n)
+  const tNums = memberNums.length > 0 ? memberNums : (form.transfer_number || '').split(',').map((n) => n.trim()).filter((n) => n)
   const hasNumber = tNums.length > 0 && tNums.every(n => { const d = n.replace(/\D/g, ''); return d.length >= 11 && d.length <= 15 })
   const numberError = tNums.length > 0 && !hasNumber
     ? 'All numbers must include the country code and be valid length, e.g. +91 98765 43210.'
@@ -234,12 +235,19 @@ export default function Inbound() {
                 {items.map((c) => (
                   <li key={c.id}>
                     <button type="button" onClick={() => setCallId(c.id)} className="flex w-full items-center gap-3 px-5 py-3 text-left transition hover:bg-surface-2">
-                      <span className={cn('grid size-8 shrink-0 place-items-center rounded-full', c.trigger === 'forwarded' ? 'bg-surface-2 text-fg-2' : 'bg-brand-soft text-brand')}>
-                        {c.trigger === 'forwarded' ? <PhoneForwarded className="size-4" /> : <PhoneIncoming className="size-4" />}
+                      <span className={cn('grid size-8 shrink-0 place-items-center rounded-full', c.trigger === 'forwarded' || c.transferred_to ? 'bg-surface-2 text-fg-2' : 'bg-brand-soft text-brand')}>
+                        {c.trigger === 'forwarded' || c.transferred_to ? <PhoneForwarded className="size-4" /> : <PhoneIncoming className="size-4" />}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-semibold">{c.lead_name || c.from_number}</span>
-                        <span className="block truncate text-xs text-muted">{c.trigger === 'forwarded' ? 'Forwarded to team' : 'Answered by AI'} · {timeAgo(c.created_at)}{c.duration ? ` · ${formatDuration(c.duration)}` : ''}</span>
+                        {/* An AI call that was handed over mid-way used to read "Answered by AI", hiding the transfer. */}
+                        <span className="block truncate text-xs text-muted">
+                          {c.trigger === 'forwarded'
+                            ? `Forwarded to ${c.transferred_to_name || c.transferred_to || 'your team'}`
+                            : c.transferred_to
+                              ? `${data.profile.agent_name} (AI), handed to ${c.transferred_to_name || c.transferred_to}`
+                              : `Answered by ${data.profile.agent_name} (AI)`} · {timeAgo(c.created_at)}{c.duration ? ` · ${formatDuration(c.duration)}` : ''}
+                        </span>
                       </span>
                       <CallStatusBadge status={c.status} />
                     </button>
