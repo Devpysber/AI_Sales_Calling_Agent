@@ -166,18 +166,24 @@ export function Reveal<T extends ElementType = 'div'>({
  * Used for stat rows, card grids and lists, where a single simultaneous fade tells you nothing
  * about how many things arrived.
  */
-export function Stagger({ children, className, from = 'up', step = STEP_MS, ...rest }: {
+export function Stagger({ children, className, from = 'up', step = STEP_MS, delay = 0, onView = false, ...rest }: {
   children: ReactNode; className?: string; from?: RevealProps<'div'>['from']; step?: number
+  /** Beats already used by sections above, so a whole page cascades top to bottom. */
+  delay?: number
+  /** Wait until the group is scrolled into view, instead of playing below the fold unseen. */
+  onView?: boolean
 } & Omit<HTMLAttributes<HTMLDivElement>, 'children'>) {
   const reduced = useReducedMotion()
+  const { ref, seen } = useInView<HTMLDivElement>()
+  const play = reduced || !onView || seen
   // The classes go on the children themselves, never on a wrapper: an extra div would break the
   // grid or flex layout these lists live in.
   const items = Children.toArray(children).filter(isValidElement) as ReactElement<{ className?: string; style?: CSSProperties }>[]
   return (
-    <div className={className} {...rest}>
+    <div ref={onView ? ref : undefined} className={className} {...rest}>
       {items.map((child, i) => cloneElement(child, {
-        className: cn('reveal reveal-in', DIRECTIONS[from], child.props.className),
-        style: { ...child.props.style, animationDelay: reduced ? undefined : `${i * step}ms` },
+        className: cn('reveal', play && 'reveal-in', DIRECTIONS[from], child.props.className),
+        style: { ...child.props.style, animationDelay: reduced ? undefined : `${(onView ? 0 : delay) + i * step}ms` },
       }))}
     </div>
   )

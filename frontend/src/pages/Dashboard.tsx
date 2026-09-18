@@ -83,7 +83,9 @@ export default function Dashboard() {
         eyebrow={<>
           <span className="flex items-center gap-1.5"><LiveDot on={agent.stats.live > 0} />{agent.stats.live ? `${agent.stats.live} live` : 'Agent overview'}</span>
           {agent.status === 'paused' && <Badge tone="warning"><Pause className="size-2.5" />Paused</Badge>}
-          <span className="font-semibold tracking-normal normal-case text-muted">{agent.within_calling_hours ? '· Inside calling hours' : '· Outside calling hours'}</span>
+          <span className="inline-flex items-center gap-1.5 font-semibold tracking-normal normal-case text-muted">
+            <span className={cn('size-1.5 rounded-full animate-pulse-dot', agent.within_calling_hours ? 'bg-success' : 'bg-muted')} />
+            {agent.within_calling_hours ? 'Inside calling hours' : 'Outside calling hours'}</span>
         </>}
         title={agent.name}
         description={agent.description || `${agent.persona.agent_name} calls on behalf of ${agent.persona.company_name}.`}
@@ -96,18 +98,18 @@ export default function Dashboard() {
 
       <Stagger className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         {c && l ? [
-          <StatTile key="calls" label="Calls today" count={c.today.total} icon={<PhoneCall />} tone="neutral"
+          <StatTile key="calls" className="glint" label="Calls today" count={c.today.total} icon={<PhoneCall />} tone="neutral"
             sub={c.active ? <span className="flex items-center gap-1.5"><LiveDot on />{c.active} on the line</span> : 'No live calls'} />,
-          <StatTile key="connected" label="Connected today" count={c.today.connected} icon={<PhoneIncoming />} tone="success"
+          <StatTile key="connected" className="glint" label="Connected today" count={c.today.connected} icon={<PhoneIncoming />} tone="success"
             sub={todayRate !== null ? <span className="flex items-center gap-2"><Meter value={todayRate} tone="success" className="w-16" />{todayRate}% answer rate</span> : 'Nothing dialled yet'} />,
-          <StatTile key="talk" label="Talk time today" value={formatDuration(c.today.talk_seconds)} icon={<Clock />} tone="neutral"
+          <StatTile key="talk" className="glint" label="Talk time today" value={formatDuration(c.today.talk_seconds)} icon={<Clock />} tone="neutral"
             sub={c.avg_latency_ms ? `AI replies in ${(c.avg_latency_ms / 1000).toFixed(1)}s on average` : 'No AI latency data yet'} />,
-          <StatTile key="meetings" label="Meetings booked" count={l.meetings} icon={<CalendarCheck />} tone="success" sub={`${l.pending} lead${l.pending === 1 ? '' : 's'} waiting to be called`} />,
-          <StatTile key="hot" label="Hot leads" count={q.Hot ?? 0} icon={<Flame />} tone="danger" sub={`${q.Warm ?? 0} warm · ${q.Cold ?? 0} cold`} />,
+          <StatTile key="meetings" className="glint" label="Meetings booked" count={l.meetings} icon={<CalendarCheck />} tone="success" sub={`${l.pending} lead${l.pending === 1 ? '' : 's'} waiting to be called`} />,
+          <StatTile key="hot" className="glint" label="Hot leads" count={q.Hot ?? 0} icon={<Flame />} tone="danger" sub={`${q.Warm ?? 0} warm · ${q.Cold ?? 0} cold`} />,
         ] : Array.from({ length: 5 }, (_, i) => <Skeleton key={i} className="h-[124px]" />)}
       </Stagger>
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_380px]">
+      <Stagger delay={300} step={110} className="mt-4 grid gap-4 xl:grid-cols-[1fr_380px]">
         <Card>
           <CardHeader title="Call volume" description={c ? `${periodTotal} calls · ${periodConnected} connected${periodRate !== null ? ` · ${periodRate}% connect rate` : ''}` : ' '}
             action={<Tabs value={range} onChange={setRange} items={[{ value: '7', label: '7d' }, { value: '14', label: '14d' }, { value: '30', label: '30d' }]} />} />
@@ -122,7 +124,8 @@ export default function Dashboard() {
                   <XAxis dataKey="date" tickFormatter={(d: string) => d.slice(8)} tick={{ fill: 'var(--muted)', fontSize: 12 }} axisLine={false} tickLine={false} />
                   <YAxis allowDecimals={false} tick={{ fill: 'var(--muted)', fontSize: 12 }} axisLine={false} tickLine={false} />
                   <Tooltip contentStyle={tooltipStyle} labelStyle={{ color: 'var(--fg)', fontWeight: 700 }} />
-                  <Area type="monotone" dataKey="total" name="Calls" stroke="var(--fg)" strokeWidth={2.5} fill="url(#gTotal)" isAnimationActive={false} />
+                  <Area type="monotone" dataKey="total" name="Calls" stroke="var(--fg)" strokeWidth={2.5} fill="url(#gTotal)" isAnimationActive={false}
+                    dot={(d: { cx?: number; cy?: number; index?: number }) => <NowDot key={d.index} {...d} last={(c.series.length ?? 0) - 1} />} />
                   <Area type="monotone" dataKey="connected" name="Connected" stroke="var(--success)" strokeWidth={2} fill="transparent" isAnimationActive={false} />
                   <Area type="monotone" dataKey="meetings" name="Meetings" stroke="var(--muted)" strokeDasharray="4 3" strokeWidth={1.5} fill="transparent" isAnimationActive={false} />
                 </AreaChart>
@@ -152,9 +155,9 @@ export default function Dashboard() {
             )}
           </div>
         </Card>
-      </div>
+      </Stagger>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+      <Stagger onView step={110} className="mt-4 grid gap-4 lg:grid-cols-3">
         <Card>
           <CardHeader title="Conversion funnel" description="Where this agent's leads are" action={<Link to={path('/pipeline')} className="text-xs font-bold text-muted hover:text-fg">Pipeline</Link>} />
           <div className="space-y-3 px-5 pb-5">
@@ -168,7 +171,7 @@ export default function Dashboard() {
                     <span className="flex items-baseline gap-2"><b className="text-base tabular-nums"><AnimatedNumber value={f.value} /></b>
                       {i > 0 && <span className="w-10 text-right text-[11px] text-muted">{prev ? `${Math.round((100 * f.value) / prev)}%` : '—'}</span>}</span>
                   </div>
-                  <div className="h-2.5 overflow-hidden rounded-full bg-surface-2"><div className="grow-x h-full rounded-full bg-fg transition-all" style={{ width: `${Math.max(pct, f.value ? 3 : 0)}%`, opacity: 1 - i * 0.15, animationDelay: `${i * 110}ms` }} /></div>
+                  <div className="h-2.5 overflow-hidden rounded-full bg-surface-2"><div className="grow-x flow h-full rounded-full bg-fg transition-all" style={{ width: `${Math.max(pct, f.value ? 3 : 0)}%`, opacity: 1 - i * 0.15, animationDelay: `${i * 110}ms` }} /></div>
                 </div>
               )
             }) : <Skeleton className="h-48" />}
@@ -182,7 +185,7 @@ export default function Dashboard() {
               <div key={k} className="grid grid-cols-[120px_1fr_28px] items-center gap-3 text-[13px]">
                 <span className="truncate font-semibold text-fg-2">{titleCase(k)}</span>
                 <div className="h-2 overflow-hidden rounded-full bg-surface-2">
-                  <div className={cn('grow-x h-full rounded-full', k === 'meeting_booked' ? 'bg-success' : ['not_interested', 'do_not_call'].includes(k) ? 'bg-danger' : 'bg-fg/70')} style={{ width: `${(100 * v) / outcomeMax}%`, animationDelay: `${i * 90}ms` }} />
+                  <div className={cn('grow-x flow h-full rounded-full', k === 'meeting_booked' ? 'bg-success' : ['not_interested', 'do_not_call'].includes(k) ? 'bg-danger' : 'bg-fg/70')} style={{ width: `${(100 * v) / outcomeMax}%`, animationDelay: `${i * 90}ms` }} />
                 </div>
                 <span className="text-right font-bold tabular-nums"><AnimatedNumber value={v} /></span>
               </div>
@@ -209,9 +212,9 @@ export default function Dashboard() {
             {p?.objective && <p className="mt-3 rounded-xl bg-surface-2 p-3 text-[12.5px] leading-relaxed text-fg-2"><b className="text-fg">Objective:</b> {String(p.objective)}</p>}
           </div>
         </Card>
-      </div>
+      </Stagger>
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_380px]">
+      <Stagger onView step={120} className="mt-4 grid gap-4 xl:grid-cols-[1fr_380px]">
         <Card className="overflow-hidden">
           <CardHeader title="Recent calls" description="Latest conversations with AI summaries"
             action={<Link to={path('/calls')} className="flex items-center gap-1 text-xs font-bold text-muted hover:text-fg">All calls<ArrowRight className="size-3.5" /></Link>} />
@@ -241,7 +244,7 @@ export default function Dashboard() {
           )}
         </Card>
 
-        <div className="space-y-4">
+        <Stagger onView from="right" step={110} className="space-y-4">
           {done < SETUP.length && (
             <Card>
               <CardHeader title={<span className="flex items-center gap-2"><Sparkles className="size-4" />Finish setting up</span>} description={`${done} of ${SETUP.length} done`} />
@@ -300,7 +303,7 @@ export default function Dashboard() {
             </div>
             <div className="mt-4 flex h-3 overflow-hidden rounded-full bg-surface-2">
               {l?.total ? [['Hot', 'bg-danger'], ['Warm', 'bg-warning'], ['Cold', 'bg-info']].map(([k, cls], i) => (
-                <div key={k} className={cn('grow-x', cls)} style={{ width: `${(100 * (q[k!] ?? 0)) / l.total}%`, animationDelay: `${150 + i * 140}ms` }} title={`${k}: ${q[k!] ?? 0}`} />
+                <div key={k} className={cn('grow-x flow', cls)} style={{ width: `${(100 * (q[k!] ?? 0)) / l.total}%`, animationDelay: `${150 + i * 140}ms` }} title={`${k}: ${q[k!] ?? 0}`} />
               )) : null}
             </div>
             <div className="mt-2 flex gap-4 text-xs text-muted">
@@ -308,12 +311,23 @@ export default function Dashboard() {
               <Link to={path('/leads?qualification=Hot')} className="ml-auto flex items-center gap-1 font-bold hover:text-fg"><Users className="size-3.5" />View</Link>
             </div>
           </Card>
-        </div>
-      </div>
+        </Stagger>
+      </Stagger>
 
       <LeadSheet leadId={leadId} onClose={() => setLeadId(null)} onEdit={setEditing} />
       <CallSheet callId={callId} onClose={() => setCallId(null)} onOpenLead={(id) => { setCallId(null); setLeadId(id) }} />
       <LeadFormSheet key={editing?.id ?? 'new'} open={editing !== null} lead={editing?.id ? editing : null} onClose={() => setEditing(null)} />
     </>
+  )
+}
+
+/** Today's point on the call-volume chart: a solid dot with a ring leaving it. Other points draw nothing. */
+function NowDot({ cx, cy, index, last }: { cx?: number; cy?: number; index?: number; last: number }) {
+  if (index !== last || cx === undefined || cy === undefined) return <g />
+  return (
+    <g>
+      <circle cx={cx} cy={cy} r={4} fill="var(--fg)" className="now-ring" />
+      <circle cx={cx} cy={cy} r={4} fill="var(--fg)" stroke="var(--surface)" strokeWidth={2} />
+    </g>
   )
 }

@@ -356,3 +356,37 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 }
 .beam:hover::before, .beam.beam-on::before { opacity: 1; }
 .beam.beam-live { --beam-color: var(--success); --beam-speed: 2.6s; }
+
+/* Anything inside a section that has not revealed yet waits for it: a bar or timeline below the
+   fold would otherwise finish animating before anyone scrolls to it. */
+.reveal:not(.reveal-in) * { animation-play-state: paused; }
+
+/* ---------------- Live data ----------------
+   Continuous, low-contrast motion that says "this is live data", not decoration. */
+
+/* Light flowing along a filled bar, left to right: data moving through the pipeline. */
+@keyframes flow { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+.flow { position: relative; overflow: hidden; }
+.flow::after {
+  content: ""; position: absolute; inset: 0; width: 40%;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / .35), transparent);
+  animation: flow 2.8s ease-in-out infinite;
+}
+.dark .flow::after { background: linear-gradient(90deg, transparent, rgb(255 255 255 / .22), transparent); }
+
+/* A glint that passes over each stat tile in turn, every few seconds. */
+@keyframes glint { 0%, 78% { transform: translateX(-120%) skewX(-18deg); } 100% { transform: translateX(320%) skewX(-18deg); } }
+.glint { position: relative; overflow: hidden; }
+.glint::after {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 30%; pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--fg) 5%, transparent), transparent);
+  animation: glint 7s ease-in-out infinite;
+}
+.glint:nth-child(2)::after { animation-delay: .6s; }
+.glint:nth-child(3)::after { animation-delay: 1.2s; }
+.glint:nth-child(4)::after { animation-delay: 1.8s; }
+.glint:nth-child(5)::after { animation-delay: 2.4s; }
+
+/* "Now" on a chart: the latest point breathes. SVG needs its own transform box. */
+@keyframes now-ring { 0% { transform: scale(1); opacity: .6; } 100% { transform: scale(3.2); opacity: 0; } }
+.now-ring { transform-box: fill-box; transform-origin: center; animation: now-ring 2s var(--ease-entrance) infinite; }
