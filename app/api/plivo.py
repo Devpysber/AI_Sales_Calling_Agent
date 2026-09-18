@@ -144,6 +144,11 @@ def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = N
     numbers = [agents.phone_digits(n) for n in raw_numbers.replace(" ", "").split(",")]
     numbers = [n for n in numbers if n]
     # The agent's own transfer number rings first (which contains all its team members).
+    # A colleague calling in from one of those lines is dropped from the list: ringing the number
+    # someone is speaking on reaches their own busy line, never a person.
+    speaking_from = agents.phone_digits((session or {}).get("lead", {}).get("phone") or "")
+    if speaking_from:
+        numbers = [n for n in numbers if n != speaking_from]
     
     if idx >= len(numbers):
         return r

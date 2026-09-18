@@ -177,6 +177,11 @@ def split_sentences(text: str) -> list[str]:
 # ---------------- Sarvam streaming STT ----------------
 
 
+def digits(value: str | None) -> str:
+    """Just the digits of a phone number, for comparing numbers written in different formats."""
+    return "".join(c for c in str(value or "") if c.isdigit())
+
+
 def merge_call_context(session_lead: dict, fresh: dict | None) -> dict:
     """
     Refresh the lead from the CRM without losing this call's context. The CRM row carries no `call_goal`, so using
@@ -687,8 +692,17 @@ class CallStream:
         "Transfer when a caller asks" is a preference about how calls are handled. When every LLM
         provider has failed there is no agent left to handle the call, so the only alternatives are a
         person or a dead line: the preference does not apply.
+
+        A colleague who rings the agent from the transfer line itself is the exception: dialling them
+        back on the number they are speaking from reaches their own busy line, so there is no person
+        to reach and the caller is better told the team will ring them.
         """
-        return bool("".join(c for c in str(self.persona.get("transfer_number") or "") if c.isdigit()))
+        targets = [digits(part) for part in str(self.persona.get("transfer_number") or "").split(",")]
+        targets = [t for t in targets if t]
+        if not targets:
+            return False
+        caller = digits((self.session.get("lead") or {}).get("phone") or self.session.get("customer_phone") or "")
+        return any(t for t in targets if t != caller)
 
     async def transfer_call(self):
         """
@@ -898,10 +912,10 @@ class CallStream:
 
     def escalate_failure(self, error: str):
         """
-        A caller we could not keep talking to: tell the team and book a callback.
+        A caller we could not keep talking to: record what broke, tell the team and book a callback.
 
-        Runs when the agent breaks mid-call and there is no number to transfer to, so the person on
-        the line is not simply dropped and forgotten.
+        Runs on every mid-call breakdown, whether or not the caller was handed to a person, so the
+        failure is visible in the history instead of looking like an ordinary transfer.
         """
         lead_id = self.session.get("lead_id")
         lead = self.session.get("lead") or {}
@@ -1091,13 +1105,15 @@ class CallStream:
             # Something broke on our side (typically every LLM provider refusing in a row). Hanging up
             # on a caller mid-conversation is the worst outcome, so hand them to a person whenever a
             # number exists, and promise a callback otherwise. Neither line mentions a fault.
+            # However the call ends, the breakdown is recorded: a handover used to hide it completely,
+            # so a day of failing calls looked like a day of transfers.
+            await asyncio.to_thread(self.escalate_failure, str(e))
             if self.has_human_line():
                 await self.say_fixed(PROMPTS["handover"][self.lang_key()])
                 self.turn("assistant", PROMPTS["handover"][self.lang_key()])
                 await self.checkpoint(transfer=True)
             else:
                 await self.say_fixed(PROMPTS["error"][self.lang_key()], hangup=True)
-                await asyncio.to_thread(self.escalate_failure, str(e))
             return
 
         reply = " ".join("".join(spoken).split())

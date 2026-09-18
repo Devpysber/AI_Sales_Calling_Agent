@@ -42,3 +42,20 @@ def test_the_greeting_skips_the_company_pitch(monkeypatch):
     spoken = agent.greeting(1, {"call_purpose": "team", "team_name": "Ashish Sharma"}, "en-IN")
     assert "Ashish Sharma" in spoken and "would you like to check" in spoken
     assert "calling from" not in spoken, "a colleague must not be pitched the company"
+
+
+def test_a_caller_is_never_transferred_to_their_own_line():
+    """A colleague ringing in from the transfer number cannot be put through to themselves."""
+    from app.services.voice_stream import CallStream
+
+    stream = CallStream.__new__(CallStream)
+    stream.persona = {"transfer_number": "+919584516352", "transfer_on_request": True}
+
+    stream.session = {"lead": {"phone": "+917879417266"}}       # an ordinary caller
+    assert stream.has_human_line()
+
+    stream.session = {"lead": {"phone": "+919584516352"}}       # the transfer line itself
+    assert not stream.has_human_line(), "ringing the line someone is speaking on reaches nobody"
+
+    stream.persona = {"transfer_number": "+919584516352,+919000000111"}
+    assert stream.has_human_line(), "a second colleague is still reachable"
