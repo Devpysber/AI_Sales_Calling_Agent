@@ -9,9 +9,10 @@ import { CallStatusBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, PageHeader, Skeleton, Switch, Textarea } from '@/components/ui'
 import { api } from '@/lib/api'
 import { AnimatedNumber } from '@/lib/motion'
+import { Waveform } from '@/components/VoiceViz'
 import { useAgent } from '@/lib/agent'
 import type { AgentProfile, AutomationSettings, Call, Page } from '@/lib/types'
-import { cn, formatDuration, timeAgo } from '@/lib/utils'
+import { callParty, cn, formatDuration, timeAgo } from '@/lib/utils'
 
 type ProfileResponse = { profile: AgentProfile; transfer_contacts?: { phone: string; name: string | null }[] }
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
@@ -21,6 +22,13 @@ const KEYS: (keyof Routing)[] = ['transfer_number', 'team_members', 'inbound_mod
 
 export default function Inbound() {
   const { agent, base, path } = useAgent()
+  // Same cache as the app-wide incoming-call banner: no extra polling for this page.
+  const liveFeed = useQuery({
+    queryKey: ['live-calls'],
+    queryFn: () => api<{ live_calls: (Call & { agent_name: string | null })[] }>('/api/agents/live'),
+    refetchInterval: 3000,
+  })
+  const liveInbound = liveFeed.data?.live_calls.find((c) => c.agent_id === agent?.id && c.direction === 'inbound')
   const qc = useQueryClient()
   const { data } = useQuery({ queryKey: ['agent'], queryFn: () => api<ProfileResponse>(`${base}/profile`) })
   const automation = useQuery({ queryKey: ['automation'], queryFn: () => api<{ settings: AutomationSettings; within_calling_hours: boolean }>(`${base}/automation`) })
@@ -102,7 +110,14 @@ export default function Inbound() {
       <PageHeader eyebrow={<><PhoneIncoming className="size-3.5" />{agent?.name} · Call routing</>} title="Inbound & transfer"
         description="Choose who answers when customers call, and where the AI sends callers who need a person." />
 
-      <Card className="glint mb-4">
+      <Card className={cn('glint mb-4 transition-colors', liveInbound && 'beam beam-on beam-live is-live-card')}>
+        {liveInbound && (
+          <div className="flex items-center gap-2 border-b border-success/30 bg-success-soft px-5 py-2 text-[13px] font-bold text-success">
+            <span className="size-2 animate-pulse-dot rounded-full bg-success" />
+            On the line now: {callParty(liveInbound)}
+            <Waveform bars={12} className="ml-auto h-4" />
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-4 px-5 py-4">
           <div className="flex items-center gap-2.5 text-sm">
             <span className="relative grid size-9 place-items-center rounded-xl bg-surface-2">
@@ -112,7 +127,7 @@ export default function Inbound() {
             <div><div className="font-bold">A customer calls now</div><div className="text-xs text-muted">{automation.data ? `${automation.data.within_calling_hours ? 'Open' : 'Closed'} · ${hours}` : '…'}</div></div>
           </div>
           {/* A signal travelling from the caller to whoever answers right now: the route, shown working. */}
-          <span className="route-path hidden w-16 sm:block" aria-hidden><span className="route-signal" /></span>
+          <span className={cn('route-path hidden w-16 sm:block', liveInbound && 'is-live')} aria-hidden><span className="route-signal" /></span>
           <div className="flex min-w-0 items-center gap-2.5 text-sm">
             <span key={routeNow} className="animate-pop-in grid size-9 place-items-center rounded-xl bg-fg text-bg [&_svg]:size-4">{flow[routeNow]?.icon}</span>
             <div className="min-w-0"><div className="font-bold">{flow[routeNow]?.label}</div><div className="truncate text-xs text-muted">{flow[routeNow]?.detail}</div></div>

@@ -87,6 +87,15 @@ def create_agent(body: AgentIn, request: Request, response: Response):
         raise HTTPException(400, str(e))
 
 
+@router.get("/live")
+def live(request: Request):
+    """Live calls across agents, for the incoming-call banner (polled often, kept cheap)."""
+    user = getattr(request.state, "user", "admin")
+    payload = getattr(request.state, "token_payload", {})
+    unlocked = payload.get("unlocked", []) if user == "team" else None
+    return {"live_calls": agents.live_calls(unlocked)}
+
+
 @router.get("/overview")
 def overview(request: Request, days: int = Query(14, ge=7, le=60)):
     user = getattr(request.state, "user", "admin")

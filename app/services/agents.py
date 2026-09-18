@@ -408,6 +408,24 @@ def for_inbound(to_number: str, lead_agent_id: int | None = None) -> int | None:
 PIPELINE_STAGES = ["New", "Contacted", "Interested", "Follow Up", "Meeting Booked", "Closed Won"]
 
 
+def live_calls(unlocked_ids: list[int] | None = None) -> list[dict]:
+    """Calls ringing or in progress across every agent, newest first, with the agent's name.
+
+    The light version of overview()["live_calls"]: the app-wide incoming-call banner polls this
+    every few seconds on every page, so it must not rebuild series, pipelines and activity.
+    """
+    with get_db() as db:
+        rows = db.execute(select(Call, Lead.name).outerjoin(Lead, Lead.id == Call.lead_id)
+                          .where(Call.status.in_(ACTIVE_CALL)).order_by(Call.id.desc()).limit(20)).all()
+        calls = [c.to_dict(n, with_transcript=False) for c, n in rows]
+    if unlocked_ids is not None:
+        calls = [c for c in calls if c["agent_id"] in unlocked_ids]
+    names = {a["id"]: a["name"] for a in list_agents()}
+    for call in calls:
+        call["agent_name"] = names.get(call["agent_id"])
+    return calls
+
+
 def overview(days: int = 14, unlocked_ids: list[int] | None = None) -> dict:
     """Everything the all-agents home needs in one request: per-agent trends, setup health, live calls and recent activity."""
     today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)

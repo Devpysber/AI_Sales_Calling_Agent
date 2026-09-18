@@ -418,3 +418,28 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 
 /* Pipeline: the column under a dragged card opens up to receive it. */
 .is-drop-target { transform: scale(1.015); box-shadow: 0 0 0 2px var(--fg), var(--shadow-pop); }
+
+/* ---------------- Incoming call (components/IncomingCall.tsx) ---------------- */
+@keyframes incoming-in {
+  0% { opacity: 0; transform: translate3d(40px, 12px, 0) scale(.94); }
+  60% { opacity: 1; transform: translate3d(-4px, 0, 0) scale(1.01); }
+  100% { transform: none; }
+}
+/* Rings travelling out of the caller's avatar while the phone rings. */
+@keyframes ring-wave { 0% { transform: scale(.85); opacity: .9; } 100% { transform: scale(2.1); opacity: 0; } }
+/* The handset shakes in short bursts, like a phone on a desk, then rests. */
+@keyframes phone-shake {
+  0%, 55%, 100% { transform: rotate(0); }
+  5%, 15%, 25%, 35%, 45% { transform: rotate(-14deg); }
+  10%, 20%, 30%, 40%, 50% { transform: rotate(14deg); }
+}
+@keyframes incoming-timer { from { width: 100%; } to { width: 0%; } }
+
+.incoming-card { animation: incoming-in .55s var(--ease-entrance) both; }
+.ring-wave { animation: ring-wave 1.8s var(--ease-entrance) infinite; }
+.phone-shake { animation: phone-shake 1.4s ease-in-out infinite; }
+.incoming-timer { animation-name: incoming-timer; animation-timing-function: linear; animation-fill-mode: both; }
+.incoming-timer.paused { animation-play-state: paused; }
+
+/* While a call is actually on the route, the signal runs twice as fast. */
+.route-path.is-live .route-signal { animation-duration: .9s; }

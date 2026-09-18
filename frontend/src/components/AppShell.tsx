@@ -8,6 +8,7 @@ import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import AlertsBell from '@/components/AlertsBell'
+import IncomingCall, { PREVIEW_EVENT } from '@/components/IncomingCall'
 import { CommandPalette, type Command } from '@/components/CommandPalette'
 import NewAgentSheet from '@/components/NewAgentSheet'
 import { Button, Spinner, Input, Dialog } from '@/components/ui'
@@ -466,6 +467,8 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
     { id: 'home', group: 'Go to', label: role === 'team' ? 'My agent' : 'All agents', icon: LayoutGrid, run: () => navigate('/') },
     ...(role === 'team' ? [] : [{ id: 'system', group: 'Go to', label: 'Integrations & system', icon: Settings, run: () => navigate('/settings') }]),
     ...(role === 'team' ? [] : [{ id: 'profile', group: 'Go to', label: 'Admin profile & password', icon: UserPlus, keywords: 'account security', run: () => navigate('/profile') }]),
+    { id: 'preview-call', group: 'Preferences', label: 'Preview incoming call', icon: PhoneIncoming, keywords: 'demo test ring banner',
+      run: () => window.dispatchEvent(new CustomEvent(PREVIEW_EVENT, { detail: { agentId: agent?.id ?? agents[0]?.id ?? 0, agentName: agent?.name ?? agents[0]?.name ?? null } })) },
     { id: 'theme', group: 'Preferences', label: dark ? 'Switch to light theme' : 'Switch to dark theme', icon: dark ? Sun : Moon, keywords: 'dark mode', run: () => setDark(!dark) },
     { id: 'logout', group: 'Preferences', label: 'Sign out', icon: LogOut, run: logout },
   ], [agents, id, go, navigate, dark, setDark, logout, role, canCreateAgent])
@@ -529,6 +532,9 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
           <Suspense fallback={<div className="grid h-64 place-items-center"><Spinner className="size-6" /></div>}>{children}</Suspense>
         </main>
       </div>
+
+      {/* On every page: a new inbound call slides in, then folds into a live-calls pill. */}
+      <IncomingCall />
 
       <CommandPalette open={palette} onClose={() => setPalette(false)} commands={commands}
         leadsBase={id ? `/api/agents/${id}` : undefined} onLead={(leadId) => go(`/leads?open=${leadId}`)} />

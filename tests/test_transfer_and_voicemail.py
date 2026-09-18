@@ -50,3 +50,13 @@ def test_voicemail_is_stored_and_ends_the_call(client, base, monkeypatch):
     assert res.status_code == 200
     assert stored == {"cid": 5, "url": "https://rec/1.mp3"}
     assert "<Hangup" in res.text
+
+
+def test_live_calls_feed_is_cheap_and_shaped_for_the_banner(client, base):
+    res = client.get("/api/agents/live")
+    assert res.status_code == 200
+    body = res.json()
+    assert isinstance(body["live_calls"], list)
+    for call in body["live_calls"]:
+        assert call["status"] in ("Queued", "Ringing", "In Progress")
+        assert "agent_name" in call
