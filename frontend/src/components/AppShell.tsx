@@ -92,7 +92,7 @@ export function LiveDot({ on, className }: { on: boolean; className?: string }) 
 
 /* ---------------- Agent switcher ---------------- */
 
-function AgentSwitcher({ agents, current, compact, onNew, role }: { agents: AgentSummary[]; current?: AgentSummary; compact: boolean; onNew: () => void; role: string }) {
+function AgentSwitcher({ agents, current, compact, onNew, canCreate }: { agents: AgentSummary[]; current?: AgentSummary; compact: boolean; onNew: () => void; canCreate: boolean }) {
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
   const ref = useRef<HTMLDivElement>(null)
@@ -147,7 +147,7 @@ function AgentSwitcher({ agents, current, compact, onNew, role }: { agents: Agen
               </Link>
             ))}
           </div>
-          {role !== 'team' && (
+          {canCreate && (
             <button type="button" onClick={() => { setOpen(false); onNew() }}
               className="flex w-full items-center gap-2 border-t border-border px-4 py-3 text-sm font-semibold text-brand hover:bg-surface-2">
               <Plus className="size-4" />Create new agent
@@ -161,10 +161,10 @@ function AgentSwitcher({ agents, current, compact, onNew, role }: { agents: Agen
 
 /* ---------------- Sidebar ---------------- */
 
-function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp, onLogout, dark, setDark, user, role, mobile }: {
+function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp, onLogout, dark, setDark, user, role, canCreate, mobile }: {
   agents: AgentSummary[]; agent?: AgentSummary; compact: boolean; setCompact: (c: boolean) => void
   onNew: () => void; onPalette: () => void; onHelp: () => void; onLogout: () => void
-  dark: boolean; setDark: (d: boolean) => void; user: string; role: string; mobile?: boolean
+  dark: boolean; setDark: (d: boolean) => void; user: string; role: string; canCreate: boolean; mobile?: boolean
 }) {
   const location = useLocation()
   const path = (to: string) => agent ? `/a/${agent.id}${to === '/' ? '' : to}` : to
@@ -202,7 +202,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
       </div>
 
       <div className={cn('pb-3', compact ? 'px-2' : 'px-3')}>
-        <AgentSwitcher agents={agents} current={agent} compact={compact} onNew={onNew} role={role} />
+        <AgentSwitcher agents={agents} current={agent} compact={compact} onNew={onNew} canCreate={canCreate} />
       </div>
 
       <div className={cn('min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-4', compact ? 'px-2' : 'px-3')}>
@@ -276,7 +276,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
             </div>
           )}
 
-          {role !== 'team' && (
+          {canCreate && (
             <button type="button" onClick={onNew}
               className={cn('group flex items-center justify-center gap-2 rounded-2xl border border-dashed border-ink-fg/20 font-bold text-ink-fg/70 transition hover:border-ink-fg/40 hover:bg-ink-fg/[0.03] hover:text-ink-fg',
                 compact ? 'size-10' : 'h-auto w-full py-3')}>
@@ -313,7 +313,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
                   {!compact && <><span className="flex-1 truncate">{a.name}</span><span className="text-[11px] tabular-nums">{a.stats.live ? <span className="text-success">{a.stats.live} live</span> : a.stats.leads}</span></>}
                 </Link>
               ))}
-              {role !== 'team' && (
+              {canCreate && (
                 <button type="button" onClick={onNew} title="New agent"
                   className={cn('flex h-10 w-full items-center gap-3 rounded-xl text-[13.5px] font-semibold text-ink-muted transition hover:bg-ink-fg/[0.04] hover:text-ink-fg', compact ? 'justify-center' : 'px-2')}>
                   <span className="grid size-7 place-items-center rounded-lg border border-dashed border-ink-fg/20"><Plus className="size-3.5" /></span>{!compact && 'New agent'}
@@ -352,7 +352,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
 // app-wide, and removing them would unmount the tree that renders this shell.
 const APP_WIDE_QUERIES = new Set(['agents', 'me', 'system'])
 
-export default function AppShell({ user, role }: { user: string; role: string }) {
+export default function AppShell({ user, role, canCreateAgent }: { user: string; role: string; canCreateAgent: boolean }) {
   const [mobile, setMobile] = useState(false)
   const [compact, setCompact] = useStoredBoolean('sidebar-compact', false)
   const [palette, setPalette] = useState(false)
@@ -395,7 +395,7 @@ export default function AppShell({ user, role }: { user: string; role: string })
 
   const commands = useMemo<Command[]>(() => [
     ...agents.map((a) => ({ id: `agent-${a.id}`, group: 'Switch agent', label: a.name, icon: Bot, keywords: `${a.persona.company_name} ${a.description ?? ''}`, run: () => navigate(`/a/${a.id}`) })),
-    ...(role === 'team' ? [] : [{ id: 'new-agent', group: 'Actions', label: 'Create a new agent', icon: Plus, keywords: 'add workspace', run: () => setCreating(true) }]),
+    ...(canCreateAgent ? [{ id: 'new-agent', group: 'Actions', label: 'Create a new agent', icon: Plus, keywords: 'add workspace', run: () => setCreating(true) }] : []),
     ...(id ? [
       ...AGENT_NAV.flatMap((g) => g.items.map((i) => ({ id: i.to, group: 'Go to', label: i.label, icon: i.icon, hint: `G ${i.key.toUpperCase()}`, run: () => go(i.to) }))),
       { id: 'new-lead', group: 'Actions', label: 'Add lead', icon: Plus, hint: 'N', keywords: 'create prospect', run: () => go('/leads?new=1') },
@@ -435,7 +435,7 @@ export default function AppShell({ user, role }: { user: string; role: string })
 
   const sidebarProps = {
     agents, agent, onNew: () => setCreating(true), onPalette: () => setPalette(true), onHelp: () => setHelp(true),
-    onLogout: logout, dark, setDark, user, role,
+    onLogout: logout, dark, setDark, user, role, canCreate: canCreateAgent,
   }
 
   const frame = (children: ReactNode) => (

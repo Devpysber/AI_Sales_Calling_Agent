@@ -221,8 +221,10 @@ function AgentTable({ agents }: { agents: AgentOverviewItem[] }) {
 }
 
 export default function Home() {
-  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api<{ user: string }>('/api/auth/me'), staleTime: 0 })
+  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api<{ user: string; can_create_agent?: boolean }>('/api/auth/me'), staleTime: 0 })
   const role = me?.user
+  // Team members create agents up to the limit their administrator set; the admin has no limit.
+  const canCreateAgent = role !== 'team' || me?.can_create_agent === true
 
   const [creating, setCreating] = useState(false)
   const [q, setQ] = useState('')
@@ -333,7 +335,7 @@ export default function Home() {
         actions={
           <div className="flex items-center gap-2">
             <LiveStamp fetching={isFetching} updatedAt={dataUpdatedAt} />
-            {role !== 'team' && <Button variant="primary" onClick={() => setCreating(true)}><Plus />New agent</Button>}
+            {canCreateAgent && <Button variant="primary" onClick={() => setCreating(true)}><Plus />New agent</Button>}
           </div>
         }
       />

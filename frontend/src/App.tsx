@@ -32,7 +32,7 @@ export default function App() {
   const qc = useQueryClient()
   const { data: me, isLoading } = useQuery({
     queryKey: ['me'],
-    queryFn: () => api<{ user: string | null; auth_enabled: boolean; display_name?: string; role?: string }>('/api/auth/me'),
+    queryFn: () => api<{ user: string | null; auth_enabled: boolean; display_name?: string; role?: string; can_create_agent?: boolean }>('/api/auth/me'),
     staleTime: 0,         // always re-fetch on mount so session changes (team↔admin) are detected immediately
     refetchOnWindowFocus: true,
   })
@@ -60,7 +60,9 @@ export default function App() {
     )
   }
 
-  const shell = <AppShell user={me.display_name || me.user} role={me.user} />
+  // A team member may create agents up to the limit their administrator set; the admin always can.
+  const canCreateAgent = me.user !== 'team' || me.can_create_agent === true
+  const shell = <AppShell user={me.display_name || me.user} role={me.user} canCreateAgent={canCreateAgent} />
   return (
     <Suspense fallback={<Loading />}>
       <Routes>

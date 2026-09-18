@@ -60,3 +60,21 @@ def test_ai_cannot_change_the_number_we_dial(client, base):
 
     after_admin = crm.update(lead["id"], {"phone": "+919000000123"}, actor="admin")
     assert after_admin["phone"] == "+919000000123"       # a person can still correct it
+
+
+def test_team_member_agent_limit(client, monkeypatch):
+    """A team member may create the number of agents the admin allowed, and no more."""
+    from app.services import agents as agent_service
+    from app.services import team_service
+
+    member = {"id": "member-1", "name": "Ashish", "email": "a@b.c", "phone": "+919584516352", "max_agents": 2}
+    monkeypatch.setattr(team_service, "members", lambda: [member])
+
+    assert team_service.agent_limit(member) == 2
+    assert team_service.agent_limit({"id": "x"}) == 1          # default when unset
+    assert team_service.agent_limit({"max_agents": "oops"}) == 1  # bad value never grants more
+
+    before = agent_service.created_count("member-1")
+    agent_service.create({"name": "Limit test"}, actor="team", created_by="member-1")
+    assert agent_service.created_count("member-1") == before + 1
+    assert agent_service.created_count("someone-else") == 0    # counted per member

@@ -205,7 +205,13 @@ def list_agents() -> list[dict]:
     return agents
 
 
-def create(data: dict, actor: str = "admin") -> dict:
+def created_count(created_by: str) -> int:
+    """How many workspaces this team member has created, for their agent limit."""
+    with get_db() as db:
+        return db.scalar(select(func.count(Agent.id)).where(Agent.created_by == created_by)) or 0
+
+
+def create(data: dict, actor: str = "admin", created_by: str | None = None) -> dict:
     meta = _clean_meta({"name": data.get("name"), **{k: data[k] for k in META_FIELDS if k in data and k != "name"}})
     profile = coerce(PROFILE_DEFAULTS, {k: v for k, v in (data.get("profile") or {}).items() if v not in (None, "")})
     copy_from = data.get("copy_from")
@@ -217,6 +223,7 @@ def create(data: dict, actor: str = "admin") -> dict:
     with get_db() as db:
         count = db.scalar(select(func.count(Agent.id))) or 0
         agent = Agent(**{"color": COLORS[count % len(COLORS)], "status": "active", **meta},
+                      created_by=created_by,
                       profile=json.dumps(profile, ensure_ascii=False), automation=json.dumps(automation))
         db.add(agent)
         db.flush()

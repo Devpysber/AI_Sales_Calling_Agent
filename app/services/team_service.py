@@ -60,3 +60,19 @@ def name_for(number: str | None, agent_id: int | None = None) -> str | None:
         if _digits(m.get("phone", "")) == wanted and (m.get("name") or "").strip():
             return m["name"].strip()
     return None
+
+
+DEFAULT_AGENT_LIMIT = 1
+
+
+def by_id(member_id: str) -> dict | None:
+    return next((m for m in members() if m.get("id") == member_id), None)
+
+
+def agent_limit(member: dict) -> int:
+    """How many workspaces this member may create. Missing or invalid values fall back to one."""
+    try:
+        limit = int(member.get("max_agents", DEFAULT_AGENT_LIMIT))
+    except (TypeError, ValueError):
+        return DEFAULT_AGENT_LIMIT
+    return max(0, limit)

@@ -5,9 +5,11 @@ import { toast } from 'sonner'
 import { Button, Card, CardHeader, Input } from '@/components/ui'
 import { api } from '@/lib/api'
 
-type TeamMember = { id: string; email: string; name: string; phone?: string; role?: string; notes?: string }
+type TeamMember = { id: string; email: string; name: string; phone?: string; role?: string; notes?: string
+  max_agents: number; created_agents: number }
 
 const ROLES = ['Sales', 'Support', 'Manager', 'Operations']
+const DEFAULT_AGENT_LIMIT = 1
 
 export default function TeamMembers() {
   const qc = useQueryClient()
@@ -21,15 +23,16 @@ export default function TeamMembers() {
   const [phone, setPhone] = useState('')
   const [role, setRole] = useState('Sales')
   const [notes, setNotes] = useState('')
+  const [maxAgents, setMaxAgents] = useState(DEFAULT_AGENT_LIMIT)
   const [changePwId, setChangePwId] = useState<string | null>(null)
   const [newPassword, setNewPassword] = useState('')
   
   const add = useMutation({
-    mutationFn: () => api('/api/system/team-members', { method: 'POST', json: { email, name, password, phone, role, notes } }),
+    mutationFn: () => api('/api/system/team-members', { method: 'POST', json: { email, name, password, phone, role, notes, max_agents: maxAgents } }),
     onSuccess: () => {
       toast.success('Team member added')
       setOpen(false)
-      setName(''); setEmail(''); setPassword(''); setPhone(''); setRole('Sales'); setNotes('')
+      setName(''); setEmail(''); setPassword(''); setPhone(''); setRole('Sales'); setNotes(''); setMaxAgents(DEFAULT_AGENT_LIMIT)
       qc.invalidateQueries({ queryKey: ['team-members'] })
     },
     onError: (e: Error) => toast.error(e.message)
@@ -45,6 +48,17 @@ export default function TeamMembers() {
     onError: (e: Error) => toast.error(e.message)
   })
   
+  // The limit is edited in place: a whole dialog for one number is more friction than the change deserves.
+  const setLimit = useMutation({
+    mutationFn: ({ id, max_agents }: { id: string; max_agents: number }) =>
+      api(`/api/system/team-members/${id}`, { method: 'PUT', json: { max_agents } }),
+    onSuccess: () => {
+      toast.success('Agent limit updated')
+      qc.invalidateQueries({ queryKey: ['team-members'] })
+    },
+    onError: (e: Error) => toast.error(e.message)
+  })
+
   const remove = useMutation({
     mutationFn: (id: string) => api('/api/system/team-members/' + id, { method: 'DELETE' }),
     onSuccess: () => {
@@ -68,6 +82,7 @@ export default function TeamMembers() {
                 <th className="px-5 py-3 font-semibold">Role</th>
                 <th className="px-5 py-3 font-semibold">Phone</th>
                 <th className="px-5 py-3 font-semibold">Email</th>
+                <th className="px-5 py-3 font-semibold">Agents</th>
                 <th className="px-5 py-3 font-semibold text-right">Actions</th>
               </tr>
             </thead>
@@ -78,6 +93,17 @@ export default function TeamMembers() {
                   <td className="px-5 py-3 text-muted">{m.role || 'Sales'}</td>
                   <td className="px-5 py-3 text-muted">{m.phone ? <a href={`tel:${m.phone}`} className="hover:underline">{m.phone}</a> : '—'}</td>
                   <td className="px-5 py-3 text-muted break-all">{m.email}</td>
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-2">
+                      <Input type="number" min={0} max={100} defaultValue={m.max_agents}
+                        onBlur={(e) => {
+                          const next = Number(e.target.value)
+                          if (Number.isFinite(next) && next >= 0 && next !== m.max_agents) setLimit.mutate({ id: m.id, max_agents: next })
+                        }}
+                        className="h-8 w-16 text-sm" aria-label={`Agent limit for ${m.name}`} />
+                      <span className="text-xs whitespace-nowrap text-muted">{m.created_agents} used</span>
+                    </div>
+                  </td>
                   <td className="px-5 py-3 text-right">
                     <div className="flex justify-end gap-2">
                       <Button variant="ghost" size="sm" onClick={() => setChangePwId(m.id)}>
@@ -123,6 +149,12 @@ export default function TeamMembers() {
                     {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
                   </select>
                 </div>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-semibold">Agents they can create</label>
+                <Input type="number" min={0} max={100} value={maxAgents}
+                  onChange={e => setMaxAgents(Math.max(0, Number(e.target.value) || 0))} />
+                <p className="mt-1 text-xs text-muted">One by default. Set 0 to stop them creating any.</p>
               </div>
               <div>
                 <label className="mb-1.5 block text-sm font-semibold">What they handle</label>
