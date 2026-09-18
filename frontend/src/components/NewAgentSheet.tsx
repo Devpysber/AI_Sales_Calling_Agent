@@ -12,23 +12,48 @@ import { cn, LANGUAGES } from '@/lib/utils'
 export const AGENT_COLORS = ['#5b4bf5', '#0e8a5e', '#d9480f', '#1f6feb', '#c2255c', '#7048e8', '#0b7285', '#b36b00']
 
 // Each template carries how the call should actually be run, not just its goal: without `talk` every
-// new agent started from the same outbound-sales script whatever job it was created for.
+// new agent started from the same outbound-sales script whatever job it was created for. `role` and
+// `caller` reach the prompt, so a clinic agent introduces itself as front desk talking to a patient
+// rather than a sales consultant talking to a prospect.
 const TEMPLATES = [
-  { id: 'sales', label: 'Outbound sales', objective: 'Understand the prospect\'s business, explain how our services help, and book a discovery meeting with our team.', cta: 'Book a 30-minute discovery call with our solutions team.',
+  { id: 'sales', label: 'Outbound sales', role: 'senior sales consultant', caller: 'prospect',
+    objective: 'Understand the prospect\'s business, explain how our services help, and book a discovery meeting with our team.', cta: 'Book a 30-minute discovery call with our solutions team.',
     talk: 'Open by checking it is a good time. Ask what they do and what problem they are trying to solve before explaining anything. Give one short, relevant example, not a feature list. Ask for the meeting once you know it fits; if they say no twice, thank them warmly and end the call.' },
-  { id: 'support', label: 'Customer support', objective: 'Resolve the caller\'s question using the knowledge base, confirm the issue is solved, and log anything that needs a human follow-up.', cta: 'Create a follow-up for our support team if the issue is not solved on the call.',
+  { id: 'support', label: 'Customer support', role: 'customer support specialist', caller: 'customer',
+    objective: 'Resolve the caller\'s question using the knowledge base, confirm the issue is solved, and log anything that needs a human follow-up.', cta: 'Create a follow-up for our support team if the issue is not solved on the call.',
     talk: 'Let them finish describing the problem before answering. Repeat the issue back in one line so they know you understood. Give the fix in plain steps. If you cannot solve it, say so honestly, tell them someone will call back, and take down anything the team will need. Never sell anything on a support call.' },
-  { id: 'reminder', label: 'Appointments & reminders', objective: 'Confirm, reschedule or cancel the customer\'s upcoming appointment and answer simple questions about it.', cta: 'Confirm the appointment date and time.',
+  { id: 'reminder', label: 'Appointments & reminders', role: 'appointments coordinator', caller: 'customer',
+    objective: 'Confirm, reschedule or cancel the customer\'s upcoming appointment and answer simple questions about it.', cta: 'Confirm the appointment date and time.',
     talk: 'Keep it under a minute. Say the day and time you are calling about, ask if it still works, and accept the answer. If they want to move it, agree a new time and repeat it back. If they want to cancel, accept it politely without persuading. Do not pitch anything.' },
-  { id: 'website', label: 'Website enquiries', objective: 'Call people who filled a form on our website, understand what they need, answer from the knowledge base and book the next step.', cta: 'Book a callback or visit with our team.',
+  { id: 'website', label: 'Website enquiries', role: 'customer advisor', caller: 'enquirer',
+    objective: 'Call people who filled a form on our website, understand what they need, answer from the knowledge base and book the next step.', cta: 'Book a callback or visit with our team.',
     talk: 'Mention they enquired on our website so the call is not a surprise. Ask what they were looking for, answer their question first, then offer the next step. They reached out to us, so stay helpful rather than pushy.' },
-  { id: 'realestate', label: 'Real estate site visits', objective: 'Qualify property enquiries on budget, location and timeline, share project details from the knowledge base, and book a site visit.', cta: 'Book a site visit this week.',
+  { id: 'realestate', label: 'Real estate site visits', role: 'property consultant', caller: 'prospect',
+    objective: 'Qualify property enquiries on budget, location and timeline, share project details from the knowledge base, and book a site visit.', cta: 'Book a site visit this week.',
     talk: 'Ask budget, preferred location and when they want to move in, one question at a time. Share only details you actually have. Offer a weekend visit slot first, since most people prefer it. If the budget does not fit, say so plainly instead of pushing.' },
-  { id: 'collections', label: 'Payment reminders', objective: 'Politely remind the customer about a due payment, confirm when they will pay, and note any issue that needs our team.', cta: 'Get a promised payment date.',
+  { id: 'clinic', label: 'Clinic & healthcare', role: 'clinic front-desk coordinator', caller: 'patient',
+    objective: 'Answer questions about treatments, timings and charges, and book the patient in with the right doctor.', cta: 'Book a consultation at a time that suits the patient.',
+    talk: 'Be calm, warm and unhurried: people calling a clinic are often worried. Ask what the problem is and how long it has been going on, then offer the soonest suitable slot. Never diagnose, never promise a result, and never discuss another patient. Anything clinical beyond the knowledge base goes to the doctor.' },
+  { id: 'education', label: 'Courses & admissions', role: 'admissions counsellor', caller: 'student',
+    objective: 'Explain courses, fees, batches and eligibility, and book a counselling session or campus visit.', cta: 'Book a counselling session with an advisor.',
+    talk: 'Ask what they have studied so far and what they want to do next before recommending anything. Give fees and batch dates plainly when you have them. If a parent is on the line, answer their questions too. Never guarantee a job, a score or an admission.' },
+  { id: 'orders', label: 'Orders & deliveries', role: 'order support specialist', caller: 'customer',
+    objective: 'Answer questions about an order, delivery, return or refund, and get the customer to the resolution.', cta: 'Confirm what happens next and by when.',
+    talk: 'Take the order number first and repeat it back. Say what is happening in plain language and give a date when you have one. If it is late or the answer is bad news, say it straight away and apologise once. Never invent a tracking status. Anything you cannot see goes to the team with a promised callback.' },
+  { id: 'services', label: 'Home & field services', role: 'service booking coordinator', caller: 'customer',
+    objective: 'Understand the job, share what it involves and roughly what it costs, and book a technician visit.', cta: 'Book a visit slot for the technician.',
+    talk: 'Ask what the problem is, how old the equipment is, and the area they are in, one at a time. Give a price range only if the knowledge base has one, and say plainly that the final figure depends on the visit. Offer the earliest slot and confirm the address.' },
+  { id: 'hospitality', label: 'Bookings & reservations', role: 'reservations host', caller: 'guest',
+    objective: 'Take or change a booking, answer questions about availability, timings and charges, and confirm the reservation.', cta: 'Confirm the booking with date, time and party size.',
+    talk: 'Warm and quick, the way a good front desk sounds. Take the date, time and number of people, then repeat the whole booking back once. Mention anything they must know in advance. If the slot is full, offer the nearest alternative rather than saying no.' },
+  { id: 'collections', label: 'Payment reminders', role: 'accounts coordinator', caller: 'customer',
+    objective: 'Politely remind the customer about a due payment, confirm when they will pay, and note any issue that needs our team.', cta: 'Get a promised payment date.',
     talk: 'Be respectful and never threatening. State what is due and ask when they can pay. If they are facing a problem, listen, note it, and say the team will look at it. Accept whatever date they give and repeat it back. Never argue, never raise your voice, never imply consequences.' },
-  { id: 'onboarding', label: 'Customer onboarding', objective: 'Welcome new customers, confirm their details, explain the next steps and answer setup questions from the knowledge base.', cta: 'Confirm the customer is ready for the next step.',
+  { id: 'onboarding', label: 'Customer onboarding', role: 'onboarding specialist', caller: 'customer',
+    objective: 'Welcome new customers, confirm their details, explain the next steps and answer setup questions from the knowledge base.', cta: 'Confirm the customer is ready for the next step.',
     talk: 'Welcome them warmly and thank them for choosing us. Confirm their details one at a time. Explain what happens next in two or three plain steps. Ask if anything is unclear and answer it before finishing.' },
-  { id: 'survey', label: 'Feedback survey', objective: 'Collect short feedback about the customer\'s recent experience with a few friendly questions.', cta: 'Thank the customer and note their rating and comments.',
+  { id: 'survey', label: 'Feedback survey', role: 'customer experience associate', caller: 'customer',
+    objective: 'Collect short feedback about the customer\'s recent experience with a few friendly questions.', cta: 'Thank the customer and note their rating and comments.',
     talk: 'Say up front that it will take a minute. Ask two or three short questions and let them talk. Never argue with criticism or defend the company: thank them for it and note it. If they are unhappy, say someone will follow up. Do not sell anything.' },
 ]
 
@@ -85,6 +110,9 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
       profile.objective ??= t.objective
       profile.call_to_action ??= t.cta
       profile.instructions ??= t.talk
+      // How the agent introduces itself and what it calls the person on the line.
+      profile.agent_role = t.role
+      profile.customer_noun = t.caller
     }
     create.mutate({
       name: f.name, description: f.description || undefined, phone_number: f.phone_number || undefined, color,

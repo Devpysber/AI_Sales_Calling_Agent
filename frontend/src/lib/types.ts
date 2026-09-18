@@ -118,6 +118,8 @@ export interface KnowledgeDoc {
 
 export interface AgentProfile {
   agent_name: string
+  agent_role: string
+  customer_noun: string
   company_name: string
   company_tagline: string
   website_url: string

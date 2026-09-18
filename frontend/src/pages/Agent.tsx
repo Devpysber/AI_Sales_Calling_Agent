@@ -285,6 +285,12 @@ function ProfileEditor({ section, draft, setDraft, data }: {
             <Field label="Company tagline" className="sm:col-span-2" hint="One line on what you do — used when the prospect asks “who are you?”">
               <Input value={draft.company_tagline} maxLength={200} onChange={(e) => set('company_tagline', e.target.value)} placeholder="AI and software development partner for growing businesses" />
             </Field>
+            <Field label="Its job" hint="How it describes itself: clinic front desk, order support, admissions counsellor…">
+              <Input value={draft.agent_role ?? ''} maxLength={60} onChange={(e) => set('agent_role', e.target.value)} placeholder="senior sales consultant" />
+            </Field>
+            <Field label="Calls the person a" hint="What the caller is to you: customer, patient, guest, student, prospect.">
+              <Input value={draft.customer_noun ?? ''} maxLength={40} onChange={(e) => set('customer_noun', e.target.value)} placeholder="customer" />
+            </Field>
             <Field label="Website" className="sm:col-span-2" hint="The site this agent handles. The agent can mention it, and its website form link is on the Automation page.">
               <Input type="url" value={draft.website_url ?? ''} maxLength={200} onChange={(e) => set('website_url', e.target.value)} placeholder="Not set: e.g. https://www.carsindias.com" />
             </Field>

@@ -64,6 +64,10 @@ PROFILE_DEFAULTS = {
     "website_url": "",                 # the site this agent handles leads for
     "voice_speaker": "rahul",
     "default_language": "en-IN",
+    # What this agent is to the person on the line. A clinic reminder agent is not a sales consultant,
+    # and its caller is a patient, not a prospect: both appear throughout the prompt.
+    "agent_role": "senior sales consultant",
+    "customer_noun": "prospect",
     "objective": "Understand the prospect's business, explain how our services help, and book a discovery meeting with our team.",
     "call_to_action": "Book a 30-minute discovery call with our solutions team.",
     "greeting_en": "Hi {name}, this is {agent} calling from {company}. Is this a good time to talk for a minute?",
