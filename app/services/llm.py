@@ -178,6 +178,8 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
     errors = []
     for name in [p.strip() for p in settings.llm_providers.split(",") if p.strip()]:
         if name == "sarvam" and settings.sarvam_api_key:
+            if tools:
+                continue  # Sarvam streaming does not emit standard tool_calls deltas
             url, headers = "https://api.sarvam.ai/v1/chat/completions", {"api-subscription-key": settings.sarvam_api_key}
             # reasoning_effort null = no hidden thinking: first sentence in ~1s instead of ~3s
             body = {"model": settings.sarvam_llm_model, "reasoning_effort": settings.sarvam_reasoning_effort or None}
