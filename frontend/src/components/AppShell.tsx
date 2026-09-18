@@ -4,15 +4,15 @@ import {
   Download, Keyboard, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Lock, Mail, Menu, MessageSquareText, Moon, Pause, PhoneCall, Plus, Search, Settings,
   SlidersHorizontal, Sparkles, Sun, Upload, UserPlus, Users, X,
 } from 'lucide-react'
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import AlertsBell from '@/components/AlertsBell'
 import { CommandPalette, type Command } from '@/components/CommandPalette'
 import NewAgentSheet from '@/components/NewAgentSheet'
 import { Button, Spinner, Input, Dialog } from '@/components/ui'
-import { Waveform } from '@/components/VoiceViz'
-import { getMotionSetting, setMotionSetting, type MotionSetting } from '@/lib/motion'
+import { Aurora, VoiceOrb, Waveform } from '@/components/VoiceViz'
+import { AnimatedNumber, getMotionSetting, setMotionSetting, type MotionSetting } from '@/lib/motion'
 import { api } from '@/lib/api'
 import { AgentProvider, useAgents } from '@/lib/agent'
 import type { AgentSummary } from '@/lib/types'
@@ -178,6 +178,36 @@ function AgentSwitcher({ agents, current, compact, onNew, canCreate }: { agents:
   )
 }
 
+
+/**
+ * One highlight that glides to whichever nav item is current, instead of each item switching its
+ * own background on. The movement shows where you came from and where you went.
+ * NavLink marks the current item with aria-current="page"; we measure it inside the scroll area.
+ */
+function NavGlider({ container, watch }: { container: React.RefObject<HTMLDivElement | null>; watch: string }) {
+  const [box, setBox] = useState<{ top: number; height: number; left: number; width: number } | null>(null)
+  useLayoutEffect(() => {
+    const root = container.current
+    if (!root) return
+    const measure = () => {
+      const el = root.querySelector<HTMLElement>('a[aria-current="page"]')
+      if (!el) { setBox(null); return }
+      setBox({ top: el.offsetTop, height: el.offsetHeight, left: el.offsetLeft, width: el.offsetWidth })
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(root)
+    return () => ro.disconnect()
+  }, [container, watch])
+  if (!box) return null
+  return (
+    <span aria-hidden className="pointer-events-none absolute z-0 rounded-xl bg-ink-fg/[0.08] shadow-[inset_0_0_0_1px_rgb(128_128_128/0.12)] transition-[transform,height,width] duration-300 ease-[var(--ease-entrance)] motion-reduce:transition-none"
+      style={{ top: 0, left: box.left, width: box.width, height: box.height, transform: `translateY(${box.top}px)` }}>
+      <span className="absolute top-1.5 bottom-1.5 left-0 w-[3px] rounded-r-full bg-ink-fg" />
+    </span>
+  )
+}
+
 /* ---------------- Sidebar ---------------- */
 
 function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp, onLogout, dark, setDark, user, role, canCreate, mobile }: {
@@ -186,6 +216,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
   dark: boolean; setDark: (d: boolean) => void; user: string; role: string; canCreate: boolean; mobile?: boolean
 }) {
   const location = useLocation()
+  const navRef = useRef<HTMLDivElement>(null)
   const path = (to: string) => agent ? `/a/${agent.id}${to === '/' ? '' : to}` : to
   const done = agent ? SETUP_STEPS.filter((s) => agent.setup?.[s.key]).length : 0
   const next = agent ? (agent.setup ? SETUP_STEPS.find((s) => !agent.setup[s.key]) : undefined) : undefined
@@ -197,13 +228,8 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
     <NavLink key={to} to={to} end={end} title={compact ? label : undefined}
       className={({ isActive }) => cn('group relative flex h-9 items-center gap-3 rounded-xl text-[13.5px] font-semibold transition',
         compact ? 'justify-center' : 'px-3',
-        isActive ? 'bg-ink-fg/[0.07] text-ink-fg' : 'text-ink-muted hover:bg-ink-fg/[0.04] hover:text-ink-fg')}>
+        isActive ? 'text-ink-fg' : 'text-ink-muted hover:bg-ink-fg/[0.04] hover:text-ink-fg')}>
       {({ isActive }) => <>
-        {/* The marker grows from the middle of the item, so moving between pages reads as one
-            indicator travelling down the list rather than a block switching on. */}
-        <span className={cn('absolute top-1.5 bottom-1.5 left-0 w-[3px] origin-center rounded-r-full bg-ink-fg',
-          'transition-transform duration-200 ease-[var(--ease-entrance)] motion-reduce:transition-none',
-          isActive ? 'scale-y-100' : 'scale-y-0')} />
         <Icon className={cn('size-[18px] shrink-0 transition-transform duration-200 ease-[var(--ease-pointer)]',
           'group-hover:scale-110 motion-reduce:transition-none motion-reduce:group-hover:scale-100',
           isActive ? 'text-ink-fg' : 'text-ink-muted group-hover:text-ink-fg')} />
@@ -217,7 +243,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
     <div className={cn('flex h-full flex-col border-r border-border bg-ink text-ink-fg', mobile ? 'w-72' : compact ? 'w-[76px]' : 'w-[272px]', 'transition-[width] duration-200')}>
       <div className={cn('flex items-center gap-2.5 pt-4 pb-3', compact ? 'flex-col px-2' : 'px-4')}>
         <Link to="/" className="grid size-9 shrink-0 place-items-center rounded-xl bg-ink-fg text-ink shadow-sm"><Waveform bars={4} className="h-4" /></Link>
-        {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="text-[15px] font-extrabold tracking-tight">Samvaad AI</div><div className="text-[11px] text-ink-muted">Multi-agent calling</div></div>}
+        {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="text-sheen text-[15px] font-extrabold tracking-tight">Samvaad AI</div><div className="text-[11px] text-ink-muted">Multi-agent calling</div></div>}
         {!mobile && (
           <button type="button" onClick={() => setCompact(!compact)} title={compact ? 'Expand sidebar ( [ )' : 'Collapse sidebar ( [ )'}
             className="grid size-7 place-items-center rounded-lg text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg">
@@ -230,30 +256,35 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
         <AgentSwitcher agents={agents} current={agent} compact={compact} onNew={onNew} canCreate={canCreate} />
       </div>
 
-      <div className={cn('min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-4', compact ? 'px-2' : 'px-3')}>
+      <div ref={navRef} className={cn('relative min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-4', compact ? 'px-2' : 'px-3')}>
+        <NavGlider container={navRef} watch={`${location.pathname}${location.search}|${compact}|${agent?.id ?? ''}`} />
         {agent ? <>
           {/* Live status */}
           {!compact ? (
-            <Link to={path('/calls?status=active')} className="block rounded-2xl border border-ink-fg/8 bg-gradient-to-br from-ink-2 to-ink-3/40 p-3 transition hover:border-ink-fg/15">
-              <div className="flex items-center gap-2">
-                <LiveDot on={agent.stats.live > 0} />
+            <Link to={path('/calls?status=active')} className={cn('relative block overflow-hidden rounded-2xl border border-ink-fg/8 bg-gradient-to-br from-ink-2 to-ink-3/40 p-3 transition hover:border-ink-fg/15',
+              agent.stats.live > 0 && 'is-live-card')}>
+              <Aurora className="opacity-60" />
+              <div className="relative flex items-center gap-2.5">
+                <VoiceOrb state={agent.status === 'paused' ? 'idle' : agent.stats.live > 0 ? 'live' : 'listening'} size={30} />
                 <span className="flex-1 text-[13px] font-bold">{agent.stats.live ? `${agent.stats.live} call${agent.stats.live > 1 ? 's' : ''} live` : 'Idle'}</span>
                 {agent.status === 'paused'
                   ? <span className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-[10.5px] font-bold text-warning"><Pause className="size-2.5" />Paused</span>
                   : <span className={cn('rounded-full px-2 py-0.5 text-[10.5px] font-bold', agent.within_calling_hours ? 'bg-success/15 text-success' : 'bg-ink-fg/5 text-ink-muted')}>
                     {agent.within_calling_hours ? 'In hours' : 'After hours'}</span>}
               </div>
-              <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                {[['Today', agent.stats.calls_today], ['Connected', agent.stats.connected_today], ['Rate', connectRate === null ? '—' : `${connectRate}%`]].map(([l, v]) => (
-                  <div key={l as string} className="rounded-xl bg-ink-fg/[0.04] py-1.5">
-                    <div className="text-[15px] font-extrabold tabular-nums">{v}</div>
+              <div className="relative mt-3 grid grid-cols-3 gap-2 text-center">
+                {([['Today', agent.stats.calls_today], ['Connected', agent.stats.connected_today], ['Rate', connectRate]] as const).map(([l, v]) => (
+                  <div key={l} className="rounded-xl bg-ink-fg/[0.04] py-1.5">
+                    <div className="text-[15px] font-extrabold tabular-nums">{v === null ? '—' : <AnimatedNumber value={v} suffix={l === 'Rate' ? '%' : ''} />}</div>
                     <div className="text-[10px] font-semibold text-ink-muted">{l}</div>
                   </div>
                 ))}
               </div>
             </Link>
           ) : (
-            <Link to={path('/calls?status=active')} title={`${agent.stats.live} live`} className="mx-auto grid size-10 place-items-center rounded-xl bg-ink-2"><LiveDot on={agent.stats.live > 0} /></Link>
+            <Link to={path('/calls?status=active')} title={`${agent.stats.live} live`} className="mx-auto grid size-10 place-items-center rounded-xl bg-ink-2">
+              <VoiceOrb state={agent.stats.live > 0 ? 'live' : 'listening'} size={26} />
+            </Link>
           )}
 
           {/* Quick actions */}
@@ -262,8 +293,8 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
               {[[UserPlus, 'Add lead', '/leads?new=1'], [Upload, 'Import', '/import'], [MessageSquareText, 'Test', '/agent?tab=playground']].map(([Icon, l, to]) => {
                 const I = Icon as typeof Users
                 return (
-                  <Link key={l as string} to={path(to as string)} className="flex flex-col items-center gap-1 rounded-xl border border-ink-fg/6 py-2 text-[11px] font-semibold text-ink-muted transition hover:border-ink-fg/15 hover:bg-ink-fg/[0.04] hover:text-ink-fg">
-                    <I className="size-4" />{l as string}
+                  <Link key={l as string} to={path(to as string)} className="group flex flex-col items-center gap-1 rounded-xl border border-ink-fg/6 py-2 text-[11px] font-semibold text-ink-muted transition hover:border-ink-fg/15 hover:bg-ink-fg/[0.04] hover:text-ink-fg">
+                    <I className="size-4 transition-transform duration-200 ease-[var(--ease-pointer)] group-hover:-translate-y-0.5 group-hover:scale-110 motion-reduce:transform-none" />{l as string}
                   </Link>
                 )
               })}
@@ -314,7 +345,11 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
           {!compact && next && (
             <Link to={path(next.to)} className="block rounded-2xl border border-dashed border-ink-fg/12 p-3 transition hover:border-ink-fg/40">
               <div className="flex items-center justify-between text-[12px] font-bold"><span className="flex items-center gap-1.5"><Sparkles className="size-3.5 text-ink-fg" />Setup {done}/{SETUP_STEPS.length}</span><span className="text-ink-muted">{Math.round((100 * done) / SETUP_STEPS.length)}%</span></div>
-              <div className="mt-2 flex gap-1">{SETUP_STEPS.map((s) => <span key={s.key} className={cn('h-1 flex-1 rounded-full', agent.setup?.[s.key] ? 'bg-ink-fg' : 'bg-ink-fg/10')} />)}</div>
+              <div className="mt-2 flex gap-1">{SETUP_STEPS.map((s, i) => (
+                <span key={s.key} className="h-1 flex-1 overflow-hidden rounded-full bg-ink-fg/10">
+                  {agent.setup?.[s.key] && <span className="grow-x block h-full rounded-full bg-ink-fg" style={{ animationDelay: `${200 + i * 120}ms` }} />}
+                </span>
+              ))}</div>
               <div className="mt-2 text-[12px] text-ink-muted">Next: <span className="font-semibold text-ink-fg">{next.label}</span> →</div>
 
             </Link>
