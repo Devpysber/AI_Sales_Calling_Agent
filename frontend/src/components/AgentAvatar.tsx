@@ -89,7 +89,7 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
 
     const scene = new THREE.Scene()
     // Face-forward close-up: fill the frame with the face like a video call
-    const EYE_LINE = 13.8
+    const EYE_LINE = 13.5
     const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 1000)
     camera.position.set(0, EYE_LINE, 6.5)
 

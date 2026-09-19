@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlertTriangle, BookOpen, Bot, Check, CircleDashed, Mic, MicOff, Play, RotateCcw, Save, SendHorizontal,
-  Sparkles, Square, Target, UserRound, Volume2,
+  AlertTriangle, BookOpen, Bot, Check, CircleDashed, Lightbulb, Mic, MicOff, Play, RotateCcw, Save, SendHorizontal,
+  ShieldAlert, Sparkles, Square, Target, UserRound, Volume2,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
@@ -676,9 +676,9 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
             </div>
 
             {/* Input area */}
-            <div className="pointer-events-auto flex items-center gap-3 shrink-0 self-end">
+            <div className="pointer-events-auto flex items-center gap-3 shrink-0 self-end relative">
               {listening && (
-                <div className="absolute -top-8 right-16 flex items-center gap-2 bg-black/40 px-3 py-1 rounded-full backdrop-blur-md border border-white/10">
+                <div className="absolute -top-10 right-4 flex items-center gap-2 bg-black/40 px-3 py-1 rounded-full backdrop-blur-md border border-white/10">
                   <div className="size-2 animate-pulse rounded-full bg-red-500" />
                   <span className="text-[11px] font-medium text-red-400 tracking-wide">Listening…</span>
                 </div>
@@ -733,12 +733,46 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
           )}
         </Card>
         {lead && (
-          <Card className="p-5 text-sm">
-            <div className="text-xs font-medium text-muted uppercase">Testing as</div>
-            <div className="mt-1 font-medium">{lead.name || lead.phone}</div>
-            <div className="text-muted">{[lead.company, lead.city].filter(Boolean).join(' · ') || lead.phone}</div>
-            {lead.summary && <p className="mt-2 line-clamp-3 text-fg-2">{lead.summary}</p>}
-          </Card>
+          <div className="space-y-4">
+            <Card className="p-5 text-sm">
+              <div className="text-xs font-medium text-muted uppercase">Testing as</div>
+              <div className="mt-1 font-medium">{lead.name || lead.phone}</div>
+              <div className="text-muted">{[lead.company, lead.city].filter(Boolean).join(' · ') || lead.phone}</div>
+            </Card>
+            
+            {(lead.summary || lead.requirements || lead.objections) && (
+              <Card>
+                <CardHeader title={<span className="flex items-center gap-2"><Sparkles className="size-4" />AI analysis</span>} description="Context for this lead from previous calls" />
+                <div className="space-y-3 px-4 pb-4 sm:px-5 sm:pb-5">
+                  <div className="rounded-2xl border border-border bg-surface-2/40 p-4">
+                    <div className="mb-1.5 flex items-center gap-2 text-[13px] font-bold"><Bot className="size-4" />Summary</div>
+                    <div className="text-sm leading-relaxed break-words text-fg-2">{lead.summary || <span className="text-muted">No summary yet.</span>}</div>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-2xl border border-border bg-surface-2/40 p-4">
+                      <div className="mb-1.5 flex items-center gap-2 text-[13px] font-bold"><Lightbulb className="size-4" />Requirements</div>
+                      <div className="text-sm leading-relaxed break-words text-fg-2">{lead.requirements || <span className="text-muted">No requirements stated.</span>}</div>
+                    </div>
+                    <div className="rounded-2xl border border-border bg-surface-2/40 p-4">
+                      <div className="mb-1.5 flex items-center gap-2 text-[13px] font-bold"><ShieldAlert className="size-4" />Objections</div>
+                      <div className="text-sm leading-relaxed break-words text-fg-2">{lead.objections || <span className="text-muted">No objections raised.</span>}</div>
+                    </div>
+                  </div>
+                  <Stagger className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                    {[
+                      ['Temperature', <QualificationBadge value={lead.qualification ?? null} />], 
+                      ['Language', LANGUAGES[lead.language] ?? lead.language]
+                    ].map(([k, v]) => (
+                      <div key={k as string} className="min-w-0 rounded-xl border border-border px-3 py-2.5">
+                        <div className="text-[11px] font-bold tracking-wider text-muted uppercase">{k as string}</div>
+                        <div className="mt-1 font-bold break-words">{v as ReactNode}</div>
+                      </div>
+                    ))}
+                  </Stagger>
+                </div>
+              </Card>
+            )}
+          </div>
         )}
       </div>
     </div>
