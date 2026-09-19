@@ -616,7 +616,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
               'absolute bottom-[72px] left-0 right-0 z-10 flex flex-col gap-2 px-5 pb-2',
               showAll
                 ? 'pointer-events-auto top-0 overflow-y-auto bg-black/30 backdrop-blur-sm pt-3'
-                : 'pointer-events-none max-h-[42%] overflow-hidden [scrollbar-width:none]',
+                : 'pointer-events-none max-h-[42%] justify-end overflow-hidden [scrollbar-width:none]',
             )}
           >
             {history.length > 4 && (
