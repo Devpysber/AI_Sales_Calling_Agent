@@ -608,90 +608,92 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
           </div>
 
           {/* Gradient at bottom so bubbles stay readable over the body */}
-          <div className="absolute inset-x-0 bottom-0 h-48 bg-gradient-to-t from-black/70 to-transparent pointer-events-none z-[1]" />
+          <div className="absolute inset-x-0 bottom-0 h-48 bg-gradient-to-t from-black/80 to-transparent pointer-events-none z-[1]" />
 
-          {/* ── Chat bubbles — float bottom-left, never reach the face ── */}
-          <div
-            className={cn(
-              'absolute bottom-[72px] left-0 right-0 z-10 flex flex-col gap-2 px-5 pb-2',
-              showAll
-                ? 'pointer-events-auto top-0 overflow-y-auto bg-black/30 backdrop-blur-sm pt-3'
-                : 'pointer-events-none max-h-[42%] justify-end overflow-hidden [scrollbar-width:none]',
-            )}
-          >
-            {history.length > 4 && (
-              <button type="button" onClick={() => setShowAll((v) => !v)}
-                className="pointer-events-auto sticky top-0 z-10 mb-1 min-h-8 self-start rounded-full bg-white/15 px-3 py-1 text-xs font-medium text-white/90 backdrop-blur-md hover:bg-white/25 border border-white/20">
-                {showAll ? 'Show last 4 turns' : `Show all (${history.length} turns)`}
-              </button>
-            )}
-            {greeting.isError && history.length === 0 && (
-              <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-danger/40 bg-danger-soft/90 px-3 py-2 text-[13px] text-danger backdrop-blur-md">
-                <AlertTriangle className="size-4 shrink-0" /><span className="min-w-0 break-words">Could not load the opening line: {greeting.error.message}</span>
-                <Button size="sm" variant="ghost" onClick={() => void greeting.refetch()}><RotateCcw />Retry</Button>
-              </div>
-            )}
-            {greeting.isPending && history.length === 0 && (
-              <div className="self-start rounded-2xl bg-black/50 px-3 py-2 text-[13px] text-white/70 backdrop-blur-md border border-white/10">Preparing the opening line…</div>
-            )}
-            {(showAll ? history : history.slice(-3)).map((t, i, arr) => (
-              <div key={history.length - arr.length + i}
-                className={cn(
-                  'pointer-events-auto max-w-[72%] rounded-2xl px-4 py-2.5 text-[13px] leading-relaxed break-words shadow-xl backdrop-blur-md',
-                  t.role === 'assistant'
-                    ? 'self-start bg-black/55 text-white border border-white/12'
-                    : 'self-end bg-brand text-brand-fg',
-                )}>
-                {t.text}
-              </div>
-            ))}
-            {send.isPending && (
-              <div className="self-start flex items-center gap-2 rounded-2xl bg-black/50 px-4 py-2.5 text-[13px] text-white/60 backdrop-blur-md border border-white/10">
-                <span className="flex gap-1">
-                  <span className="size-1.5 rounded-full bg-white/50 animate-bounce [animation-delay:0ms]" />
-                  <span className="size-1.5 rounded-full bg-white/50 animate-bounce [animation-delay:120ms]" />
-                  <span className="size-1.5 rounded-full bg-white/50 animate-bounce [animation-delay:240ms]" />
-                </span>
-              </div>
-            )}
-            {failed && !send.isPending && (
-              <div className="pointer-events-auto flex max-w-[72%] flex-col gap-1.5 self-start rounded-2xl border border-danger/40 bg-danger-soft/90 px-3 py-2 text-[13px] text-danger backdrop-blur-md">
-                <div className="flex flex-wrap items-center gap-2">
-                  <AlertTriangle className="size-4 shrink-0" />
-                  <span className="min-w-0 flex-1 basis-40 break-words">{profile.agent_name || 'The agent'} could not reply — {humanLlmError(failed.detail)}</span>
-                  <Button size="sm" variant="ghost" onClick={() => submit(failed.message)}><RotateCcw />Retry</Button>
+          {/* ── Floating Overlay: Chat on left, Input on right ── */}
+          <div className="absolute inset-x-6 bottom-6 z-20 flex items-end justify-between gap-6 pointer-events-none">
+            
+            {/* Chat bubbles */}
+            <div
+              className={cn(
+                'flex flex-col gap-2 max-w-[60%] min-w-[320px]',
+                showAll
+                  ? 'pointer-events-auto max-h-[60vh] overflow-y-auto bg-black/40 backdrop-blur-md p-5 rounded-3xl'
+                  : 'pointer-events-none max-h-[42vh] justify-end overflow-hidden [scrollbar-width:none]',
+              )}
+            >
+              {history.length > 4 && (
+                <button type="button" onClick={() => setShowAll((v) => !v)}
+                  className="pointer-events-auto sticky top-0 z-10 mb-1 min-h-8 self-start rounded-full bg-white/10 px-4 py-1.5 text-[11px] font-medium text-white/90 backdrop-blur-md hover:bg-white/20 border border-white/10 transition-colors">
+                  {showAll ? 'Show last 4 turns' : `Show full transcript (${history.length} turns)`}
+                </button>
+              )}
+              {greeting.isError && history.length === 0 && (
+                <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-danger/40 bg-danger-soft/90 px-4 py-2.5 text-[13px] text-danger backdrop-blur-md shadow-xl">
+                  <AlertTriangle className="size-4 shrink-0" /><span className="min-w-0 break-words">Could not load the opening line: {greeting.error.message}</span>
+                  <Button size="sm" variant="ghost" onClick={() => void greeting.refetch()}><RotateCcw />Retry</Button>
                 </div>
-                <details className="text-xs opacity-80"><summary className="cursor-pointer">Technical detail</summary><p className="mt-1 break-words font-mono" title={failed.detail}>{failed.detail}</p></details>
-              </div>
-            )}
-            {ended && (
-              <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-warning/40 bg-warning-soft/90 px-3 py-2 text-[13px] text-warning backdrop-blur-md">
-                <AlertTriangle className="size-4 shrink-0" />The agent ended the call.<Button size="sm" variant="ghost" onClick={() => void reset()}><RotateCcw />Start again</Button>
-              </div>
-            )}
-            <div ref={bottom} />
-          </div>
+              )}
+              {greeting.isPending && history.length === 0 && (
+                <div className="self-start rounded-2xl bg-black/60 px-4 py-2.5 text-[13px] text-white/70 backdrop-blur-md border border-white/10 shadow-xl">Preparing the opening line…</div>
+              )}
+              {(showAll ? history : history.slice(-3)).map((t, i, arr) => (
+                <div key={history.length - arr.length + i}
+                  className={cn(
+                    'pointer-events-auto max-w-[85%] rounded-2xl px-4 py-3 text-[13px] leading-relaxed break-words shadow-2xl backdrop-blur-md',
+                    t.role === 'assistant'
+                      ? 'self-start bg-black/60 text-white border border-white/10'
+                      : 'self-end bg-white text-black font-medium',
+                  )}>
+                  {t.text}
+                </div>
+              ))}
+              {send.isPending && (
+                <div className="self-start flex items-center gap-2 rounded-2xl bg-black/60 px-5 py-3.5 text-[13px] text-white/60 backdrop-blur-md border border-white/10 shadow-xl">
+                  <span className="flex gap-1.5">
+                    <span className="size-1.5 rounded-full bg-white/60 animate-bounce [animation-delay:0ms]" />
+                    <span className="size-1.5 rounded-full bg-white/60 animate-bounce [animation-delay:150ms]" />
+                    <span className="size-1.5 rounded-full bg-white/60 animate-bounce [animation-delay:300ms]" />
+                  </span>
+                </div>
+              )}
+              {failed && !send.isPending && (
+                <div className="pointer-events-auto flex max-w-[85%] flex-col gap-1.5 self-start rounded-2xl border border-danger/40 bg-danger-soft/90 px-4 py-2.5 text-[13px] text-danger backdrop-blur-md shadow-xl">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <AlertTriangle className="size-4 shrink-0" />
+                    <span className="min-w-0 flex-1 basis-40 break-words">{profile.agent_name || 'The agent'} could not reply — {humanLlmError(failed.detail)}</span>
+                    <Button size="sm" variant="ghost" onClick={() => submit(failed.message)}><RotateCcw />Retry</Button>
+                  </div>
+                  <details className="text-xs opacity-80"><summary className="cursor-pointer">Technical detail</summary><p className="mt-1 break-words font-mono" title={failed.detail}>{failed.detail}</p></details>
+                </div>
+              )}
+              {ended && (
+                <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-warning/40 bg-warning-soft/90 px-4 py-2.5 text-[13px] text-warning backdrop-blur-md shadow-xl">
+                  <AlertTriangle className="size-4 shrink-0" />The agent ended the call.<Button size="sm" variant="ghost" onClick={() => void reset()}><RotateCcw />Start again</Button>
+                </div>
+              )}
+              <div ref={bottom} />
+            </div>
 
-          {/* ── Input bar — full width, pinned to bottom ── */}
-          <div className="pointer-events-auto absolute inset-x-0 bottom-0 z-20 bg-black/60 px-4 py-3 backdrop-blur-xl border-t border-white/8">
-            {listening && (
-              <div className="mb-2 flex items-center gap-2">
-                <div className="size-2 animate-pulse rounded-full bg-red-400" />
-                <span className="text-xs font-medium text-red-400 tracking-wide">Listening…</span>
-              </div>
-            )}
-            <div className="flex items-center gap-3">
+            {/* Input area */}
+            <div className="pointer-events-auto flex items-center gap-3 shrink-0 self-end">
+              {listening && (
+                <div className="absolute -top-8 right-16 flex items-center gap-2 bg-black/40 px-3 py-1 rounded-full backdrop-blur-md border border-white/10">
+                  <div className="size-2 animate-pulse rounded-full bg-red-500" />
+                  <span className="text-[11px] font-medium text-red-400 tracking-wide">Listening…</span>
+                </div>
+              )}
               <form onSubmit={(e) => { e.preventDefault(); submit(text) }}
-                className="flex min-w-0 flex-1 items-center rounded-full border border-white/15 bg-white/8 px-5 py-2 transition-all focus-within:bg-white/12 focus-within:border-white/30">
+                className="flex w-[320px] sm:w-[380px] items-center rounded-full border border-white/10 bg-black/50 px-5 py-2.5 transition-all focus-within:bg-black/70 focus-within:border-white/20 backdrop-blur-xl shadow-2xl">
                 <Input
                   value={text} onChange={(e) => setText(e.target.value)}
                   disabled={inputLocked} maxLength={1000}
                   placeholder={listening ? 'Listening...' : ended ? 'Call ended' : waitingForGreeting ? 'Preparing…' : 'Type reply…'}
                   aria-label="Your reply"
-                  className="h-9 min-w-0 flex-1 border-none bg-transparent text-[13px] text-white shadow-none focus-visible:ring-0 placeholder:text-white/30"
+                  className="h-9 min-w-0 flex-1 border-none bg-transparent text-[13px] text-white shadow-none focus-visible:ring-0 placeholder:text-white/40 px-0"
                 />
                 <Button type="submit" variant="primary" size="sm"
-                  className="ml-2 rounded-full px-4 shrink-0 h-8"
+                  className="ml-2 rounded-full px-4 shrink-0 h-8 bg-white/15 hover:bg-white/25 text-white border-0"
                   disabled={!text.trim() || inputLocked || send.isPending}
                   loading={send.isPending} aria-label="Send">
                   <SendHorizontal className="size-3.5" />
@@ -700,12 +702,12 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
               <button type="button" onClick={toggleMic} disabled={inputLocked || send.isPending}
                 aria-label={listening ? 'Stop listening' : 'Speak'}
                 className={cn(
-                  'flex size-11 shrink-0 items-center justify-center rounded-full text-white shadow-lg transition-all active:scale-95 disabled:opacity-40',
+                  'flex size-14 shrink-0 items-center justify-center rounded-full text-white shadow-2xl transition-all active:scale-95 disabled:opacity-40',
                   listening
                     ? 'bg-red-500 shadow-red-500/30 animate-pulse'
-                    : 'bg-white/12 hover:bg-white/20 border border-white/20',
+                    : 'bg-[#2a2a35] hover:bg-[#353542] border border-white/5',
                 )}>
-                {listening ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+                {listening ? <MicOff className="size-5" /> : <Mic className="size-5" />}
               </button>
             </div>
           </div>
