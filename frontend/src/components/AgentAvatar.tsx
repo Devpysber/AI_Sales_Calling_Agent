@@ -88,11 +88,10 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
 
     const scene = new THREE.Scene()
-    // 30 FOV is closer to a real human portrait lens
-    const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 1000)
-    // Frame face close-up: face spans y 11.9..14, aim at eye level
-    const EYE_LINE = 13.5
-    camera.position.set(0, EYE_LINE, 9.5)
+    // Face-forward close-up: fill the frame with the face like a video call
+    const EYE_LINE = 13.8
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 1000)
+    camera.position.set(0, EYE_LINE, 6.5)
 
     const updateSize = () => {
       const rect = el.getBoundingClientRect()
@@ -245,7 +244,7 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
 
       // Zoomed out shows the shoulders as well; ease the camera so toggling it does not cut.
       // Under reduced motion snap instead of easing so nothing glides.
-      const camZ = zoomOut ? 11 : 9.5
+      const camZ = zoomOut ? 8.5 : 6.5
       camera.position.z = reduced ? camZ : THREE.MathUtils.lerp(camera.position.z, camZ, 0.08)
 
       // Listen: lean in and cock the head slightly. Idle: a slow breathing sway so it never looks frozen.
