@@ -11,20 +11,26 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const qc = useQueryClient()
   const navigate = useNavigate()
-  const from = (useLocation().state as { from?: string } | null)?.from ?? '/'
+  const rawFrom = (useLocation().state as { from?: string } | null)?.from
+  // Only return to an in-app path: never to /login itself or to anything that looks like an external URL.
+  const from = rawFrom && rawFrom.startsWith('/') && !rawFrom.startsWith('//') && rawFrom !== '/login' ? rawFrom : '/'
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setLoading(true)
     setError('')
     const form = new FormData(e.currentTarget)
+    const email = String(form.get('email') ?? '').trim()
+    const password = String(form.get('password') ?? '')
     try {
-      const res = await api<{ user: string }>('/api/auth/login', { method: 'POST', json: Object.fromEntries(form) })
-      qc.setQueryData(['me'], { user: res.user, auth_enabled: true })
-      navigate(from === '/login' ? '/' : from, { replace: true })
+      const res = await api<{ user: string }>('/api/auth/login', { method: 'POST', json: { email, password } })
+      // Seed the session so the guarded routes render at once, then refetch: /me also carries the
+      // display name, role and agent limits that the login response does not.
+      qc.setQueryData(['me'], (prev: object | undefined) => ({ ...(prev ?? {}), user: res.user, auth_enabled: true }))
+      void qc.invalidateQueries({ queryKey: ['me'] })
+      navigate(from, { replace: true })
     } catch (err) {
-      setError((err as Error).message)
-    } finally {
+      setError(err instanceof Error && err.message ? err.message : 'Could not sign in. Please try again.')
       setLoading(false)
     }
   }
@@ -43,9 +49,9 @@ export default function Login() {
         {/* The product in one image: the agent's voice, alive and waiting for the next call. */}
         <FittedOrb />
         <div className="relative max-w-md shrink-0">
-          <h2 className="text-3xl leading-tight font-semibold tracking-tight xl:text-4xl">Your AI sales team that never stops dialling.</h2>
+          <p className="text-3xl leading-tight font-semibold tracking-tight xl:text-4xl">Your AI sales team that never stops dialling.</p>
           <p className="mt-3 text-[15px] text-white/70">Calls leads in Hindi and English, answers from your company knowledge, qualifies intent and books meetings — with every conversation logged to your CRM.</p>
-          <div className="mt-6 grid grid-cols-3 gap-3 text-sm">
+          <div className="mt-6 grid grid-cols-3 gap-3 text-sm [&>div]:min-w-0 [&>div]:break-words">
             {[['Plivo', 'Telephony'], ['Sarvam', 'Indian voices'], ['RAG', 'Grounded answers']].map(([a, b]) => (
               <div key={a} className="rounded-lg bg-white/5 p-3 ring-1 ring-white/10 transition hover:-translate-y-0.5 hover:bg-white/10"><div className="font-semibold">{a}</div><div className="text-white/60">{b}</div></div>
             ))}
@@ -53,19 +59,21 @@ export default function Login() {
         </div>
       </div>
 
-      <div className="flex min-h-0 items-center justify-center overflow-y-auto p-6">
-        <form onSubmit={submit} className="w-full max-w-sm space-y-5">
-          <div>
-            <div className="mb-6 grid size-10 place-items-center rounded-xl bg-brand-soft text-brand lg:hidden"><AudioWaveform className="size-5" /></div>
-            <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
-            <p className="mt-1 text-sm text-muted">Access your voice agent dashboard.</p>
-          </div>
-          <Field label="Email" hint="Sign-in email from your Admin profile. First sign-in before an email is set: your admin username.">
-            <Input name="email" type="text" inputMode="email" autoComplete="email" required autoFocus placeholder="you@company.com" />
-          </Field>
-          <Field label="Password"><Input name="password" type="password" autoComplete="current-password" required /></Field>
-          {error && <p role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">{error}</p>}
-          <Button type="submit" variant="primary" size="lg" className="w-full" loading={loading}><Lock />Sign in</Button>
+      <div className="flex min-h-0 min-w-0 items-center justify-center overflow-y-auto px-4 py-8 sm:p-6">
+        <form onSubmit={submit} className="w-full min-w-0 max-w-sm" aria-busy={loading}>
+          <fieldset disabled={loading} className="min-w-0 space-y-5">
+            <div>
+              <div className="mb-6 grid size-10 place-items-center rounded-xl bg-brand-soft text-brand lg:hidden"><AudioWaveform className="size-5" /></div>
+              <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
+              <p className="mt-1 text-sm text-muted">Access your voice agent dashboard.</p>
+            </div>
+            <Field label="Email" hint="Sign-in email from your Admin profile. First sign-in before an email is set: your admin username.">
+              <Input name="email" type="text" inputMode="email" autoComplete="username" autoCapitalize="none" spellCheck={false} required autoFocus placeholder="you@company.com" />
+            </Field>
+            <Field label="Password"><Input name="password" type="password" autoComplete="current-password" required /></Field>
+            {error && <p role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm break-words text-danger">{error}</p>}
+            <Button type="submit" variant="primary" size="lg" className="w-full" loading={loading}><Lock />Sign in</Button>
+          </fieldset>
         </form>
       </div>
     </div>
@@ -79,7 +87,9 @@ function FittedOrb() {
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
-    const measure = () => setSize(Math.max(0, Math.min(el.clientHeight - 16, el.clientWidth * 0.8, 380)))
+    // Snap to a 40px step: VoiceOrb3D rebuilds its whole WebGL scene whenever `size` changes, so a
+    // per-pixel value would churn contexts on every resize tick. It follows its own box for the rest.
+    const measure = () => setSize(Math.max(0, Math.floor(Math.min(el.clientHeight - 16, el.clientWidth * 0.8, 380) / 40) * 40))
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
@@ -87,7 +97,7 @@ function FittedOrb() {
   }, [])
   return (
     <div ref={ref} className="relative grid min-h-0 flex-1 place-items-center">
-      {size >= 120 && <Orb3D key={Math.round(size / 40)} state="listening" size={size} />}
+      {size >= 120 && <Orb3D state="listening" size={size} />}
     </div>
   )
 }

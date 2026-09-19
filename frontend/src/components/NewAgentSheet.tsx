@@ -3,10 +3,10 @@ import { Check } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { Button, Field, Input, Select, Sheet, Textarea } from '@/components/ui'
+import { Button, Field, Input, Select, Sheet, Skeleton, Textarea } from '@/components/ui'
 import { api } from '@/lib/api'
-import { useAgents } from '@/lib/agent'
-import type { AgentSummary } from '@/lib/types'
+import { useAgentOptional, useAgents } from '@/lib/agent'
+import type { AgentSummary, AgentsResponse } from '@/lib/types'
 import { cn, LANGUAGES } from '@/lib/utils'
 
 export const AGENT_COLORS = ['#5b4bf5', '#0e8a5e', '#d9480f', '#1f6feb', '#c2255c', '#7048e8', '#0b7285', '#b36b00']
@@ -57,12 +57,13 @@ const TEMPLATES = [
     talk: 'Say up front that it will take a minute. Ask two or three short questions and let them talk. Never argue with criticism or defend the company: thank them for it and note it. If they are unhappy, say someone will follow up. Do not sell anything.' },
 ]
 
-export function ColorPicker({ value, onChange }: { value: string; onChange: (c: string) => void }) {
+export function ColorPicker({ value, onChange, labelledBy }: { value: string; onChange: (c: string) => void; labelledBy?: string }) {
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap gap-2" role="group" aria-labelledby={labelledBy} aria-label={labelledBy ? undefined : 'Colour'}>
       {AGENT_COLORS.map((c) => (
         <button key={c} type="button" onClick={() => onChange(c)} aria-label={`Colour ${c}`}
-          className={cn('grid size-8 place-items-center rounded-lg text-white ring-offset-2 ring-offset-surface transition', value === c && 'ring-2 ring-fg')}
+          aria-pressed={value === c}
+          className={cn('grid size-10 shrink-0 place-items-center rounded-lg text-white ring-offset-2 ring-offset-surface transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg', value === c && 'ring-2 ring-fg')}
           style={{ background: c }}>
           {value === c && <Check className="size-4" />}
         </button>
@@ -71,37 +72,62 @@ export function ColorPicker({ value, onChange }: { value: string; onChange: (c: 
   )
 }
 
-export default function NewAgentSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+// Inside a workspace the nearest QueryClient is that agent's own cache (AgentProvider), so
+// invalidating ['agents'] there never reaches the root client AppShell resolves agents from.
+function useInWorkspace() {
+  return useAgentOptional() !== null
+}
+
+export default function NewAgentSheet({ open, onClose, onCreated }: {
+  open: boolean
+  onClose: () => void
+  /** Called with the new agent instead of the default navigation, e.g. so a parent on the root client can refetch first. */
+  onCreated?: (agent: AgentSummary) => void
+}) {
   const qc = useQueryClient()
   const navigate = useNavigate()
-  const { data } = useAgents()
+  const inWorkspace = useInWorkspace()
+  const { data, isPending: agentsLoading, isError: agentsFailed } = useAgents()
   const [color, setColor] = useState(AGENT_COLORS[0]!)
   const [template, setTemplate] = useState('sales')
   const [copyFrom, setCopyFrom] = useState('')
 
+  const agentCount = data?.agents.length ?? 0
   useEffect(() => {
-    if (open) {
-      setColor(AGENT_COLORS[(data?.agents.length ?? 0) % AGENT_COLORS.length]!)
-      setTemplate('sales')
-      setCopyFrom('')
-    }
-  }, [open, data?.agents.length])
+    if (!open) return
+    setColor(AGENT_COLORS[agentCount % AGENT_COLORS.length]!)
+    setTemplate('sales')
+    setCopyFrom('')
+    // Only reset when the sheet opens; a background refetch changing the count must not wipe the form.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
 
   const create = useMutation({
     mutationFn: (body: Record<string, unknown>) => api<AgentSummary>('/api/agents', { method: 'POST', json: body }),
     onSuccess: (agent) => {
       toast.success(`${agent.name} is ready`, { description: 'Next: add your knowledge base, then a number or leads.' })
-      qc.invalidateQueries({ queryKey: ['agents'] })
+      // Seed the cache with the new agent before navigating: AppShell resolves the workspace from ['agents'] and
+      // bounces to Home when the id is unknown, and the refetch below would still be in flight at navigate time.
+      qc.setQueryData<AgentsResponse>(['agents'], (old) => old && { ...old, agents: [...old.agents.filter((a) => a.id !== agent.id), agent] })
+      void qc.invalidateQueries({ queryKey: ['agents'] })
       onClose()
-      navigate(`/a/${agent.id}/agent`)
+      const to = `/a/${agent.id}/agent`
+      if (onCreated) { onCreated(agent); return }
+      // From inside another agent's workspace the root ['agents'] cache is unreachable from here; a client-side
+      // navigate would hit AppShell's "unknown agent" guard and bounce to Home, so do a full navigation instead.
+      if (inWorkspace) { window.location.assign(to); return }
+      navigate(to)
     },
     onError: (e) => toast.error(e.message),
   })
 
   const submit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    if (create.isPending) return
     const f = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>
-    const t = TEMPLATES.find((x) => x.id === template)!
+    const name = (f.name ?? '').trim()
+    if (!name) { toast.error('Give the agent a name'); return }
+    const t = TEMPLATES.find((x) => x.id === template) ?? TEMPLATES[0]!
     // Only send what was filled in: blanks keep the copied agent's (or the default) values.
     const profile: Record<string, string> = Object.fromEntries(
       (['agent_name', 'company_name', 'company_tagline', 'website_url', 'voice_speaker', 'default_language', 'objective', 'call_to_action', 'instructions', 'agent_password'] as const)
@@ -115,17 +141,19 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
       profile.customer_noun = t.caller
     }
     create.mutate({
-      name: f.name, description: f.description || undefined, phone_number: f.phone_number || undefined, color,
+      name, description: f.description?.trim() || undefined, phone_number: f.phone_number?.trim() || undefined, color,
       copy_from: copyFrom ? Number(copyFrom) : undefined, profile,
     })
   }
 
   const voices = data?.voices ?? []
+  const close = () => { if (!create.isPending) onClose() }
   return (
-    <Sheet open={open} onClose={onClose} title="New agent" width="max-w-xl"
+    <Sheet open={open} onClose={close} title="New agent" width="max-w-xl"
       description="Each agent is its own workspace: persona, voice, number, knowledge base, leads, calls and history stay separate."
-      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" type="submit" form="new-agent" loading={create.isPending}>Create agent</Button></>}>
-      <form id="new-agent" onSubmit={submit} className="space-y-6">
+      footer={<><Button onClick={close} disabled={create.isPending}>Cancel</Button><Button variant="primary" type="submit" form="new-agent" loading={create.isPending}>Create agent</Button></>}>
+      <form id="new-agent" onSubmit={submit} className="min-w-0">
+      <fieldset disabled={create.isPending} className="min-w-0 space-y-6 disabled:opacity-70">
         {/* Four starred fields are all it takes to make a working agent: without this people fill the whole sheet. */}
         <div className="rounded-xl border border-border bg-surface-2 p-3 text-xs text-muted">
           <span className="font-medium text-fg">Fields marked * are all you need now.</span> Everything else has a
@@ -137,20 +165,27 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
         <section className="space-y-4">
           <h3 className="text-sm font-semibold">Workspace</h3>
           <Field label="Agent name *" hint="What your team calls this agent, e.g. “Real estate leads” or “Clinic reminders”.">
-            <Input name="name" required autoFocus placeholder="Real estate outbound" maxLength={255} />
+            <Input name="name" required autoFocus autoComplete="off" placeholder="Real estate outbound" maxLength={255} />
           </Field>
           <Field label="What is it for?"><Textarea name="description" rows={2} placeholder="Calls website enquiries for the Pune project and books site visits." /></Field>
           <Field label="Website" hint="The site this agent handles leads for. Each agent gets its own website form link on its Automation page.">
             <Input name="website_url" type="url" placeholder="https://www.yourwebsite.com" maxLength={200} />
           </Field>
           <Field label="Phone number" hint="Plivo number for caller ID and inbound calls. Leave blank to use the default number."><Input name="phone_number" inputMode="tel" placeholder="+91 80 1234 5678" /></Field>
+          {/* Not a <Field>: that renders a <label>, which would forward clicks on the text to the first swatch. */}
+          <div className="grid min-w-0 gap-1.5">
+            <span id="new-agent-colour" className="text-[13px] font-semibold text-fg-2">Colour</span>
+            <ColorPicker value={color} onChange={setColor} labelledBy="new-agent-colour" />
+            <span className="text-xs break-words text-muted">Tells this agent apart in the switcher and on call cards.</span>
+          </div>
           <Field label="Agent passcode" hint="Require team members to enter this password to open this workspace's CRM. Leave empty for open access.">
-            <Input name="agent_password" type="password" placeholder="No passcode required" />
+            <Input name="agent_password" type="password" autoComplete="new-password" placeholder="No passcode required" />
           </Field>
         </section>
 
         <section className="space-y-4 border-t border-border pt-5">
           <h3 className="text-sm font-semibold">Starting point</h3>
+          {agentsLoading && <Skeleton className="h-10 w-full rounded-lg" aria-label="Loading agents" />}
           {!!data?.agents.length && (
             <Field label="Copy persona & automation from" hint="Knowledge, leads and calls are never copied.">
               <Select value={copyFrom} onChange={(e) => setCopyFrom(e.target.value)}>
@@ -160,12 +195,13 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
             </Field>
           )}
           {!copyFrom && (
-            <div className="grid gap-2 sm:grid-cols-2">
+            <div className="grid gap-2 sm:grid-cols-2" role="group" aria-label="Template">
               {TEMPLATES.map((t, i) => (
                 <button key={t.id} type="button" onClick={() => setTemplate(t.id)} style={{ animationDelay: `${120 + i * 40}ms` }}
-                  className={cn('reveal reveal-in reveal-up rounded-xl border p-3 text-left transition duration-200 hover:-translate-y-0.5 active:scale-[.98]',
+                  aria-pressed={template === t.id}
+                  className={cn('reveal reveal-in reveal-up min-h-11 min-w-0 rounded-xl border p-3 text-left transition duration-200 hover:-translate-y-0.5 active:scale-[.98]',
                     template === t.id ? 'beam beam-on border-fg bg-surface-2 ring-1 ring-fg' : 'border-border hover:border-border-strong hover:shadow-card')}>
-                  <div className="text-sm font-medium">{t.label}</div>
+                  <div className="text-sm font-medium break-words">{t.label}</div>
                   <div className="mt-1 line-clamp-2 text-xs text-muted">{t.objective}</div>
                 </button>
               ))}
@@ -179,8 +215,8 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
             <Field label={copyFrom ? 'Speaks as' : 'Speaks as *'} hint="First name the agent introduces itself with."><Input name="agent_name" required={!copyFrom} placeholder="e.g. Neha" maxLength={60} /></Field>
             <Field label={copyFrom ? 'Company' : 'Company *'} hint="Said in the greeting: “calling from …”."><Input name="company_name" required={!copyFrom} placeholder="e.g. Skyline Realty" maxLength={120} /></Field>
             <Field label="Voice">
-              <Select name="voice_speaker" defaultValue="">
-                <option value="">{copyFrom ? 'Same as copied agent' : 'Default (rahul)'}</option>
+              <Select name="voice_speaker" defaultValue="" disabled={agentsLoading}>
+                <option value="">{agentsLoading ? 'Loading voices…' : copyFrom ? 'Same as copied agent' : agentsFailed ? 'Default (voices unavailable)' : 'Default (rahul)'}</option>
                 {voices.map((v) => <option key={v} value={v} className="capitalize">{v}</option>)}
               </Select>
             </Field>
@@ -211,6 +247,7 @@ export default function NewAgentSheet({ open, onClose }: { open: boolean; onClos
               defaultValue={copyFrom ? '' : TEMPLATES.find((t) => t.id === template)!.talk} />
           </Field>
         </section>
+      </fieldset>
       </form>
     </Sheet>
   )

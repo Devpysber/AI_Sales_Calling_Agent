@@ -215,7 +215,8 @@ export interface AgentTurnResult {
   language: string | null
   intent: string
   qualification: string | null
-  sentiment: string | null
+  /** Not produced per turn by the backend (only by the post-call summary); kept optional for display. */
+  sentiment?: string | null
   end_call: boolean
   crm_update: Record<string, string>
   knowledge: { title: string; score: number; text: string }[]

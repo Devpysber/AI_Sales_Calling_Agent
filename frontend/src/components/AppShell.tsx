@@ -103,7 +103,7 @@ function MotionToggle() {
   return (
     <button type="button" title={`${label[setting]} (click to change)`} aria-label={label[setting]}
       onClick={() => { const n = next[setting]; setMotionSetting(n); setSetting(n); toast(label[n]) }}
-      className={cn('grid size-9 place-items-center rounded-xl hover:bg-ink-fg/5 hover:text-ink-fg',
+      className={cn('grid size-10 place-items-center rounded-xl hover:bg-ink-fg/5 hover:text-ink-fg lg:size-9',
         setting === 'full' ? 'text-ink-fg' : 'text-ink-muted')}>
       <Waveform bars={3} active={setting !== 'off'} className="h-3.5" />
     </button>
@@ -121,7 +121,8 @@ function AgentSwitcher({ agents, current, compact, onNew, canCreate }: { agents:
   useEffect(() => {
     if (!open) return
     const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false) }
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
+    // stopPropagation: the mobile drawer listens for Escape on window and would close on the same keypress.
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false) } }
     document.addEventListener('mousedown', close)
     document.addEventListener('keydown', esc)
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', esc) }
@@ -150,14 +151,14 @@ function AgentSwitcher({ agents, current, compact, onNew, canCreate }: { agents:
             <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find agent…" className="h-10 flex-1 bg-transparent text-sm outline-none placeholder:text-muted" />
           </div>
           <div className="max-h-80 overflow-y-auto p-1.5">
-            <Link to="/" className={cn('flex items-center gap-3 rounded-xl px-2.5 py-2 text-sm hover:bg-surface-2', !current && 'bg-surface-2')}>
+            <Link to="/" onClick={() => setOpen(false)} className={cn('flex items-center gap-3 rounded-xl px-2.5 py-2 text-sm hover:bg-surface-2', !current && 'bg-surface-2')}>
               <div className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-elevated shadow-sm"><LayoutDashboard className="size-4" /></div>
               <span className="font-semibold">All agents</span>
               {current && <Check className="ml-auto size-4 text-brand" />}
             </Link>
             <div className="my-1.5 px-3 text-[10px] font-bold tracking-wider text-muted uppercase">Agents</div>
             {agents.filter(a => !q || a.name.toLowerCase().includes(q.toLowerCase()) || a.persona.company_name.toLowerCase().includes(q.toLowerCase())).map((a) => (
-              <Link key={a.id} to={`/a/${a.id}`} className={cn('flex items-center gap-3 rounded-xl px-2.5 py-2 hover:bg-surface-2', a.id === current?.id && 'bg-surface-2')}>
+              <Link key={a.id} to={`/a/${a.id}`} onClick={() => setOpen(false)} className={cn('flex items-center gap-3 rounded-xl px-2.5 py-2 hover:bg-surface-2', a.id === current?.id && 'bg-surface-2')}>
                 <AgentMark agent={a} className="size-8 shrink-0 rounded-lg text-xs" />
                 <div className="min-w-0 flex-1 leading-tight">
                   <div className="truncate text-[13px] font-semibold">{a.name}</div>
@@ -211,10 +212,10 @@ function NavGlider({ container, watch }: { container: React.RefObject<HTMLDivEle
 
 /* ---------------- Sidebar ---------------- */
 
-function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp, onLogout, dark, setDark, user, role, canCreate, mobile }: {
+function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp, onLogout, dark, setDark, user, role, canCreate, mobile, onClose }: {
   agents: AgentSummary[]; agent?: AgentSummary; compact: boolean; setCompact: (c: boolean) => void
   onNew: () => void; onPalette: () => void; onHelp: () => void; onLogout: () => void
-  dark: boolean; setDark: (d: boolean) => void; user: string; role: string; canCreate: boolean; mobile?: boolean
+  dark: boolean; setDark: (d: boolean) => void; user: string; role: string; canCreate: boolean; mobile?: boolean; onClose?: () => void
 }) {
   const location = useLocation()
   const navRef = useRef<HTMLDivElement>(null)
@@ -227,7 +228,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
 
   const navLink = (to: string, label: string, Icon: typeof Users, end: boolean, count?: ReactNode) => (
     <NavLink key={to} to={to} end={end} title={compact ? label : undefined}
-      className={({ isActive }) => cn('group relative flex h-9 items-center gap-3 rounded-xl text-[13.5px] font-semibold transition',
+      className={({ isActive }) => cn('group relative flex h-10 items-center gap-3 rounded-xl text-[13.5px] font-semibold transition lg:h-9',
         compact ? 'justify-center' : 'px-3',
         isActive ? 'text-ink-fg' : 'text-ink-muted hover:bg-ink-fg/[0.04] hover:text-ink-fg')}>
       {({ isActive }) => <>
@@ -241,13 +242,19 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
   )
 
   return (
-    <div className={cn('relative z-40 flex h-full flex-col border-r border-border bg-ink/70 backdrop-blur-2xl text-ink-fg', mobile ? 'w-72' : compact ? 'w-[76px]' : 'w-[272px]', 'transition-[width] duration-200')}>
+    <div className={cn('relative z-40 flex h-full min-w-0 flex-col border-r border-border text-ink-fg',
+      mobile ? 'w-[min(18rem,85vw)] bg-ink' : cn('bg-ink/70 backdrop-blur-2xl transition-[width] duration-200', compact ? 'w-[76px]' : 'w-[272px]'))}>
       <div className={cn('flex items-center gap-2.5 pt-4 pb-3', compact ? 'flex-col px-2' : 'px-4')}>
         <Link to="/" className="grid size-9 shrink-0 place-items-center rounded-xl bg-ink-fg text-ink shadow-sm"><Waveform bars={4} className="h-4" /></Link>
-        {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="text-sheen text-[15px] font-extrabold tracking-tight">Samvaad AI</div><div className="text-[11px] text-ink-muted">Multi-agent calling</div></div>}
-        {!mobile && (
-          <button type="button" onClick={() => setCompact(!compact)} title={compact ? 'Expand sidebar ( [ )' : 'Collapse sidebar ( [ )'}
-            className="grid size-7 place-items-center rounded-lg text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg">
+        {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="text-sheen truncate text-[15px] font-extrabold tracking-tight">Samvaad AI</div><div className="truncate text-[11px] text-ink-muted">Multi-agent calling</div></div>}
+        {mobile ? (
+          <button type="button" onClick={onClose} aria-label="Close menu" data-autofocus
+            className="grid size-10 shrink-0 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg">
+            <X className="size-5" />
+          </button>
+        ) : (
+          <button type="button" onClick={() => setCompact(!compact)} title={compact ? 'Expand sidebar ( [ )' : 'Collapse sidebar ( [ )'} aria-label={compact ? 'Expand sidebar' : 'Collapse sidebar'}
+            className="grid size-9 place-items-center rounded-lg text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg lg:size-8">
             {compact ? <ChevronsRight className="size-4" /> : <ChevronsLeft className="size-4" />}
           </button>
         )}
@@ -323,7 +330,7 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
               <div className="space-y-0.5">
                 {agents.filter((a) => a.id !== agent.id).slice(0, 8).map((a) => (
                   <Link key={a.id} to={`/a/${a.id}${section}`} title={compact ? a.name : `${a.name} · ${a.persona.company_name}`}
-                    className={cn('flex h-9 items-center gap-2.5 rounded-xl text-[13px] font-semibold text-ink-muted transition hover:bg-ink-fg/[0.04] hover:text-ink-fg', compact ? 'justify-center' : 'px-2')}>
+                    className={cn('flex h-10 items-center gap-2.5 rounded-xl text-[13px] font-semibold text-ink-muted transition hover:bg-ink-fg/[0.04] hover:text-ink-fg lg:h-9', compact ? 'justify-center' : 'px-2')}>
                     <span className="relative"><AgentMark agent={a} className={cn('size-6 rounded-md bg-ink-fg text-[9px] text-ink', a.status === 'paused' && 'opacity-60')} />
                       {a.stats.live > 0 && <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full bg-success ring-2 ring-ink" />}</span>
                     {!compact && <span className="flex-1 truncate">{a.name}</span>}
@@ -386,22 +393,29 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
       </div>
 
       <div className={cn('border-t border-ink-fg/8', compact ? 'space-y-1 p-2' : 'p-3')}>
-        <div className={cn('flex items-center', compact ? 'flex-col gap-1' : 'gap-1')}>
-          <button type="button" onClick={onPalette} title="Search (Ctrl K)" className={cn('flex h-9 items-center gap-2 rounded-xl text-[13px] text-ink-muted transition hover:bg-ink-fg/5 hover:text-ink-fg', compact ? 'w-10 justify-center' : 'flex-1 px-3')}>
-            <Search className="size-4" />{!compact && <><span className="flex-1 text-left">Search</span><kbd className="!border-ink-fg/10 !bg-ink-fg/5 whitespace-nowrap !text-ink-muted">Ctrl K</kbd></>}
-          </button>
-          {agent && role !== 'team' && <Link to="/settings" title="Integrations & system" className={cn('grid size-9 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg', location.pathname === '/settings' && 'text-ink-fg')}><Settings className="size-4" /></Link>}
+        <button type="button" onClick={onPalette} title="Search (Ctrl K)" className={cn('flex h-10 min-w-0 items-center gap-2 rounded-xl text-[13px] text-ink-muted transition hover:bg-ink-fg/5 hover:text-ink-fg lg:h-9', compact ? 'mx-auto w-10 justify-center' : 'mb-1 w-full px-3')}>
+          <Search className="size-4 shrink-0" />{!compact && <><span className="flex-1 truncate text-left">Search</span><kbd className="hidden shrink-0 !border-ink-fg/10 !bg-ink-fg/5 whitespace-nowrap !text-ink-muted sm:inline-block">Ctrl K</kbd></>}
+        </button>
+        <div className={cn('flex items-center', compact ? 'flex-col gap-1' : 'justify-between gap-1')}>
+          {agent && role !== 'team' && <Link to="/settings" title="Integrations & system" aria-label="Integrations & system" className={cn('grid size-10 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg lg:size-9', location.pathname === '/settings' && 'text-ink-fg')}><Settings className="size-4" /></Link>}
           <AlertsBell compact={compact} />
-          <button type="button" onClick={onHelp} title="Keyboard shortcuts (?)" className="grid size-9 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg"><Keyboard className="size-4" /></button>
-          <button type="button" onClick={() => setDark(!dark)} title="Toggle theme" className="grid size-9 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg">{dark ? <Sun className="size-4" /> : <Moon className="size-4" />}</button>
+          <button type="button" onClick={onHelp} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" className="grid size-10 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg lg:size-9"><Keyboard className="size-4" /></button>
+          <button type="button" onClick={() => setDark(!dark)} title="Toggle theme" aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'} className="grid size-10 place-items-center rounded-xl text-ink-muted hover:bg-ink-fg/5 hover:text-ink-fg lg:size-9">{dark ? <Sun className="size-4" /> : <Moon className="size-4" />}</button>
           <MotionToggle />
         </div>
         <div className={cn('mt-2 flex items-center gap-2.5 rounded-xl bg-ink-fg/[0.04] p-2', compact && 'justify-center')}>
-          <Link to={role === 'team' ? '#' : '/profile'} title={role === 'team' ? 'Team Member' : 'Admin profile'} className={cn('flex min-w-0 items-center gap-2.5 rounded-lg transition hover:opacity-80', !compact && 'flex-1')}>
-            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-ink-fg text-xs font-bold text-ink uppercase">{user[0]}</span>
-            {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="truncate text-[13px] font-bold">{user}</div><div className="text-[11px] text-ink-muted">{role === 'team' ? 'Team Member' : 'Administrator · Profile'}</div></div>}
-          </Link>
-          {!compact && <button type="button" onClick={onLogout} title="Sign out" className="grid size-8 place-items-center rounded-lg text-ink-muted hover:bg-ink-fg/5 hover:text-danger"><LogOut className="size-4" /></button>}
+          {role === 'team' ? (
+            <div title="Team Member" className={cn('flex min-w-0 items-center gap-2.5 rounded-lg', !compact && 'flex-1')}>
+              <span className="grid size-8 shrink-0 place-items-center rounded-full bg-ink-fg text-xs font-bold text-ink uppercase">{user[0]}</span>
+              {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="truncate text-[13px] font-bold">{user}</div><div className="truncate text-[11px] text-ink-muted">Team Member</div></div>}
+            </div>
+          ) : (
+            <Link to="/profile" title="Admin profile" className={cn('flex min-w-0 items-center gap-2.5 rounded-lg transition hover:opacity-80', !compact && 'flex-1')}>
+              <span className="grid size-8 shrink-0 place-items-center rounded-full bg-ink-fg text-xs font-bold text-ink uppercase">{user[0]}</span>
+              {!compact && <div className="min-w-0 flex-1 leading-tight"><div className="truncate text-[13px] font-bold">{user}</div><div className="truncate text-[11px] text-ink-muted">Administrator · Profile</div></div>}
+            </Link>
+          )}
+          {!compact && <button type="button" onClick={onLogout} title="Sign out" aria-label="Sign out" className="grid size-10 shrink-0 place-items-center rounded-lg text-ink-muted hover:bg-ink-fg/5 hover:text-danger lg:size-8"><LogOut className="size-4" /></button>}
         </div>
       </div>
     </div>
@@ -431,7 +445,42 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
   const id = agentId ? Number(agentId) : null
   const agent = agents.find((a) => a.id === id)
 
-  useEffect(() => { setMobile(false) }, [location.pathname])
+  const menuButton = useRef<HTMLButtonElement>(null)
+  const drawer = useRef<HTMLElement>(null)
+  // Any navigation (path or query, e.g. /leads → /leads?new=1) closes the drawer.
+  useEffect(() => { setMobile(false) }, [location.key])
+  // Drawer: Escape closes, the page behind stops scrolling, focus lands inside and returns to the menu button.
+  useEffect(() => {
+    if (!mobile) return
+    // Escape closes the drawer unless another dialog (palette, sheet) is on top of it.
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape' && !document.querySelector('[role="dialog"]:not([aria-label="Navigation"])')) setMobile(false) }
+    // Tab wraps inside the drawer; the page behind the scrim is also `inert` (see the content wrapper).
+    const trap = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || !drawer.current || document.querySelector('[role="dialog"]:not([aria-label="Navigation"])')) return
+      const focusable = Array.from(drawer.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+        .filter((el) => el.offsetParent !== null)
+      if (!focusable.length) return
+      const first = focusable[0]!, last = focusable[focusable.length - 1]!
+      const active = document.activeElement as HTMLElement | null
+      if (e.shiftKey && (active === first || !drawer.current.contains(active))) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && (active === last || !drawer.current.contains(active))) { e.preventDefault(); first.focus() }
+    }
+    window.addEventListener('keydown', esc)
+    window.addEventListener('keydown', trap)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    drawer.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus()
+    const mq = window.matchMedia('(min-width: 1024px)')
+    const onWide = (e: MediaQueryListEvent) => { if (e.matches) setMobile(false) }
+    mq.addEventListener('change', onWide)
+    return () => {
+      window.removeEventListener('keydown', esc)
+      window.removeEventListener('keydown', trap)
+      document.body.style.overflow = prevOverflow
+      mq.removeEventListener('change', onWide)
+      menuButton.current?.focus({ preventScroll: true })
+    }
+  }, [mobile])
 
   // Most workspace queries are keyed by path alone ('automation', 'knowledge', 'calls'…), so moving
   // to another agent would show the previous agent's data until each refetch landed. Drop everything
@@ -447,10 +496,12 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
   }, [navigate, qc])
 
   const sub = id ? location.pathname.replace(`/a/${id}`, '') || '/' : location.pathname
-  const pageTitle = id ? TITLES[sub] ?? '' : sub === '/settings' ? 'Integrations & system' : sub === '/profile' ? 'Admin profile' : 'All agents'
+  // First path segment only: /leads/5 (LeadDetail) still reads "Leads".
+  const pageTitle = id ? TITLES[`/${sub.split('/')[1] ?? ''}`] ?? '' : sub === '/settings' ? 'Integrations & system' : sub === '/profile' ? 'Admin profile' : role === 'team' ? 'My agent' : 'All agents'
   useEffect(() => {
     const live = agents.reduce((n, a) => n + a.stats.live, 0)
-    document.title = `${live ? `(${live} live) ` : ''}${agent ? `${pageTitle} · ${agent.name}` : pageTitle} · Samvaad AI`
+    const parts = [pageTitle, agent?.name, 'Samvaad AI'].filter(Boolean).join(' · ')
+    document.title = `${live ? `(${live} live) ` : ''}${parts}`
   }, [agent, pageTitle, agents])
 
   const go = useCallback((to: string) => navigate(id ? `/a/${id}${to === '/' ? '' : to}` : to), [id, navigate])
@@ -495,7 +546,9 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
     return () => window.removeEventListener('keydown', onKey)
   }, [go, id, navigate, agents, setCompact])
 
-  if (id && agentsQuery.data && !agent) return <Navigate to="/" replace />
+  // Only bounce once the list is settled: right after creating an agent (or on a deep link during a
+  // poll) the cached list is stale and the new id is not in it yet.
+  if (id && agentsQuery.data && !agentsQuery.isFetching && !agent) return <Navigate to="/" replace />
 
   const sidebarProps = {
     agents, agent, onNew: () => setCreating(true), onPalette: () => setPalette(true), onHelp: () => setHelp(true),
@@ -511,25 +564,26 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
 
       {mobile && (
         <div className="fixed inset-0 z-40 lg:hidden">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setMobile(false)} />
-          <aside className="absolute inset-y-0 left-0 animate-slide-in">
-            <Sidebar {...sidebarProps} compact={false} setCompact={() => undefined} mobile />
-            <Button variant="ghost" size="icon" className="absolute top-3 -right-11 bg-surface" onClick={() => setMobile(false)} aria-label="Close menu"><X /></Button>
+          <div className="absolute inset-0 animate-fade-in bg-black/50" onClick={() => setMobile(false)} aria-hidden />
+          <aside ref={drawer} role="dialog" aria-modal="true" aria-label="Navigation" className="absolute inset-y-0 left-0 max-w-full animate-fade-in shadow-pop">
+            <Sidebar {...sidebarProps} compact={false} setCompact={() => undefined} mobile onClose={() => setMobile(false)} />
           </aside>
         </div>
       )}
 
-      <div className="relative z-10 flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-12 items-center gap-2 border-b border-border bg-bg/85 px-4 backdrop-blur-md lg:hidden">
-          <Button variant="ghost" size="icon" onClick={() => setMobile(true)} aria-label="Open menu"><Menu /></Button>
+      <div className="relative z-10 flex min-w-0 flex-1 flex-col" inert={mobile || undefined}>
+        <header className="sticky top-0 z-30 flex min-h-12 items-center gap-1.5 border-b border-border bg-bg/85 px-2 py-1 backdrop-blur-md sm:px-4 lg:hidden">
+          <Button ref={menuButton} variant="ghost" size="icon" className="size-10 shrink-0" onClick={() => setMobile(true)} aria-label="Open menu" aria-expanded={mobile}><Menu /></Button>
           {agent && <AgentMark agent={agent} className="size-7 rounded-lg text-[10px]" />}
-          <span className="truncate text-sm font-bold">{agent ? agent.name : pageTitle}</span>
-          <div className="flex-1" />
-          <Button variant="ghost" size="icon" onClick={() => setPalette(true)} aria-label="Search"><Search /></Button>
+          <div className="min-w-0 flex-1 leading-tight">
+            <div className="truncate text-sm font-bold">{agent ? agent.name : pageTitle}</div>
+            {agent && pageTitle && <div className="truncate text-[11px] text-muted">{pageTitle}</div>}
+          </div>
+          <Button variant="ghost" size="icon" className="size-10 shrink-0" onClick={() => setPalette(true)} aria-label="Search (Ctrl K)"><Search /></Button>
         </header>
         {/* key=pathname: React remounts the page, which replays .page-in, so a route change reads as
             a new page arriving rather than the old one blinking out. */}
-        <main key={location.pathname} className="page-in mx-auto w-full max-w-[1480px] flex-1 px-4 py-6 sm:px-6 lg:px-8">
+        <main key={location.pathname} className="page-in mx-auto w-full min-w-0 max-w-[1480px] flex-1 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
           <Suspense fallback={<div className="grid h-64 place-items-center"><Spinner className="size-6" /></div>}>{children}</Suspense>
         </main>
       </div>
@@ -541,7 +595,7 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
         leadsBase={id ? `/api/agents/${id}` : undefined} onLead={(leadId) => go(`/leads?open=${leadId}`)} />
       <NewAgentSheet open={creating} onClose={() => setCreating(false)} />
       <Dialog open={help} onClose={() => setHelp(false)} title="Keyboard shortcuts" footer={<Button onClick={() => setHelp(false)}>Close</Button>}>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+        <div className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
           {[['Search & commands', 'Ctrl K'], ['Switch to agent 1–9', '1'], ['Collapse sidebar', '['], ['Add lead', 'N'], ['Shortcuts', '?'],
             ...AGENT_NAV.flatMap((g) => g.items.map((i) => [i.label, `G ${i.key.toUpperCase()}`]))].map(([l, k]) => (
             <div key={l} className="flex items-center justify-between gap-3 py-0.5"><span className="text-fg-2">{l}</span><span className="flex gap-1">{k!.split(' ').map((x, i) => <kbd key={i}>{x}</kbd>)}</span></div>
@@ -552,7 +606,18 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
   )
 
   if (!id) return frame(<Outlet />)
-  if (!agent) return frame(<div className="grid h-64 place-items-center"><Spinner className="size-6" /></div>)
+  if (!agent) {
+    if (agentsQuery.isError) return frame(
+      <div className="grid h-64 place-items-center px-4 text-center">
+        <div className="space-y-3">
+          <div className="text-sm font-semibold">Couldn't load your agents</div>
+          <div className="text-[13px] text-muted break-words">{agentsQuery.error instanceof Error ? agentsQuery.error.message : 'Please check your connection and try again.'}</div>
+          <Button variant="secondary" onClick={() => { void agentsQuery.refetch() }} loading={agentsQuery.isFetching}>Try again</Button>
+        </div>
+      </div>,
+    )
+    return frame(<div className="grid h-64 place-items-center"><Spinner className="size-6" /></div>)
+  }
   if (agent.locked) return frame(<UnlockModal agent={agent} />)
   
   // key: remount the whole workspace on switch so no state from the previous agent survives
@@ -579,7 +644,7 @@ function UnlockModal({ agent }: { agent: { id: number; name: string; persona: { 
           <h2 className="text-xl font-bold">Unlock {agent.name}</h2>
           <p className="text-sm text-muted">Enter the vault password to access {agent.persona.company_name}'s CRM.</p>
         </div>
-        <Input type="password" autoFocus required placeholder="Password" value={pwd} onChange={(e) => setPwd(e.target.value)} />
+        <Input type="password" autoFocus required disabled={isPending} placeholder="Password" value={pwd} onChange={(e) => setPwd(e.target.value)} />
         <Button type="submit" className="w-full" loading={isPending}>Unlock Workspace</Button>
       </form>
     </div>

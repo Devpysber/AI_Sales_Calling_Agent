@@ -115,8 +115,12 @@ export default function VoiceOrb3D({ state = 'idle', size = 140, className, onUn
 }) {
   const host = useRef<HTMLDivElement>(null)
   const target = useRef(state)
+  const unsupported = useRef(onUnsupported)
   const reduced = useReducedMotion()
+  // Reduced-motion mode has no animation loop, so state changes are drawn on demand through this.
+  const still = useRef<(() => void) | null>(null)
   target.current = state
+  unsupported.current = onUnsupported
 
   useEffect(() => {
     const el = host.current
@@ -125,12 +129,20 @@ export default function VoiceOrb3D({ state = 'idle', size = 140, className, onUn
     try {
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' })
     } catch {
-      onUnsupported?.()
+      unsupported.current?.()
       return
     }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-    renderer.setSize(size, size)
+    // The host may be narrower than `size` on small screens (max-width 100%), so draw at its real box.
+    const measure = () => Math.max(1, Math.round(el.clientWidth || size))
+    renderer.setSize(measure(), measure())
+    renderer.domElement.style.display = 'block'
+    renderer.domElement.style.width = '100%'
+    renderer.domElement.style.height = '100%'
     el.appendChild(renderer.domElement)
+    // A lost GPU context (tab throttling, driver reset) would leave a blank square: fall back to the CSS orb.
+    const onContextLost = (e: Event) => { e.preventDefault(); unsupported.current?.() }
+    renderer.domElement.addEventListener('webglcontextlost', onContextLost)
 
     const scene = new THREE.Scene()
     const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 20)
@@ -170,6 +182,15 @@ export default function VoiceOrb3D({ state = 'idle', size = 140, className, onUn
     let visible = true
     const io = new IntersectionObserver(([entry]) => { visible = entry.isIntersecting; if (visible) loop() })
     io.observe(el)
+    // Keep the canvas square and crisp when the host shrinks or grows with the viewport.
+    const ro = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => {
+          const px = measure()
+          renderer.setSize(px, px)
+          if (reduced) frame()
+        })
+      : null
+    ro?.observe(el)
     const onVisibility = () => { if (!document.hidden) loop() }
     document.addEventListener('visibilitychange', onVisibility)
 
@@ -200,19 +221,34 @@ export default function VoiceOrb3D({ state = 'idle', size = 140, className, onUn
       }
       raf = requestAnimationFrame(tick)
     }
-    if (reduced) frame()
+    // Static frame at the target energy (no easing) for reduced-motion viewers.
+    still.current = () => { uniforms.uEnergy.value = ENERGY[target.current]; frame() }
+    if (reduced) still.current()
     else loop()
 
     return () => {
+      still.current = null
       cancelAnimationFrame(raf)
+      running = false
       io.disconnect()
+      ro?.disconnect()
+      renderer.domElement.removeEventListener('webglcontextlost', onContextLost)
       document.removeEventListener('visibilitychange', onVisibility)
       window.removeEventListener('pointermove', onMove)
       geometry.dispose(); material.dispose(); shellGeometry.dispose(); shellMaterial.dispose()
       renderer.dispose()
+      renderer.forceContextLoss()
       renderer.domElement.remove()
     }
-  }, [size, reduced, onUnsupported])
+  }, [size, reduced])
 
-  return <div ref={host} className={className} style={{ width: size, height: size }} aria-hidden />
+  // Without a running loop, a state flip (e.g. listening -> live) would never reach the canvas.
+  useEffect(() => {
+    if (reduced) still.current?.()
+  }, [state, reduced])
+
+  return (
+    <div ref={host} className={className}
+      style={{ width: size, maxWidth: '100%', aspectRatio: '1 / 1', height: 'auto', overflow: 'hidden' }} aria-hidden />
+  )
 }

@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, ArrowLeft, CheckCircle2, CircleAlert, Copy as CopyIcon, Download, FileSpreadsheet, ListPlus, Loader2, RefreshCw, Upload, XCircle } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, Field, Input, PageHeader, Select, Switch } from '@/components/ui'
 import { api } from '@/lib/api'
@@ -30,6 +30,7 @@ const STATE_UI = {
 export default function Import() {
   const { agent, base, path } = useAgent()
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const input = useRef<HTMLInputElement>(null)
   const [step, setStep] = useState<1 | 2 | 3>(1)
   const [file, setFile] = useState<File | null>(null)
@@ -37,12 +38,16 @@ export default function Import() {
   const [mapping, setMapping] = useState<Record<string, string>>({})
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [checking, setChecking] = useState(false)
+  const [checkError, setCheckError] = useState<string | null>(null)
+  const [checkAttempt, setCheckAttempt] = useState(0)
   const [opts, setOpts] = useState({ onDuplicate: 'skip' as 'skip' | 'update', language: 'en-IN', tags: '', source: 'import', queue: false })
   const [busy, setBusy] = useState(false)
   const [drag, setDrag] = useState(false)
   const [result, setResult] = useState<Result | null>(null)
 
   const choose = async (f: File) => {
+    if (busy) return
+    if (input.current) input.current.value = ''
     const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase()
     if (!['.csv', '.xlsx', '.xls'].includes(ext)) return void toast.error('Unsupported file', { description: 'Upload a .csv, .xlsx or .xls file.' })
     if (f.size > 20 * 1024 * 1024) return void toast.error('File too large', { description: 'The limit is 20 MB.' })
@@ -52,8 +57,11 @@ export default function Import() {
     try {
       const p = await api<Preview>(`${base}/leads/import/preview`, { method: 'POST', body: fd })
       if (!p.rows) throw new Error('The file has headers but no rows.')
-      setFile(f); setPreview(p); setAnalysis(p.analysis)
-      setMapping(Object.fromEntries(p.columns.map((c) => [c, p.mapping[c] ?? ''])))
+      firstRun.current = true
+      setCheckError(null)
+      setFile(f); setPreview({ ...p, columns: p.columns ?? [], sample: p.sample ?? [] }); setAnalysis(p.analysis ?? null)
+      setMapping(Object.fromEntries((p.columns ?? []).map((c) => [c, p.mapping?.[c] ?? ''])))
+      setResult(null)
       setStep(2)
     } catch (e) {
       toast.error('Could not read file', { description: (e as Error).message })
@@ -62,22 +70,34 @@ export default function Import() {
 
   // Re-check rows whenever the mapping changes (debounced): the counts always match what Import will do.
   const firstRun = useRef(true)
+  const rows = preview?.rows ?? 0
   useEffect(() => {
     if (!file || step !== 2) return
     if (firstRun.current) { firstRun.current = false; return }
+    // No Phone column: the server would fall back to auto-detection and report rows we won't import.
+    if (!Object.values(mapping).includes('phone')) { setChecking(false); setCheckError(null); setAnalysis({ ready: 0, duplicates: 0, invalid: rows, row_status: [] }); return }
+    let cancelled = false
     const t = setTimeout(async () => {
       setChecking(true)
       const fd = new FormData()
       fd.append('file', file)
       fd.append('mapping', JSON.stringify(mapping))
-      try { setAnalysis(await api<Analysis>(`${base}/leads/import/analyze`, { method: 'POST', body: fd })) } catch { /* keep last counts */ }
-      finally { setChecking(false) }
+      try {
+        const a = await api<Analysis>(`${base}/leads/import/analyze`, { method: 'POST', body: fd })
+        if (!cancelled) { setAnalysis(a); setCheckError(null) }
+      } catch (e) {
+        // Stale counts would let the button promise a number the server won't honour; clear them so it disables.
+        if (!cancelled) { setAnalysis(null); setCheckError((e as Error).message || 'Network error') }
+      }
+      finally { if (!cancelled) setChecking(false) }
     }, 350)
-    return () => clearTimeout(t)
-  }, [mapping, file, step, base])
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [mapping, file, step, base, rows, checkAttempt])
+
+  const hasPhone = Object.values(mapping).includes('phone')
 
   const run = async () => {
-    if (!file) return
+    if (!file || busy || checking || !hasPhone) return
     setBusy(true)
     const fd = new FormData()
     fd.append('file', file)
@@ -90,22 +110,25 @@ export default function Import() {
     fd.append('queue_for_calls', String(opts.queue))
     try {
       const r = await api<Result>(`${base}/leads/import`, { method: 'POST', body: fd })
-      setResult(r); setStep(3)
+      setResult({ ...r, errors: r.errors ?? [], skipped_duplicates: r.skipped_duplicates ?? 0, created: r.created ?? 0 }); setStep(3)
       qc.invalidateQueries({ queryKey: ['leads'] })
+      qc.invalidateQueries({ queryKey: ['activity'] })
+      if (opts.queue) qc.invalidateQueries({ queryKey: ['calls'] })
+      window.dispatchEvent(new CustomEvent('agents:changed'))
       toast.success(`Imported ${r.created} lead${r.created === 1 ? '' : 's'}${r.updated ? `, updated ${r.updated}` : ''}`)
     } catch (e) {
       toast.error('Import failed', { description: (e as Error).message })
     } finally { setBusy(false) }
   }
 
-  const hasPhone = Object.values(mapping).includes('phone')
-  const reset = () => { setStep(1); setFile(null); setPreview(null); setAnalysis(null); setResult(null); firstRun.current = true; if (input.current) input.current.value = '' }
+  const reset = () => { setStep(1); setFile(null); setPreview(null); setAnalysis(null); setResult(null); setMapping({}); setChecking(false); setCheckError(null); firstRun.current = true; if (input.current) input.current.value = '' }
   const willImport = analysis ? analysis.ready + (opts.onDuplicate === 'update' ? analysis.duplicates : 0) : 0
   const downloadTemplate = () => {
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([TEMPLATE], { type: 'text/csv' }))
     a.download = 'leads_template.csv'
     a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000)
   }
 
   return (
@@ -122,17 +145,17 @@ export default function Import() {
               {step > i + 1 ? '✓' : i + 1}
             </span>
             <span className={cn(step >= i + 1 ? 'font-semibold text-fg' : 'text-muted')}>{label}</span>
-            {i < 2 && <span className="mx-2 h-px w-8 bg-border" />}
+            {i < 2 && <span className="mx-1 h-px w-4 bg-border sm:mx-2 sm:w-8" />}
           </li>
         ))}
       </ol>
 
       {step === 1 && (
-        <Card className="p-6">
+        <Card className="p-4 sm:p-6">
           <button type="button" onClick={() => input.current?.click()} disabled={busy}
             onDragOver={(e) => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)}
-            onDrop={(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (f) void choose(f) }}
-            className={cn('flex w-full flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-16 transition',
+            onDrop={(e) => { e.preventDefault(); setDrag(false); if (busy) return; const f = e.dataTransfer.files?.[0]; if (f) void choose(f) }}
+            className={cn('flex w-full flex-col items-center justify-center rounded-2xl border-2 border-dashed px-4 py-12 text-center transition sm:px-6 sm:py-16',
               drag ? 'border-fg bg-surface-2' : 'border-border-strong bg-surface-2/40 hover:border-fg hover:bg-surface-2')}>
             <span className="mb-4 grid size-12 place-items-center rounded-xl bg-surface text-fg ring-1 ring-border">
               {busy ? <Loader2 className="size-6 animate-spin" /> : <FileSpreadsheet className="size-6" />}
@@ -160,20 +183,20 @@ export default function Import() {
               {([['ready', analysis?.ready], ['duplicate', analysis?.duplicates], ['invalid', analysis?.invalid]] as const).map(([k, v]) => {
                 const ui = STATE_UI[k]
                 return (
-                  <Card key={k} className="flex items-center gap-3 p-4">
+                  <Card key={k} className="flex min-w-0 flex-col gap-1.5 p-3 sm:flex-row sm:items-center sm:gap-3 sm:p-4">
                     <ui.icon className={cn('size-5 shrink-0', ui.className)} />
-                    <div><div className="text-2xl font-extrabold text-fg tabular-nums">{checking ? '…' : v ?? 0}</div>
-                      <div className="text-xs text-muted">{k === 'ready' ? 'New leads' : k === 'duplicate' ? 'Duplicates' : 'Invalid rows'}</div></div>
+                    <div className="min-w-0"><div className="truncate text-2xl font-extrabold text-fg tabular-nums" title={checking || checkError ? undefined : String(v ?? 0)}>{checking ? '…' : checkError ? '—' : v ?? 0}</div>
+                      <div className="truncate text-xs text-muted">{k === 'ready' ? 'New leads' : k === 'duplicate' ? 'Duplicates' : 'Invalid rows'}</div></div>
                   </Card>
                 )
               })}
             </div>
 
             <Card className="min-w-0 overflow-hidden">
-              <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
+              <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-5 sm:py-4">
                 <div className="min-w-0"><div className="truncate font-semibold text-fg">{file?.name}</div>
                   <div className="flex items-center gap-2 text-sm text-muted">{preview.rows} rows · preview of first {preview.sample.length}{checking && <RefreshCw className="size-3.5 animate-spin" />}</div></div>
-                <Button variant="ghost" onClick={reset}><ArrowLeft />Change file</Button>
+                <Button variant="ghost" className="shrink-0" onClick={reset} disabled={busy}><ArrowLeft />Change file</Button>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -183,8 +206,8 @@ export default function Import() {
                       {preview.columns.map((c) => (
                         <th key={c} className="min-w-44 px-3 py-3 text-left align-top">
                           <div className="mb-1.5 truncate text-xs font-semibold text-fg-2">{c}</div>
-                          <Select value={mapping[c]} onChange={(e) => setMapping({ ...mapping, [c]: e.target.value })}
-                            className={cn('h-8 text-[13px]', mapping[c] ? 'border-fg/40 font-semibold text-fg' : 'text-muted')}>
+                          <Select value={mapping[c] ?? ''} aria-label={`Map column ${c}`} disabled={busy} onChange={(e) => { const v = e.target.value; setMapping((m) => ({ ...m, [c]: v })) }}
+                            className={cn('h-10 text-[13px]', mapping[c] ? 'border-fg/40 font-semibold text-fg' : 'text-muted')}>
                             {FIELDS.map(([v, l]) => <option key={v} value={v} disabled={!!v && v !== mapping[c] && Object.values(mapping).includes(v)}>{l}</option>)}
                           </Select>
                         </th>
@@ -193,14 +216,14 @@ export default function Import() {
                   </thead>
                   <tbody className="divide-y divide-border">
                     {preview.sample.map((row, i) => {
-                      const st = analysis?.row_status[i]
+                      const st = analysis?.row_status?.[i]
                       const ui = st ? STATE_UI[st.state] : null
                       return (
                         <tr key={i} className={cn('reveal reveal-in reveal-up', st?.state === 'invalid' && 'bg-danger-soft/40')} style={{ animationDelay: `${i * 25}ms` }}>
                           <td className="px-3 py-2" title={st?.detail}>
                             {ui && <span className={cn('inline-flex items-center gap-1 text-xs font-semibold', ui.className)}><ui.icon className="size-3.5" />{ui.label}</span>}
                           </td>
-                          {preview.columns.map((c) => <td key={c} className={cn('max-w-56 truncate px-3 py-2', mapping[c] ? 'text-fg' : 'text-muted')}>{row[c]}</td>)}
+                          {preview.columns.map((c) => <td key={c} className={cn('px-3 py-2', mapping[c] ? 'text-fg' : 'text-muted')} title={row[c] ?? ''}><div className="max-w-56 truncate">{row[c] ?? ''}</div></td>)}
                         </tr>
                       )
                     })}
@@ -210,9 +233,9 @@ export default function Import() {
             </Card>
           </div>
 
-          <Card className="h-fit p-5">
+          <Card className="h-fit min-w-0 p-4 sm:p-5">
             <h3 className="font-semibold text-fg">Import options</h3>
-            <div className="mt-4 space-y-4">
+            <fieldset disabled={busy} className="mt-4 min-w-0 space-y-4">
               <Field label="When a phone number already exists">
                 <Select value={opts.onDuplicate} onChange={(e) => setOpts({ ...opts, onDuplicate: e.target.value as 'skip' | 'update' })}>
                   <option value="skip">Skip it (keep the existing lead)</option>
@@ -225,31 +248,37 @@ export default function Import() {
               <Field label="Tag all leads" hint="Added to any tags already in the file"><Input value={opts.tags} onChange={(e) => setOpts({ ...opts, tags: e.target.value })} placeholder="e.g. diwali-campaign" /></Field>
               <Field label="Source" hint="Used when a row has no source column"><Input value={opts.source} onChange={(e) => setOpts({ ...opts, source: e.target.value })} /></Field>
               <label className="flex items-center justify-between gap-3 rounded-xl border border-border p-3">
-                <span><span className="flex items-center gap-1.5 text-sm font-semibold text-fg"><ListPlus className="size-4" />Add to call queue</span>
+                <span className="min-w-0"><span className="flex items-center gap-1.5 text-sm font-semibold text-fg"><ListPlus className="size-4 shrink-0" />Add to call queue</span>
                   <span className="text-xs text-muted">Auto-dial calls new leads within calling hours</span></span>
-                <Switch checked={opts.queue} onChange={(v) => setOpts({ ...opts, queue: v })} label="Queue for calls" />
+                <Switch checked={opts.queue} disabled={busy} onChange={(v) => setOpts((o) => ({ ...o, queue: v }))} label="Queue for calls" />
               </label>
               {!hasPhone && <p className="flex gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger"><CircleAlert className="mt-0.5 size-4 shrink-0" />Map one column to Phone to continue.</p>}
+              {hasPhone && checkError && !checking && (
+                <div className="flex gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger"><CircleAlert className="mt-0.5 size-4 shrink-0" />
+                  <span className="min-w-0 flex-1"><span className="block font-semibold">Could not re-check rows</span><span className="block break-words">{checkError}</span>
+                    <button type="button" onClick={() => setCheckAttempt((n) => n + 1)} className="mt-2 inline-flex min-h-10 items-center gap-1.5 font-semibold underline underline-offset-2"><RefreshCw className="size-3.5" />Retry check</button></span>
+                </div>
+              )}
               {hasPhone && analysis && analysis.invalid > 0 && (
                 <p className="flex gap-2 rounded-xl bg-warning-soft p-3 text-sm text-warning"><AlertTriangle className="mt-0.5 size-4 shrink-0" />{analysis.invalid} row{analysis.invalid > 1 ? 's' : ''} will be skipped (invalid phone). You'll see which after import.</p>
               )}
-              <Button variant="primary" size="lg" className="w-full" disabled={!hasPhone || checking || willImport === 0} loading={busy} onClick={run}>
-                <Upload />{willImport ? `Import ${willImport} lead${willImport === 1 ? '' : 's'}` : 'Nothing new to import'}
+              <Button variant="primary" size="lg" className="w-full" disabled={!hasPhone || checking || willImport === 0 || !analysis} loading={busy} onClick={run}>
+                <Upload />{willImport ? `Import ${willImport} lead${willImport === 1 ? '' : 's'}` : checkError ? 'Check failed — retry above' : 'Nothing new to import'}
               </Button>
-            </div>
+            </fieldset>
           </Card>
         </div>
       )}
 
       {step === 3 && result && (
-        <Card className="p-8">
+        <Card className="p-5 sm:p-8">
           <div className="flex flex-col items-center text-center">
             <span className="grid size-14 place-items-center rounded-full bg-success-soft text-success"><CheckCircle2 className="size-7" /></span>
             <h2 className="mt-4 text-xl font-semibold text-fg">Import complete</h2>
             {result.batch_tag && (result.created > 0 || (result.updated ?? 0) > 0) && <p className="mt-2 text-sm text-muted">Tagged <Badge>{result.batch_tag}</Badge> so you can find this import later.</p>}
             <p className="mt-1 text-muted">New leads start as <Badge tone="brand">New</Badge>{opts.queue ? ' and are queued: auto-dial calls them within calling hours.' : '. Queue them from Leads or switch on auto-dial.'}</p>
           </div>
-          <Stagger className="mx-auto mt-8 grid max-w-3xl gap-4 sm:grid-cols-4">
+          <Stagger className="mx-auto mt-8 grid max-w-3xl grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
             {[['Imported', result.created, 'text-success'], ['Updated', result.updated ?? 0, 'text-fg'], ['Duplicates skipped', result.skipped_duplicates, 'text-fg'],
               ['Invalid rows', result.errors.length, result.errors.length ? 'text-danger' : 'text-fg']].map(([l, v, c]) => (
               <div key={l as string} className="rounded-xl border border-border bg-surface p-4 text-center"><div className={`text-3xl font-semibold tabular-nums ${c}`}>{v}</div><div className="mt-1 text-sm text-muted">{l}</div></div>
@@ -262,15 +291,16 @@ export default function Import() {
           )}
           {result.errors.length > 0 && (
             <div className="mx-auto mt-6 max-h-56 max-w-3xl overflow-y-auto rounded-xl border border-border bg-surface">
-              {result.errors.slice(0, 100).map((e) => <div key={e.row} className="flex gap-3 border-b border-border px-4 py-2 text-sm text-fg last:border-0"><span className="w-16 shrink-0 text-muted">Row {e.row}</span><span>{e.error}</span></div>)}
+              {result.errors.slice(0, 100).map((e, i) => <div key={`${e.row}-${i}`} className="flex gap-3 border-b border-border px-4 py-2 text-sm text-fg last:border-0"><span className="w-16 shrink-0 text-muted">Row {e.row}</span><span className="min-w-0 break-words">{e.error}</span></div>)}
+              {result.errors.length > 100 && <div className="px-4 py-2 text-xs text-muted">…and {result.errors.length - 100} more</div>}
             </div>
           )}
           <div className="mt-8 flex flex-wrap justify-center gap-2">
             <Button onClick={reset}>Import another file</Button>
-            <Link to={path('/automation')}><Button>Set up auto-dial</Button></Link>
-            <Link to={path(result.batch_tag && (result.created || result.updated) ? `/leads?search=${encodeURIComponent(result.batch_tag)}` : '/leads')}>
-              <Button variant="primary">{result.created || result.updated ? `View these ${(result.created || 0) + (result.updated || 0)} leads` : 'View leads'}</Button>
-            </Link>
+            <Button onClick={() => navigate(path('/automation'))}>Set up auto-dial</Button>
+            <Button variant="primary" onClick={() => navigate(path(result.batch_tag && (result.created || result.updated) ? `/leads?search=${encodeURIComponent(result.batch_tag)}` : '/leads'))}>
+              {result.created || result.updated ? `View these ${(result.created || 0) + (result.updated || 0)} leads` : 'View leads'}
+            </Button>
           </div>
         </Card>
       )}

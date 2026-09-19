@@ -39,11 +39,13 @@ export default function ActivityFeed({ events, showLead, onLead, onCall, compact
     if (last && !e.call_id && last.title === e.title && last.lead_id === e.lead_id && last.actor === e.actor && last.type === e.type) last.repeat++
     else grouped.push({ ...e, repeat: 1 })
   }
+  if (grouped.length === 0) return <p className="text-sm text-muted">No activity yet.</p>
   return (
-    <ol className="relative">
+    <ol className="relative min-w-0">
       {grouped.map((e, i) => {
         const [, Icon, color] = iconFor(e.type)
-        const data = e.data && e.type.startsWith('ai.') ? Object.entries(e.data).filter(([, v]) => v && typeof v !== 'object') : []
+        const data = e.data && typeof e.data === 'object' && e.type.startsWith('ai.') ? Object.entries(e.data).filter(([, v]) => v !== null && v !== undefined && v !== '' && typeof v !== 'object') : []
+        const actor = e.actor ?? ''
         return (
           // Events arrive down the timeline in order; the rail draws down behind them and the
           // newest event keeps a ring leaving its icon.
@@ -54,26 +56,26 @@ export default function ActivityFeed({ events, showLead, onLead, onCall, compact
               <Icon className="relative size-3.5" />
             </span>
             <div className="min-w-0 flex-1 pt-1">
-              <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                <span className="font-medium text-fg">{e.title}</span>
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-sm">
+                <span className="min-w-0 font-medium break-words text-fg">{e.title}</span>
                 {e.repeat > 1 && <span className="rounded-full bg-surface-2 px-1.5 text-[11px] font-semibold text-muted tabular-nums">×{e.repeat}</span>}
                 {showLead && e.lead_name && e.lead_id && (
-                  <button className="text-brand hover:underline" onClick={() => onLead?.(e.lead_id!)}>{e.lead_name}</button>
+                  <button type="button" className="relative min-w-0 truncate py-1 text-left text-brand hover:underline after:absolute after:-inset-y-2 after:-inset-x-1 after:content-['']" onClick={() => onLead?.(e.lead_id!)}>{e.lead_name}</button>
                 )}
               </div>
               {e.detail && !compact && <p className="mt-0.5 text-[13px] break-words text-muted"><ShowMore text={e.detail} lines={2} limit={180} /></p>}
               {data.length > 0 && !compact && (
                 <dl className="mt-2 grid gap-1 rounded-lg border border-border bg-surface-2 p-2.5 text-xs">
                   {data.slice(0, 6).map(([k, v]) => (
-                    <div key={k} className="flex gap-2"><dt className="w-28 shrink-0 text-muted capitalize">{k.replace(/_/g, ' ')}</dt><dd className="min-w-0 break-words text-fg-2"><ShowMore text={String(v)} lines={2} limit={160} /></dd></div>
+                    <div key={k} className="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:gap-2"><dt className="shrink-0 text-muted capitalize sm:w-28">{k.replace(/_/g, ' ')}</dt><dd className="min-w-0 break-words text-fg-2"><ShowMore text={String(v)} lines={2} limit={160} /></dd></div>
                   ))}
                 </dl>
               )}
-              <div className="mt-1 flex items-center gap-2 text-xs text-muted">
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
                 <span>{timeAgo(e.created_at)}</span>
                 <span>·</span>
-                <span>{e.actor === "ai" ? "AI" : e.actor.charAt(0).toUpperCase() + e.actor.slice(1)}</span>
-                {e.call_id && onCall && <><span>·</span><button className="text-brand hover:underline" onClick={() => onCall(e.call_id!)}>View call</button></>}
+                <span>{actor === 'ai' ? 'AI' : actor ? actor.charAt(0).toUpperCase() + actor.slice(1) : 'System'}</span>
+                {e.call_id && onCall && <><span>·</span><button type="button" className="relative py-1 text-brand hover:underline after:absolute after:-inset-y-2 after:-inset-x-1 after:content-['']" onClick={() => onCall(e.call_id!)}>View call</button></>}
               </div>
             </div>
           </li>

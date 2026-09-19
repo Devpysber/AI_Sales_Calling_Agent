@@ -22,14 +22,41 @@ const ICONS: Record<string, typeof Bell> = {
 const TONE: Record<Level, string> = { danger: 'text-danger bg-danger-soft', warning: 'text-warning bg-warning-soft', success: 'text-success bg-success-soft', info: 'text-fg-2 bg-surface-2' }
 const LEVEL_DOT = { ok: 'bg-success', low: 'bg-warning', critical: 'bg-danger', unknown: 'bg-muted' }
 
-export default function AlertsBell({ compact }: { compact: boolean }) {
+// AppShell mounts a Sidebar (and so an AlertsBell) for both the desktop aside and the mobile drawer, and the Dialog portals into
+// document.body regardless of which one is visible. Only the first mounted instance owns the low-credit popup so it never stacks twice.
+let popupOwner: symbol | null = null
+const popupOwnerListeners = new Set<() => void>()
+function usePopupOwner(enabled: boolean) {
+  const id = useRef<symbol | null>(null)
+  if (!id.current) id.current = Symbol('alerts-bell')
+  const [owns, setOwns] = useState(false)
+  useEffect(() => {
+    if (!enabled) return
+    const me = id.current!
+    const claim = () => { if (!popupOwner) popupOwner = me; setOwns(popupOwner === me) }
+    claim()
+    popupOwnerListeners.add(claim)
+    return () => {
+      popupOwnerListeners.delete(claim)
+      if (popupOwner === me) { popupOwner = null; popupOwnerListeners.forEach((fn) => fn()) }
+    }
+  }, [enabled])
+  return enabled && owns
+}
+
+export default function AlertsBell({ compact, renderPopup = true }: { compact: boolean; renderPopup?: boolean }) {
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<'reminders' | 'balances'>('reminders')
   const ref = useRef<HTMLDivElement>(null)
   const panel = useRef<HTMLDivElement>(null)
   const location = useLocation()
   const qc = useQueryClient()
-  const { data, isFetching, refetch } = useQuery({
+  const [popupError, setPopupError] = useState<string | null>(null)
+  // Lifted from the popup so the panel's Escape handler can defer to the modal instead of both firing on one keypress
+  const [popupDismissed, setPopupDismissed] = useState<string | null>(null)
+  const bellRef = useRef<HTMLButtonElement>(null)
+  const panelId = 'alerts-bell-panel'
+  const { data, isFetching, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['system', 'alerts'], queryFn: () => api<Summary>('/api/system/alerts'), refetchInterval: 60_000, staleTime: 30_000,
   })
   const refresh = useMutation({
@@ -39,13 +66,34 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
   const snooze = useMutation({
     mutationFn: ({ key, hours }: { key: string; hours: number }) => api('/api/system/alerts/snooze', { method: 'POST', json: { key, hours } }),
     onSuccess: () => void refetch(),
+    // Only a failed popup snooze re-opens the popup; list-item failures surface in the panel banner instead
+    onError: (_e, { key }) => { if (key.startsWith('popup:')) setPopupError('Could not snooze this reminder. Try again.') },
   })
-  useEffect(() => { setOpen(false) }, [location.pathname])
+  const ownsPopup = usePopupOwner(renderPopup)
+  const popup = ownsPopup && data?.popup && Array.isArray(data.popup.facts) ? data.popup : null
+  // Keyed on provider+level (not the live balance string) so a refetch that lands mid-snooze with a few cents less does not re-open it
+  const popupKey = popup ? `${popup.provider}:${popup.level}` : null
+  const popupOpen = !!popup && popupDismissed !== popupKey
+  const popupOpenRef = useRef(popupOpen)
+  popupOpenRef.current = popupOpen
+  // Close on any navigation, including query-only changes on the same path (e.g. /leads -> /leads?view=callbacks)
+  useEffect(() => { setOpen(false) }, [location.key])
   useEffect(() => {
     if (!open) return
-    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node) && !panel.current?.contains(e.target as Node)) setOpen(false) }
+    const close = (e: MouseEvent | TouchEvent) => { if (!ref.current?.contains(e.target as Node) && !panel.current?.contains(e.target as Node)) setOpen(false) }
+    // The low-credit Dialog owns Escape while it is open (it renders above the panel and snoozes on close)
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape' && !popupOpenRef.current) setOpen(false) }
     document.addEventListener('mousedown', close)
-    return () => document.removeEventListener('mousedown', close)
+    document.addEventListener('touchstart', close)
+    document.addEventListener('keydown', esc)
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('touchstart', close); document.removeEventListener('keydown', esc) }
+  }, [open])
+  // Move focus into the panel on open and back to the bell on close so keyboard users land in the dialog
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    if (open) panel.current?.focus({ preventScroll: true })
+    else if (wasOpen.current) bellRef.current?.focus({ preventScroll: true })
+    wasOpen.current = open
   }, [open])
 
   // Tolerate an older API response while the server restarts
@@ -56,12 +104,19 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
     ['Needs action', items.filter((i) => i.level === 'danger' || i.level === 'warning')],
     ['Today & upcoming', items.filter((i) => i.level === 'success' || i.level === 'info')],
   ]
-  const lowBalances = (Array.isArray(data?.balances) ? data.balances : []).filter((b) => b.level === 'low' || b.level === 'critical').length
+  const balances = Array.isArray(data?.balances) ? data.balances : []
+  const lowBalances = balances.filter((b) => b.level === 'low' || b.level === 'critical').length
+  // Fall back to reminders if balances vanish from the payload while that tab is selected
+  const activeTab = tab === 'balances' && !balances.length ? 'reminders' : tab
+  // A failed popup snooze is reported inside the dialog, not the panel banner
+  const snoozeListError = snooze.isError && !snooze.variables?.key.startsWith('popup:')
+  const tabs: [typeof tab, string][] = [['reminders', `Reminders${items.length ? ` · ${items.length}` : ''}`]]
+  if (balances.length) tabs.push(['balances', `Balances${lowBalances ? ` · ${lowBalances} low` : ''}`])
 
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen(!open)} title="Reminders & balances" aria-label="Reminders"
-        className={cn('relative grid size-9 place-items-center rounded-xl hover:bg-ink-fg/5 hover:text-ink-fg', urgent ? 'text-ink-fg' : 'text-ink-muted')}>
+      <button ref={bellRef} type="button" onClick={() => setOpen(!open)} title="Reminders & balances" aria-label="Reminders" aria-expanded={open} aria-haspopup="dialog" aria-controls={open ? panelId : undefined}
+        className={cn('relative grid size-10 place-items-center rounded-xl hover:bg-ink-fg/5 hover:text-ink-fg', urgent ? 'text-ink-fg' : 'text-ink-muted')}>
         {urgent ? <BellRing className="size-4" /> : <Bell className="size-4" />}
         {items.length > 0 && (
           <span className={cn('absolute -top-0.5 -right-0.5 grid min-w-4 place-items-center rounded-full px-1 text-[10px] font-bold text-white tabular-nums', urgent ? 'bg-danger' : 'bg-brand')}>{items.length}</span>
@@ -69,7 +124,7 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
       </button>
 
       {open && createPortal(
-        <div ref={panel} className="fixed bottom-4 left-4 z-[70] w-[min(380px,calc(100vw-2rem))] animate-pop-in overflow-hidden rounded-2xl border border-border bg-elevated text-fg shadow-pop lg:left-[calc(var(--sidebar-w,272px)+12px)]"
+        <div ref={panel} id={panelId} role="dialog" aria-label="Reminders & balances" tabIndex={-1} className="outline-none fixed bottom-4 left-4 z-[70] w-[min(380px,calc(100vw-2rem))] flex max-h-[calc(100dvh-2rem)] animate-pop-in flex-col overflow-hidden rounded-2xl border border-border bg-elevated text-fg shadow-pop lg:left-[calc(var(--sidebar-w,272px)+12px)]"
           style={{ ['--sidebar-w' as string]: compact ? '76px' : '272px' }}>
           <div className="flex items-center gap-2 border-b border-border px-4 py-3">
             <div className="min-w-0 flex-1">
@@ -78,21 +133,26 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
                 {data?.checked_at ? `Checked ${timeAgo(new Date(data.checked_at * 1000).toISOString())}` : data ? 'Checked just now' : 'Loading…'}{data?.snoozed ? ` · ${data.snoozed} snoozed` : ''}
               </div>
             </div>
-            <button type="button" onClick={() => refresh.mutate()} title="Fetch live balances now" className="grid size-7 place-items-center rounded-lg text-muted hover:bg-surface-2 hover:text-fg">
+            <button type="button" onClick={() => refresh.mutate()} disabled={refresh.isPending} title="Fetch live balances now" aria-label="Refresh" className="grid size-10 place-items-center lg:size-9 rounded-lg text-muted hover:bg-surface-2 hover:text-fg disabled:opacity-60">
               <RefreshCw className={cn('size-3.5', (refresh.isPending || isFetching) && 'animate-spin')} />
             </button>
-            <button type="button" onClick={() => setOpen(false)} className="grid size-7 place-items-center rounded-lg text-muted hover:bg-surface-2" aria-label="Close"><X className="size-4" /></button>
+            <button type="button" onClick={() => setOpen(false)} className="grid size-10 place-items-center rounded-lg text-muted hover:bg-surface-2 lg:size-9" aria-label="Close"><X className="size-4" /></button>
           </div>
           <div className="flex gap-1 border-b border-border px-3 py-2">
-            {([['reminders', `Reminders${items.length ? ` · ${items.length}` : ''}`]] as const)
-              .concat((data?.balances?.length ? [['balances', `Balances${lowBalances ? ` · ${lowBalances} low` : ''}`]] : []) as any)
-              .map(([k, l]) => (
-              <button key={k} type="button" onClick={() => setTab(k as any)} className={cn('rounded-lg px-2.5 py-1 text-xs font-semibold', tab === k ? 'bg-fg text-bg' : 'text-muted hover:bg-surface-2')}>{l}</button>
+            {tabs.map(([k, l]) => (
+              <button key={k} type="button" onClick={() => setTab(k)} className={cn('min-h-10 rounded-lg px-2.5 py-1 text-xs font-semibold lg:min-h-9', activeTab === k ? 'bg-fg text-bg' : 'text-muted hover:bg-surface-2')}>{l}</button>
             ))}
           </div>
 
-          <div className="max-h-[420px] overflow-y-auto p-2">
-            {tab === 'reminders' && (items.length ? sections.map(([title, list]) => list.length > 0 && (
+          {(isError || refresh.isError || snoozeListError) && (
+            <div className="border-b border-border bg-danger-soft px-4 py-2 text-xs text-danger">
+              {isError ? `Could not load reminders: ${(error as Error)?.message ?? 'unknown error'}` : refresh.isError ? 'Could not refresh balances.' : 'Could not snooze. Try again.'}
+            </div>
+          )}
+
+          <div className="max-h-[420px] min-h-0 flex-1 overflow-y-auto p-2">
+            {activeTab === 'reminders' && isLoading && <p className="px-2 py-8 text-center text-sm text-muted">Loading reminders…</p>}
+            {activeTab === 'reminders' && !isLoading && (items.length ? sections.map(([title, list]) => list.length > 0 && (
               <div key={title} className="mb-1">
                 <div className="px-2 pt-1 pb-1 text-[10.5px] font-bold tracking-wider text-muted uppercase">{title}</div>
                 <Stagger>
@@ -102,16 +162,16 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
                       <div key={a.key} className="group flex items-start gap-2.5 rounded-xl px-2 py-2 hover:bg-surface-2">
                         <span className={cn('mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg', TONE[a.level])}><Icon className="size-3.5" /></span>
                         <div className="min-w-0 flex-1">
-                          <div className="text-[13px] leading-snug">{a.text}</div>
+                          <div className="text-[13px] leading-snug break-words">{a.text}</div>
                           <div className="mt-1 flex flex-wrap items-center gap-2 text-[11.5px]">
                             {a.agent && <span className="truncate text-muted">{a.agent}</span>}
                             {a.action && (a.external
-                              ? <a href={a.to} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-semibold text-brand hover:underline">{a.action}<ExternalLink className="size-3" /></a>
-                              : <Link to={link(a)} className="font-semibold text-brand hover:underline">{a.action} →</Link>)}
-                            <span className="ml-auto flex gap-1 opacity-0 transition group-hover:opacity-100">
-                              {[['1h', 1], ['Tomorrow', 16]].map(([l, h]) => (
-                                <button key={l} type="button" onClick={() => snooze.mutate({ key: a.key, hours: h as number })}
-                                  className="rounded-md border border-border px-1.5 py-px text-[10.5px] text-muted hover:text-fg">Snooze {l}</button>
+                              ? <a href={a.to} target="_blank" rel="noreferrer" className="inline-flex min-h-10 items-center gap-1 font-semibold text-brand hover:underline lg:min-h-0">{a.action}<ExternalLink className="size-3" /></a>
+                              : <Link to={link(a)} className="inline-flex min-h-10 items-center font-semibold text-brand hover:underline lg:min-h-0">{a.action} →</Link>)}
+                            <span className="ml-auto flex gap-1 transition lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100">
+                              {([['1h', 1], ['Tomorrow', 16]] as const).map(([l, h]) => (
+                                <button key={l} type="button" disabled={snooze.isPending} onClick={() => snooze.mutate({ key: a.key, hours: h })}
+                                  className="min-h-10 rounded-md border border-border px-2.5 py-px text-[10.5px] text-muted hover:text-fg disabled:opacity-50 lg:min-h-7 lg:px-2">Snooze {l}</button>
                               ))}
                             </span>
                           </div>
@@ -121,25 +181,30 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
                   })}
                 </Stagger>
               </div>
-            )) : <p className="px-2 py-8 text-center text-sm text-muted">All clear. Nothing needs your attention.</p>)}
+            )) : isError && !data ? (
+              <div className="px-2 py-8 text-center text-sm text-muted">
+                <p>Reminders are unavailable right now.</p>
+                <button type="button" onClick={() => void refetch()} disabled={isFetching} className="mt-2 min-h-10 rounded-lg border border-border px-3 text-xs font-semibold text-fg hover:bg-surface-2 disabled:opacity-50 lg:min-h-9">Try again</button>
+              </div>
+            ) : <p className="px-2 py-8 text-center text-sm text-muted">All clear. Nothing needs your attention.</p>)}
 
-            {tab === 'balances' && (
+            {activeTab === 'balances' && (
               <Stagger>
-                {(Array.isArray(data?.balances) ? data.balances : []).map((b) => (
+                {balances.map((b) => (
                   <div key={b.provider} className="mb-2 rounded-xl border border-border p-3">
                     <div className="flex items-center gap-2">
                       <span className={cn('size-2 rounded-full', LEVEL_DOT[b.level])} />
-                      <span className="text-sm font-bold">{b.provider}</span>
-                      <span className="truncate text-xs text-muted">{b.label}</span>
-                      <span className={cn('ml-auto text-sm font-extrabold tabular-nums', b.level === 'critical' ? 'text-danger' : b.level === 'low' ? 'text-warning' : 'text-fg')}>{b.value}</span>
+                      <span className="shrink-0 text-sm font-bold">{b.provider}</span>
+                      <span className="min-w-0 truncate text-xs text-muted">{b.label}</span>
+                      <span className={cn('ml-auto shrink-0 text-sm font-extrabold whitespace-nowrap tabular-nums', b.level === 'critical' ? 'text-danger' : b.level === 'low' ? 'text-warning' : 'text-fg')}>{b.value}</span>
                     </div>
-                    <p className="mt-1 text-xs text-fg-2">{b.detail}</p>
-                    {b.facts?.length > 0 && (
+                    <p className="mt-1 text-xs break-words text-fg-2">{b.detail}</p>
+                    {Array.isArray(b.facts) && b.facts.length > 0 && (
                       <dl className="mt-2 space-y-0.5 text-[11.5px]">
-                        {b.facts.map(([k, v]) => <div key={k} className="flex gap-2"><dt className="w-28 shrink-0 text-muted">{k}</dt><dd className="min-w-0 text-fg-2">{v}</dd></div>)}
+                        {b.facts.map(([k, v]) => <div key={k} className="flex gap-2"><dt className="w-28 shrink-0 text-muted">{k}</dt><dd className="min-w-0 break-words text-fg-2">{v}</dd></div>)}
                       </dl>
                     )}
-                    {b.action && <a href={b.action.url} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-brand hover:underline">{b.action.label}<ExternalLink className="size-3" /></a>}
+                    {b.action && <a href={b.action.url} target="_blank" rel="noreferrer" className="mt-2 inline-flex min-h-10 items-center gap-1 text-xs font-semibold text-brand hover:underline lg:min-h-0">{b.action.label}<ExternalLink className="size-3" /></a>}
                   </div>
                 ))}
               </Stagger>
@@ -148,27 +213,35 @@ export default function AlertsBell({ compact }: { compact: boolean }) {
         </div>
       , document.body)}
 
-      <LowCreditPopup popup={data?.popup && Array.isArray(data.popup.facts) ? data.popup : null} onSnooze={(hours) => data?.popup && snooze.mutate({ key: `popup:${data.popup.provider}`, hours })} />
+      {ownsPopup && <LowCreditPopup popup={popup} open={popupOpen} dismissKey={popupKey} pending={snooze.isPending} error={popupError} onDismiss={setPopupDismissed} onClearError={() => setPopupError(null)}
+        onSnooze={(hours) => { if (popup) snooze.mutate({ key: `popup:${popup.provider}`, hours }) }} />}
     </div>
   )
 }
 
 /** Blocking reminder when a provider is about to run out (e.g. Plivo covers under an hour of calls). */
-function LowCreditPopup({ popup, onSnooze }: { popup: Balance | null; onSnooze: (hours: number) => void }) {
-  const [dismissed, setDismissed] = useState<string | null>(null)
-  const open = !!popup && dismissed !== `${popup.provider}:${popup.value}`
+function LowCreditPopup({ popup, open, dismissKey, pending, error, onSnooze, onDismiss, onClearError }: {
+  popup: Balance | null; open: boolean; dismissKey: string | null; pending: boolean; error: string | null
+  onSnooze: (hours: number) => void; onDismiss: (key: string | null) => void; onClearError: () => void
+}) {
+  // Dismissal is keyed on provider+value and reset whenever the backend stops sending a popup (snooze accepted) so a later re-fire is shown again.
+  useEffect(() => { if (!popup) { onDismiss(null); onClearError() } }, [popup]) // eslint-disable-line react-hooks/exhaustive-deps
+  // A failed snooze re-opens the popup so the user sees the error and can retry
+  useEffect(() => { if (error) onDismiss(null) }, [error]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!popup) return null
-  const close = (hours: number) => { setDismissed(`${popup.provider}:${popup.value}`); onSnooze(hours) }
+  const close = (hours: number) => { onClearError(); onDismiss(dismissKey); onSnooze(hours) }
+  const openAction = () => { if (popup.action) window.open(popup.action.url, '_blank', 'noreferrer') }
   return (
     <Dialog open={open} onClose={() => close(1)} title={`${popup.provider} is almost out of credit`}
       description={`${popup.value} left · ${popup.detail}. Calls stop when it runs out.`}
       footer={<>
-        <Button onClick={() => close(1)}>Remind me in 1 hour</Button>
-        <Button onClick={() => close(12)}>Tomorrow</Button>
-        {popup.action && <a href={popup.action.url} target="_blank" rel="noreferrer"><Button variant="primary"><ExternalLink />{popup.action.label}</Button></a>}
+        <Button onClick={() => close(1)} disabled={pending} loading={pending}>Remind me in 1 hour</Button>
+        <Button onClick={() => close(12)} disabled={pending}>Tomorrow</Button>
+        {popup.action && <Button variant="primary" onClick={openAction}><ExternalLink />{popup.action.label}</Button>}
       </>}>
+      {error && <p role="alert" className="mb-3 rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">{error}</p>}
       <dl className="space-y-1 text-sm">
-        {popup.facts.map(([k, v]) => <div key={k} className="flex gap-3"><dt className="w-32 shrink-0 text-muted">{k}</dt><dd className="text-fg">{v}</dd></div>)}
+        {popup.facts.map(([k, v]) => <div key={k} className="flex gap-3"><dt className="w-28 shrink-0 text-muted sm:w-32">{k}</dt><dd className="min-w-0 break-words text-fg">{v}</dd></div>)}
       </dl>
     </Dialog>
   )

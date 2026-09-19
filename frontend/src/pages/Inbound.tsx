@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bot, Clock, MoonStar, PhoneForwarded, PhoneIncoming, PhoneMissed, Save, UserRound, X } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import CallSheet from '@/components/CallSheet'
 import InboundSetup from '@/components/InboundSetup'
@@ -22,6 +22,7 @@ const KEYS: (keyof Routing)[] = ['transfer_number', 'team_members', 'inbound_mod
 
 export default function Inbound() {
   const { agent, base, path } = useAgent()
+  const navigate = useNavigate()
   // Same cache as the app-wide incoming-call banner: no extra polling for this page.
   const liveFeed = useQuery({
     queryKey: ['live-calls'],
@@ -30,7 +31,8 @@ export default function Inbound() {
   })
   const liveInbound = liveFeed.data?.live_calls.find((c) => c.agent_id === agent?.id && c.direction === 'inbound')
   const qc = useQueryClient()
-  const { data } = useQuery({ queryKey: ['agent'], queryFn: () => api<ProfileResponse>(`${base}/profile`) })
+  const profile = useQuery({ queryKey: ['agent'], queryFn: () => api<ProfileResponse>(`${base}/profile`) })
+  const data = profile.data
   const automation = useQuery({ queryKey: ['automation'], queryFn: () => api<{ settings: AutomationSettings; within_calling_hours: boolean }>(`${base}/automation`) })
   const calls = useQuery({
     queryKey: ['calls', 'inbound'],
@@ -41,11 +43,18 @@ export default function Inbound() {
   const [form, setForm] = useState<Routing | null>(null)
   const [callId, setCallId] = useState<number | null>(null)
   useEffect(() => { if (data && !form) setForm(Object.fromEntries(KEYS.map((k) => [k, data.profile[k]])) as Routing) }, [data, form])
+  // Stable keys for team member rows: with `key={i}` removing row N re-used row N+1's inputs (focus and IME state moved to the wrong row).
+  const nextKey = useRef(0)
+  const [rowKeys, setRowKeys] = useState<number[]>([])
+  const memberCount = form?.team_members?.length || (form?.transfer_number || '').split(',').filter((n) => n.trim()).length
+  useEffect(() => { setRowKeys((k) => (k.length >= memberCount ? k : [...k, ...Array.from({ length: memberCount - k.length }, () => nextKey.current++)])) }, [memberCount])
 
   const save = useMutation({
     mutationFn: (values: Routing) => api<AgentProfile>(`${base}/profile`, { method: 'PUT', json: values }),
     onSuccess: (profile) => {
       qc.setQueryData<ProfileResponse>(['agent'], (old) => (old ? { ...old, profile } : old))
+      // transfer_contacts (names for the saved numbers) is computed server-side: refetch so it matches the new numbers.
+      qc.invalidateQueries({ queryKey: ['agent'] })
       setForm(Object.fromEntries(KEYS.map((k) => [k, profile[k]])) as Routing)
       toast.success('Call routing saved', { description: 'Applies to the next incoming call.' })
     },
@@ -53,49 +62,90 @@ export default function Inbound() {
   })
 
   const saveHours = useMutation({
-    mutationFn: (values: { calling_hours_start: number, calling_hours_end: number }) => api(`${base}/automation`, { method: 'PUT', json: { ...automation.data!.settings, ...values } }),
-    onSuccess: () => {
+    mutationFn: (values: { calling_hours_start: number, calling_hours_end: number }) => {
+      if (!automation.data) return Promise.reject(new Error('Calling hours are still loading'))
+      return api<AutomationSettings>(`${base}/automation`, { method: 'PUT', json: { ...automation.data.settings, ...values } })
+    },
+    // The selects are controlled from the cache: patch it optimistically so they don't snap back to the old hour while the PUT is in flight.
+    onMutate: async (values) => {
+      await qc.cancelQueries({ queryKey: ['automation'] })
+      const previous = qc.getQueryData<{ settings: AutomationSettings; within_calling_hours: boolean }>(['automation'])
+      qc.setQueryData<{ settings: AutomationSettings; within_calling_hours: boolean }>(['automation'], (old) => (old ? { ...old, settings: { ...old.settings, ...values } } : old))
+      return { previous }
+    },
+    onSuccess: (res) => {
+      qc.setQueryData<{ settings: AutomationSettings; within_calling_hours: boolean }>(['automation'], (old) => (old ? { ...old, settings: res } : old))
       qc.invalidateQueries({ queryKey: ['automation'] })
+      // The sidebar's "After hours" badge lives on the root client's ['agents'] query, which this per-agent
+      // client cannot invalidate (see NewAgentSheet); it catches up on its own refetch interval.
       toast.success('Calling hours updated')
     },
-    onError: (e) => toast.error('Not saved', { description: e.message }),
+    onError: (e, _values, ctx) => {
+      if (ctx?.previous) qc.setQueryData(['automation'], ctx.previous)
+      toast.error('Not saved', { description: e.message })
+    },
   })
 
   const items = useMemo(() => calls.data?.items ?? [], [calls.data])
   const stats = useMemo(() => {
-    const answered = items.filter((c) => c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0)).length
-    const forwarded = items.filter((c) => c.trigger === 'forwarded').length
-    const internal = items.filter((c) => c.trigger === 'internal').length
-    return { total: Math.max(0, (calls.data?.total ?? 0) - internal), answered: answered - internal, forwarded, missed: items.filter((c) => ['No Answer', 'Busy'].includes(c.status) || (c.status === 'Failed' && c.duration === 0)).length }
-  }, [items, calls.data])
+    // Team check-in calls are internal: count only what customers did, so "Answered" can't go negative.
+    // Every figure comes from the same fetched page (the server-wide total would not add up with them).
+    const external = items.filter((c) => c.trigger !== 'internal')
+    const answered = external.filter((c) => c.status === 'Completed' || (c.status === 'Failed' && (c.duration ?? 0) > 0)).length
+    const forwarded = external.filter((c) => c.trigger === 'forwarded').length
+    const missed = external.filter((c) => ['No Answer', 'Busy'].includes(c.status) || (c.status === 'Failed' && !(c.duration ?? 0))).length
+    return { total: external.length, answered, forwarded, missed }
+  }, [items])
 
+  if (profile.isError) {
+    return <><PageHeader title="Inbound & transfer" /><Card><EmptyState icon={<PhoneMissed />} title="Couldn't load call routing" description={profile.error.message}
+      action={<Button onClick={() => profile.refetch()} loading={profile.isFetching}>Try again</Button>} /></Card></>
+  }
   if (!form || !data) return <><PageHeader title="Inbound & transfer" /><div className="grid gap-4 lg:grid-cols-2"><Skeleton className="h-80" /><Skeleton className="h-80" /></div></>
+  const busy = save.isPending
 
   const set = <K extends keyof Routing>(k: K, v: Routing[K]) => setForm((f) => (f ? { ...f, [k]: v } : f))
   // A half-filled team member row must not hide a transfer number that is still saved on the agent: the
   // backend forwards on `transfer_number`, so the badge here has to describe what will actually happen.
   const memberNums = (form.team_members ?? []).map((m) => (m?.phone ?? '').trim()).filter((n) => n)
-  const tNums = memberNums.length > 0 ? memberNums : (form.transfer_number || '').split(',').map((n) => n.trim()).filter((n) => n)
+  // Once rows exist, they are what gets saved (the server recomputes transfer_number from them), so the
+  // legacy comma list only counts when there are no rows at all: blanking every phone must read as "Not set".
+  const legacyNums = (form.transfer_number || '').split(',').map((n) => n.trim()).filter((n) => n)
+  const tNums = form.team_members?.length ? memberNums : legacyNums
   const hasNumber = tNums.length > 0 && tNums.every(n => { const d = n.replace(/\D/g, ''); return d.length >= 11 && d.length <= 15 })
+  const ringsLabel = tNums.join(', ')
+  // The server drops any row without a phone, so a name or email typed without one would vanish on save.
+  const blankPhoneRow = (form.team_members ?? []).some((m) => !(m?.phone ?? '').trim() && ((m?.name ?? '').trim() || (m?.email ?? '').trim()))
   const numberError = tNums.length > 0 && !hasNumber
     ? 'All numbers must include the country code and be valid length, e.g. +91 98765 43210.'
-    : undefined
+    : blankPhoneRow
+      ? 'Every team member needs a phone number, or remove the row.'
+      : undefined
 
+  // Forwarding without a number always fails server-side (400), so block it here with a reason instead of a toast.
+  const wantsForward = form.inbound_mode === 'forward' || form.after_hours_mode === 'forward'
+  const needsNumber = (tNums.length > 0 && !hasNumber) || (!hasNumber && wantsForward) || blankPhoneRow
   const dirty = KEYS.some((k) => JSON.stringify(form[k]) !== JSON.stringify(data.profile[k]))
   const cfg = automation.data?.settings
-  const hours = cfg ? `${cfg.calling_hours_start}:00 – ${cfg.calling_hours_end}:00 IST` : '…'
+  const hours = cfg ? `${hourLabel(cfg.calling_hours_start)} – ${hourLabel(cfg.calling_hours_end)} IST` : '…'
+  const digits = (s: string | null | undefined) => (s ?? '').replace(/\D/g, '')
+  const callerName = (c: Call) => {
+    const d = digits(c.from_number)
+    if (!d) return null
+    return data.profile.team_members?.find((m) => digits(m?.phone) === d)?.name || data.transfer_contacts?.find((t) => digits(t.phone) === d)?.name || null
+  }
 
   const routeNow = automation.data?.within_calling_hours === false ? form.after_hours_mode : form.inbound_mode
   const flow: Record<string, { icon: ReactNode; label: string; detail: string }> = {
-    ai: { icon: <Bot />, label: `${data.profile.agent_name} (AI) answers`, detail: form.transfer_on_request && hasNumber ? `Hands over to ${form.transfer_number} when asked` : 'Answers from the knowledge base' },
-    forward: { icon: <PhoneForwarded />, label: 'Your team answers', detail: hasNumber ? `Rings ${form.transfer_number}` : 'Needs a transfer number' },
+    ai: { icon: <Bot />, label: `${data.profile.agent_name} (AI) answers`, detail: form.transfer_on_request && hasNumber ? `Hands over to ${ringsLabel} when asked` : 'Answers from the knowledge base' },
+    forward: { icon: <PhoneForwarded />, label: 'Your team answers', detail: hasNumber ? `Rings ${ringsLabel}` : 'Needs a transfer number' },
     message: { icon: <MoonStar />, label: 'Closed message', detail: 'Plays a message, then hangs up' },
   }
   const option = (group: 'inbound_mode' | 'after_hours_mode', value: string, icon: ReactNode, title: string, detail: string, disabled = false) => {
     const active = form[group] === value
     return (
-      <button key={value} type="button" disabled={disabled} onClick={() => set(group, value as never)}
-        className={cn('flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition disabled:cursor-not-allowed disabled:opacity-45',
+      <button key={value} type="button" role="radio" aria-checked={active} disabled={disabled || busy} onClick={() => set(group, value as never)}
+        className={cn('flex min-h-11 w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition disabled:cursor-not-allowed disabled:opacity-45',
           active ? 'border-fg bg-surface-2' : 'border-border hover:border-border-strong')}>
         <span className={cn('grid size-4 shrink-0 place-items-center rounded-full border-2', active ? 'border-fg' : 'border-border-strong')}>{active && <span className="size-2 rounded-full bg-fg" />}</span>
         <span className="text-fg-2 [&_svg]:size-4">{icon}</span>
@@ -103,7 +153,10 @@ export default function Inbound() {
       </button>
     )
   }
-  const teamDetail = hasNumber ? `Rings ${form.transfer_number}` : 'Set a transfer number first'
+  const memberRows = ((form.team_members && form.team_members.length > 0)
+    ? form.team_members
+    : (form.transfer_number || '').split(',').map((n) => ({ name: '', phone: n.trim(), email: '' }))).filter((m) => form.team_members?.length || m.phone)
+  const teamDetail = hasNumber ? `Rings ${ringsLabel}` : 'Set a transfer number first'
 
   return (
     <>
@@ -112,27 +165,33 @@ export default function Inbound() {
 
       <Card className={cn('glint mb-4 transition-colors', liveInbound && 'beam beam-on beam-live is-live-card')}>
         {liveInbound && (
-          <div className="flex items-center gap-2 border-b border-success/30 bg-success-soft px-5 py-2 text-[13px] font-bold text-success">
-            <span className="size-2 animate-pulse-dot rounded-full bg-success" />
-            On the line now: {callParty(liveInbound)}
-            <Waveform bars={12} className="ml-auto h-4" />
+          <div className="flex items-center gap-2 border-b border-success/30 bg-success-soft px-4 py-2 text-[13px] font-bold text-success sm:px-5">
+            <span className="size-2 shrink-0 animate-pulse-dot rounded-full bg-success" />
+            <span className="min-w-0 flex-1 truncate">On the line now: {callParty(liveInbound)}</span>
+            <Waveform bars={12} className="ml-auto h-4 shrink-0" />
           </div>
         )}
-        <div className="flex flex-wrap items-center gap-4 px-5 py-4">
-          <div className="flex items-center gap-2.5 text-sm">
-            <span className="relative grid size-9 place-items-center rounded-xl bg-surface-2">
+        <div className="flex flex-wrap items-center gap-4 px-4 py-4 sm:px-5">
+          <div className="flex min-w-0 items-center gap-2.5 text-sm">
+            <span className="relative grid size-9 shrink-0 place-items-center rounded-xl bg-surface-2">
               <span className="absolute inset-0 animate-live-ring rounded-xl bg-fg/10" />
               <PhoneIncoming className="relative size-4" />
             </span>
-            <div><div className="font-bold">A customer calls now</div><div className="text-xs text-muted">{automation.data ? `${automation.data.within_calling_hours ? 'Open' : 'Closed'} · ${hours}` : '…'}</div></div>
+            <div className="min-w-0"><div className="font-bold">A customer calls now</div>
+              {automation.isError && !automation.data ? (
+                <div className="truncate text-xs text-danger">
+                  Couldn't load hours · <button type="button" onClick={() => automation.refetch()} disabled={automation.isFetching} className="inline-flex min-h-10 items-center px-1 font-semibold underline disabled:opacity-50 sm:min-h-0">Retry</button>
+                </div>
+              ) : <div className="truncate text-xs text-muted">{automation.data ? `${automation.data.within_calling_hours ? 'Open' : 'Closed'} · ${hours}` : '…'}</div>}
+            </div>
           </div>
           {/* A signal travelling from the caller to whoever answers right now: the route, shown working. */}
           <span className={cn('route-path hidden w-16 sm:block', liveInbound && 'is-live')} aria-hidden><span className="route-signal" /></span>
           <div className="flex min-w-0 items-center gap-2.5 text-sm">
-            <span key={routeNow} className="animate-pop-in grid size-9 place-items-center rounded-xl bg-fg text-bg [&_svg]:size-4">{flow[routeNow]?.icon}</span>
-            <div className="min-w-0"><div className="font-bold">{flow[routeNow]?.label}</div><div className="truncate text-xs text-muted">{flow[routeNow]?.detail}</div></div>
+            <span key={routeNow} className="animate-pop-in grid size-9 shrink-0 place-items-center rounded-xl bg-fg text-bg [&_svg]:size-4">{flow[routeNow]?.icon}</span>
+            <div className="min-w-0"><div className="font-bold break-words">{flow[routeNow]?.label}</div><div className="truncate text-xs text-muted">{flow[routeNow]?.detail}</div></div>
           </div>
-          <div className="ml-auto grid grid-cols-4 gap-5 text-center">
+          <div className="grid w-full grid-cols-4 gap-3 text-center sm:ml-auto sm:w-auto sm:gap-5">
             {([['Inbound', stats.total], ['Answered', stats.answered], ['Forwarded', stats.forwarded], ['Missed', stats.missed]] as const).map(([l, v]) => (
               <div key={l}><div className="text-lg font-extrabold tabular-nums"><AnimatedNumber value={v} /></div><div className="text-[11px] text-muted">{l}</div></div>
             ))}
@@ -144,20 +203,20 @@ export default function Inbound() {
         <Stagger className="min-w-0 space-y-4" step={60}>
           <Card>
             <CardHeader title="1 · Phone number" description="Plivo must send calls on this number to the app." />
-            <div className="px-5 pb-5 text-sm"><InboundSetup /></div>
+            <div className="px-4 pb-5 text-sm sm:px-5"><InboundSetup /></div>
           </Card>
 
           <Card>
             <CardHeader title="2 · Your team's number" description="Where calls go when a person should take over."
               action={<Badge tone={hasNumber ? 'success' : 'warning'} dot>{hasNumber ? 'Set' : 'Not set'}</Badge>} />
-            <div className="space-y-3 px-5 pb-5">
+            <div className="space-y-3 px-4 pb-5 sm:px-5">
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="font-semibold">Team members</div>
-                  <button type="button" onClick={() => set('team_members', [...(form.team_members || []), { name: '', phone: '', email: '' }])} className="text-xs font-semibold text-fg hover:underline">+ Add team member</button>
+                  <button type="button" disabled={busy} onClick={() => { setRowKeys((k) => (k.length >= memberRows.length ? [...k.slice(0, memberRows.length), nextKey.current++] : [...k, ...Array.from({ length: memberRows.length + 1 - k.length }, () => nextKey.current++)])); set('team_members', [...memberRows, { name: '', phone: '', email: '' }]) }} className="min-h-10 px-2 text-xs font-semibold text-fg hover:underline disabled:opacity-50">+ Add team member</button>
                 </div>
                 <div className="text-[13px] text-muted mb-2">Team members who should receive urgent alerts and fallback calls.</div>
-                {numberError && <div className="text-xs font-medium text-destructive">{numberError}</div>}
+                {numberError && <div className="text-xs font-medium break-words text-danger">{numberError}</div>}
                 {/* What is saved right now, named from Sales Team Accounts. Without this the page could
                     only show a bare number, or — with a half-filled row — nothing at all. */}
                 {!form.team_members?.length && !!data.transfer_contacts?.length && (
@@ -169,7 +228,7 @@ export default function Inbound() {
                           <span className="font-semibold">{c.name || 'Unnamed colleague'}</span>
                           <span className="ml-2 font-mono text-xs text-muted">{c.phone}</span>
                         </span>
-                        <span className="text-[11px] font-semibold text-muted">Saved</span>
+                        <span className="shrink-0 text-[11px] font-semibold text-muted">Saved</span>
                       </li>
                     ))}
                     <li className="text-[11.5px] text-muted">
@@ -178,46 +237,59 @@ export default function Inbound() {
                     </li>
                   </ul>
                 )}
-                {((form.team_members && form.team_members.length > 0) ? form.team_members : (form.transfer_number || '').split(',').map(n => ({ name: '', phone: n.trim(), email: '' }))).filter(m => form.team_members?.length || m.phone).map((member, i, arr) => (
-                   <div key={i} className="flex items-start gap-2 rounded-xl border border-border p-3 bg-surface-2">
-                     <div className="flex-1 space-y-2">
-                       <Input type="text" value={member?.name ?? ''} onChange={e => { const updated = [...arr]; updated[i].name = e.target.value; set('team_members', updated) }} placeholder="Name (e.g. Alice)" className="h-8 text-sm" />
-                       <Input type="tel" value={member?.phone ?? ''} onChange={e => { const updated = [...arr]; updated[i].phone = e.target.value; set('team_members', updated) }} placeholder="Phone (e.g. +91 98765 43210)" maxLength={20} className="h-8 text-sm" />
-                       <Input type="email" value={member?.email ?? ''} onChange={e => { const updated = [...arr]; updated[i].email = e.target.value; set('team_members', updated) }} placeholder="Email (e.g. alice@example.com)" className="h-8 text-sm" />
-                     </div>
-                     <button type="button" onClick={() => { const updated = [...arr]; updated.splice(i, 1); set('team_members', updated) }} className="text-muted hover:text-fg p-1 mt-1"><X className="size-4" /></button>
-                   </div>
-                ))}
+                {/* Rows are copied on edit: mutating them in place also mutated the cached profile, so the
+                    page never saw the form as dirty and Discard had nothing to go back to. */}
+                {memberRows.map((member, i, arr) => {
+                  const edit = (patch: Partial<typeof member>) => set('team_members', arr.map((m, j) => (j === i ? { ...m, ...patch } : m)))
+                  const remove = () => {
+                    const rest = arr.filter((_, j) => j !== i)
+                    set('team_members', rest)
+                    setRowKeys((k) => k.filter((_, j) => j !== i))
+                    // Keep the legacy comma list in sync (the server does the same on save): with rows gone, memberRows
+                    // falls back to transfer_number, so a stale list would bring every removed row straight back.
+                    set('transfer_number', rest.map((m) => (m?.phone ?? '').trim()).filter(Boolean).join(', '))
+                  }
+                  return (
+                    <div key={rowKeys[i] ?? `row-${i}`} className="flex items-start gap-2 rounded-xl border border-border bg-surface-2 p-3">
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <Input type="text" value={member?.name ?? ''} disabled={busy} onChange={(e) => edit({ name: e.target.value })} placeholder="Name (e.g. Alice)" aria-label="Team member name" className="text-sm sm:h-8" />
+                        <Input type="tel" value={member?.phone ?? ''} disabled={busy} onChange={(e) => edit({ phone: e.target.value })} placeholder="Phone (e.g. +91 98765 43210)" aria-label="Team member phone" maxLength={20} className="text-sm sm:h-8" />
+                        <Input type="email" value={member?.email ?? ''} disabled={busy} onChange={(e) => edit({ email: e.target.value })} placeholder="Email (e.g. alice@example.com)" aria-label="Team member email" className="text-sm sm:h-8" />
+                      </div>
+                      <button type="button" disabled={busy} onClick={remove} aria-label="Remove team member" className="grid size-10 shrink-0 place-items-center rounded-lg text-muted hover:bg-surface hover:text-fg disabled:opacity-50"><X className="size-4" /></button>
+                    </div>
+                  )
+                })}
               </div>
 
               <label className={cn('flex items-center gap-3 rounded-xl border border-border px-3 py-2.5 text-sm', !hasNumber && 'opacity-50')}>
-                <UserRound className="size-4 text-fg-2" />
-                <span className="flex-1"><span className="block font-semibold">AI transfers when a caller asks for a person</span><span className="text-xs text-muted">The agent says it is connecting them, then your number rings.</span></span>
-                <Switch checked={form.transfer_on_request && hasNumber} onChange={(v) => set('transfer_on_request', v)} disabled={!hasNumber} label="Transfer on request" />
+                <UserRound className="size-4 shrink-0 text-fg-2" />
+                <span className="min-w-0 flex-1"><span className="block font-semibold">AI transfers when a caller asks for a person</span><span className="text-xs text-muted">The agent says it is connecting them, then your number rings.</span></span>
+                <Switch checked={!!form.transfer_on_request} onChange={(v) => set('transfer_on_request', v)} disabled={!hasNumber || busy} label="Transfer on request" />
               </label>
               <label className={cn('flex items-center gap-3 rounded-xl border border-border px-3 py-2.5 text-sm', !hasNumber && 'opacity-50')}>
-                <Bot className="size-4 text-fg-2" />
-                <span className="flex-1"><span className="block font-semibold">If your team doesn't pick up, the AI takes the call</span><span className="text-xs text-muted">Off: the caller hears “our team will call you back” and the call ends.</span></span>
-                <Switch checked={form.forward_fallback === 'ai'} onChange={(v) => set('forward_fallback', v ? 'ai' : 'message')} disabled={!hasNumber} label="AI fallback" />
+                <Bot className="size-4 shrink-0 text-fg-2" />
+                <span className="min-w-0 flex-1"><span className="block font-semibold">If your team doesn't pick up, the AI takes the call</span><span className="text-xs text-muted">Off: the caller hears “our team will call you back” and the call ends.</span></span>
+                <Switch checked={form.forward_fallback === 'ai'} onChange={(v) => set('forward_fallback', v ? 'ai' : 'message')} disabled={!hasNumber || busy} label="AI fallback" />
               </label>
               <label className={cn('flex items-center gap-3 rounded-xl border border-border px-3 py-2.5 text-sm', !hasNumber && 'opacity-50')}>
-                <PhoneMissed className="size-4 text-fg-2" />
-                <span className="flex-1"><span className="block font-semibold">Email me about missed forwarded calls</span><span className="text-xs text-muted">Sent to your Admin profile email with the caller's CRM details.</span></span>
-                <Switch checked={form.notify_missed_calls} onChange={(v) => set('notify_missed_calls', v)} disabled={!hasNumber} label="Missed call email" />
+                <PhoneMissed className="size-4 shrink-0 text-fg-2" />
+                <span className="min-w-0 flex-1"><span className="block font-semibold">Email me about missed forwarded calls</span><span className="text-xs text-muted">Sent to your Admin profile email with the caller's CRM details.</span></span>
+                <Switch checked={!!form.notify_missed_calls} onChange={(v) => set('notify_missed_calls', v)} disabled={!hasNumber || busy} label="Missed call email" />
               </label>
             </div>
           </Card>
 
           <Card>
             <CardHeader title="3 · New callers" description="When an unknown number calls, the agent saves them as a lead, asks for these details one at a time (in this order), then helps. Names are saved the moment they're said." />
-            <div className="space-y-3 px-5 pb-5">
+            <div className="space-y-3 px-4 pb-5 sm:px-5">
               <div className="flex flex-wrap gap-2">
                 {([['name', 'Name'], ['requirement', 'What they need'], ['city', 'City'], ['company', 'Company'], ['email', 'Email'], ['budget', 'Budget'], ['timeline', 'Timeline'], ['callback_time', 'Best time to call back'], ['source', 'How they heard about us']] as const).map(([k, l]) => {
                   const list = form.inbound_collect ?? []
                   const idx = list.indexOf(k)
                   return (
-                    <button key={k} type="button" onClick={() => set('inbound_collect', idx >= 0 ? list.filter((x) => x !== k) : [...list, k])}
-                      className={cn('inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[13px] font-semibold transition',
+                    <button key={k} type="button" aria-pressed={idx >= 0} disabled={busy} onClick={() => set('inbound_collect', idx >= 0 ? list.filter((x) => x !== k) : [...list, k])}
+                      className={cn('inline-flex min-h-10 items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[13px] font-semibold transition disabled:opacity-50',
                         idx >= 0 ? 'border-fg bg-fg text-bg' : 'border-border text-fg-2 hover:border-border-strong')}>
                       {idx >= 0 && <span className="grid size-4 place-items-center rounded-full bg-bg/20 text-[10px]">{idx + 1}</span>}{l}
                     </button>
@@ -229,27 +301,35 @@ export default function Inbound() {
           </Card>
 
           <Card>
-            <CardHeader title="4 · Who answers" description={<>Open hours come from the <Link to={`${base}/automation`} className="text-primary hover:underline">Automation page</Link>.</>} />
-            <div className="grid gap-5 px-5 pb-5 md:grid-cols-2">
+            <CardHeader title="4 · Who answers" description={<>Open hours come from the <Link to={path('/automation')} className="text-brand hover:underline">Automation page</Link>.</>} />
+            <div className="grid gap-5 px-4 pb-5 sm:px-5 md:grid-cols-2">
               <div className="space-y-2">
-                <div className="flex items-center gap-2 text-xs font-bold tracking-wide text-muted uppercase">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-bold tracking-wide text-muted uppercase">
                   <Clock className="size-3.5" />Open
                   {cfg && (
-                    <div className="ml-2 flex items-center gap-1 font-normal normal-case">
-                      <select value={cfg.calling_hours_start} onChange={(e) => saveHours.mutate({ calling_hours_start: +e.target.value, calling_hours_end: cfg.calling_hours_end })} className="rounded-md border border-border bg-bg px-1 py-0.5 text-xs text-fg">
+                    <div className="flex items-center gap-1 font-normal normal-case sm:ml-2">
+                      <select value={cfg.calling_hours_start} disabled={saveHours.isPending} aria-label="Opening hour" onChange={(e) => saveHours.mutate({ calling_hours_start: +e.target.value, calling_hours_end: cfg.calling_hours_end })} className="min-h-10 rounded-md border border-border bg-bg px-2 py-1 text-xs text-fg disabled:opacity-50">
                         {HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
                       </select>
                       <span>to</span>
-                      <select value={cfg.calling_hours_end} onChange={(e) => saveHours.mutate({ calling_hours_start: cfg.calling_hours_start, calling_hours_end: +e.target.value })} className="rounded-md border border-border bg-bg px-1 py-0.5 text-xs text-fg">
+                      <select value={cfg.calling_hours_end} disabled={saveHours.isPending} aria-label="Closing hour" onChange={(e) => saveHours.mutate({ calling_hours_start: cfg.calling_hours_start, calling_hours_end: +e.target.value })} className="min-h-10 rounded-md border border-border bg-bg px-2 py-1 text-xs text-fg disabled:opacity-50">
                         {HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
                       </select>
                     </div>
                   )}
+                  {automation.isError && !cfg && (
+                    <span className="flex items-center gap-1 font-normal normal-case text-danger sm:ml-2">
+                      {automation.error.message}
+                      <button type="button" onClick={() => automation.refetch()} disabled={automation.isFetching} className="min-h-10 px-1 font-semibold underline disabled:opacity-50">Retry</button>
+                    </span>
+                  )}
                 </div>
-                {option('inbound_mode', 'ai', <Bot />, 'AI agent', 'Answers, qualifies and logs to the CRM')}
-                {option('inbound_mode', 'forward', <PhoneForwarded />, 'Your team', teamDetail, !hasNumber)}
+                <div className="space-y-2" role="radiogroup" aria-label="Open hours">
+                  {option('inbound_mode', 'ai', <Bot />, 'AI agent', 'Answers, qualifies and logs to the CRM')}
+                  {option('inbound_mode', 'forward', <PhoneForwarded />, 'Your team', teamDetail, !hasNumber)}
+                </div>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2" role="radiogroup" aria-label="After hours">
                 <div className="flex items-center gap-2 text-xs font-bold tracking-wide text-muted uppercase"><MoonStar className="size-3.5" />After hours</div>
                 {option('after_hours_mode', 'ai', <Bot />, 'AI agent', 'Around the clock')}
                 {option('after_hours_mode', 'forward', <PhoneForwarded />, 'Your team', teamDetail, !hasNumber)}
@@ -258,7 +338,7 @@ export default function Inbound() {
               {form.after_hours_mode === 'message' && (
                 <div className="md:col-span-2">
                   <Field label="Closed message" hint="Leave empty for a default message in the caller's language.">
-                    <Textarea rows={2} maxLength={300} value={form.after_hours_message} onChange={(e) => set('after_hours_message', e.target.value)}
+                    <Textarea rows={2} maxLength={300} value={form.after_hours_message ?? ''} disabled={busy} onChange={(e) => set('after_hours_message', e.target.value)}
                       placeholder="Thanks for calling. We're closed right now: please call again between 9 AM and 9 PM." />
                   </Field>
                 </div>
@@ -269,19 +349,20 @@ export default function Inbound() {
 
         <Card className="h-fit">
           <CardHeader title="Recent inbound calls" description="Updates live."
-            action={<Link to={path('/calls')} className="text-xs font-semibold text-brand hover:underline">All calls</Link>} />
-          {calls.isLoading ? <div className="space-y-2 px-5 pb-5">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-12" />)}</div>
+            action={<Link to={path('/calls')} className="inline-flex min-h-10 items-center text-xs font-semibold text-brand hover:underline sm:min-h-0">All calls</Link>} />
+          {calls.isLoading ? <div className="space-y-2 px-4 pb-5 sm:px-5">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-12" />)}</div>
+            : calls.isError && !items.length ? <EmptyState icon={<PhoneMissed />} title="Couldn't load calls" description={calls.error.message} action={<Button size="sm" onClick={() => calls.refetch()}>Try again</Button>} />
             : items.length ? (
               <ul className="divide-y divide-border">
                 {items.map((c, i) => (
                   <li key={c.id} style={{ animationDelay: `${Math.min(i, 10) * 45}ms` }} className="reveal reveal-in reveal-right">
-                    <button type="button" onClick={() => setCallId(c.id)} className="flex w-full items-center gap-3 px-5 py-3 text-left transition hover:bg-surface-2">
+                    <button type="button" onClick={() => setCallId(c.id)} className="flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left transition hover:bg-surface-2 sm:px-5">
                       <span className={cn('grid size-8 shrink-0 place-items-center rounded-full', c.trigger === 'forwarded' || c.transferred_to ? 'bg-surface-2 text-fg-2' : 'bg-brand-soft text-brand')}>
                         {c.trigger === 'forwarded' || c.transferred_to ? <PhoneForwarded className="size-4" /> : <PhoneIncoming className="size-4" />}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-semibold">
-                          {c.lead_name || data.profile.team_members?.find(m => m.phone === c.from_number)?.name || data.transfer_contacts?.find(t => t.phone === c.from_number)?.name || c.from_number}
+                          {c.lead_name || callerName(c) || c.from_number || 'Unknown caller'}
                         </span>
                         {/* An AI call that was handed over mid-way used to read "Answered by AI", hiding the transfer. */}
                         <span className="block truncate text-xs text-muted">
@@ -294,7 +375,7 @@ export default function Inbound() {
                               : `Answered by ${data.profile.agent_name} (AI)`} · {timeAgo(c.created_at)}{c.duration ? ` · ${formatDuration(c.duration)}` : ''}
                         </span>
                       </span>
-                      <CallStatusBadge status={c.status} />
+                      <span className="shrink-0"><CallStatusBadge status={c.status} /></span>
                     </button>
                   </li>
                 ))}
@@ -304,14 +385,14 @@ export default function Inbound() {
       </div>
 
       {dirty && (
-        <div className="sticky bottom-4 z-20 mt-4 flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-elevated px-4 py-3 shadow-pop">
-          <span className="flex-1 text-sm font-semibold">Unsaved routing changes</span>
-          <Button onClick={() => setForm(Object.fromEntries(KEYS.map((k) => [k, data.profile[k]])) as Routing)}>Discard</Button>
-          <Button variant="primary" loading={save.isPending} disabled={!!form.transfer_number && !hasNumber} onClick={() => save.mutate(form)}><Save />Save routing</Button>
+        <div className="sticky bottom-[max(1rem,env(safe-area-inset-bottom))] z-20 mt-4 flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-elevated px-4 py-3 shadow-pop">
+          <span className="min-w-0 flex-1 basis-40 text-sm font-semibold">Unsaved routing changes{!hasNumber && wantsForward && <span className="block text-xs font-medium text-danger">Add a transfer number before forwarding calls to your team.</span>}</span>
+          <Button disabled={busy} onClick={() => setForm(Object.fromEntries(KEYS.map((k) => [k, data.profile[k]])) as Routing)}>Discard</Button>
+          <Button variant="primary" loading={busy} disabled={needsNumber} onClick={() => save.mutate(form)}><Save />Save routing</Button>
         </div>
       )}
 
-      <CallSheet callId={callId} onClose={() => setCallId(null)} />
+      <CallSheet callId={callId} onClose={() => setCallId(null)} onOpenLead={(id) => { setCallId(null); navigate(path(`/leads/${id}`)) }} />
     </>
   )
 }

@@ -40,9 +40,115 @@ class LLMResult:
 
 _hedge_pool = ThreadPoolExecutor(max_workers=64, thread_name_prefix="llm")
 HEDGE_AFTER_SECONDS = 0.8
+MAX_CAP_TRIMS = 2
+
+# Free-tier accounts get a small, shifting prompt cap ("Prompt tokens limit exceeded: 4759 > 4130").
+# Other OpenAI-compatible gateways phrase the same failure as a context-length error.
+_CAP_RE = re.compile(r"Prompt tokens limit exceeded: (\d+) > (\d+)")
+_CAP_HINTS = ("prompt tokens limit", "context length", "maximum context", "context_length_exceeded")
+# Sections of the system prompt that can go before anything else, in order (least important first).
+_DROPPABLE_SECTIONS = ("# Knowledge", "# Earlier conversations", "# Company brief")
+# Everything from here on (Caller record, Earlier conversations, brief, Output format) survives a raw cut.
+_KEEP_FROM = "\n# Today"
 
 
-def _openrouter_model(model: str, messages: list[dict], json_mode: bool, max_tokens: int, temperature: float, shrunk: bool = False) -> LLMResult:
+def _is_cap_error(text: str) -> bool:
+    lowered = (text or "").lower()
+    return bool(_CAP_RE.search(text or "")) or any(hint in lowered for hint in _CAP_HINTS)
+
+
+def _drop_section(content: str, heading: str) -> str:
+    """Replace one '# heading' section (up to the next '# ' heading) with a one-line placeholder."""
+    start = content.find("\n" + heading)
+    if start < 0:
+        return content
+    end = content.find("\n# ", start + 1)
+    placeholder = "\n" + heading + "\n- (omitted to fit the model's prompt limit)\n"
+    return content[:start] + placeholder + (content[end:] if end >= 0 else "")
+
+
+def _fit_to_cap(messages: list[dict], error_text: str, passes: int = 0) -> list[dict] | None:
+    """
+    Trimmed copy of `messages` that should fit the provider's prompt cap, or None when `error_text`
+    is not a prompt-cap / context-length error.
+
+    Shrinks the longest message (the system prompt): first structurally (Knowledge, then Earlier
+    conversations, then Company brief), and only then by cutting text in front of the Caller record,
+    so the lead context, GOAL and Output format survive. `passes` = trims already applied to these
+    messages; each pass cuts harder because the char ratio under-estimates Devanagari/JSON tokens.
+    """
+    if not _is_cap_error(error_text):
+        return None
+    m = _CAP_RE.search(error_text)
+    ratio = int(m.group(2)) / int(m.group(1)) * 0.85 if m else 0.7
+    ratio *= 0.7 ** passes
+    longest = max(range(len(messages)), key=lambda i: len(messages[i].get("content") or ""))
+    trimmed = [dict(msg) for msg in messages]
+    content = trimmed[longest].get("content") or ""
+    target = max(200, int(len(content) * ratio))
+    for heading in _DROPPABLE_SECTIONS:
+        if len(content) <= target:
+            break
+        content = _drop_section(content, heading)
+    if len(content) > target:
+        note = "\n(... trimmed to fit the model's prompt limit)\n"
+        idx = content.rfind(_KEEP_FROM)
+        if idx > 0:
+            head, tail = content[:idx], content[idx:]
+        else:
+            idx = content.rfind("# Output")
+            head, tail = (content[:idx], content[idx:]) if idx > 0 else (content, "")
+        keep = max(200, target - len(tail) - len(note))
+        content = head[:keep] + note + tail
+    trimmed[longest]["content"] = content
+    return trimmed
+
+
+_ACCOUNT_HINTS = ("no credits", "insufficient_quota", "exceed your available credits", "invalid api key", "unauthorized")
+
+
+def _is_account_error(text: str) -> bool:
+    """A 401/402-class failure: the whole provider account is out, not just this model."""
+    lowered = (text or "").lower()
+    return lowered.startswith(("401", "402")) or " 401" in lowered or " 402" in lowered or any(h in lowered for h in _ACCOUNT_HINTS)
+
+
+def _fallback_models() -> list[str]:
+    return [m.strip() for m in settings.openrouter_fallback_models.split(",") if m.strip()]
+
+
+def _compact(messages: list[dict]) -> list[dict]:
+    """
+    Prompt for the last-resort free tier: system prompt without Knowledge / Earlier conversations /
+    Company brief and cut to FALLBACK_PROMPT_CHAR_BUDGET (Caller record, GOAL and Output survive),
+    plus only the last 6 conversation turns.
+    """
+    budget = max(1500, settings.fallback_prompt_char_budget)
+    out = [dict(m) for m in messages]
+    system = [i for i, m in enumerate(out) if m.get("role") == "system"]
+    if system:
+        i = system[0]
+        content = out[i].get("content") or ""
+        for heading in _DROPPABLE_SECTIONS:
+            content = _drop_section(content, heading)
+        if len(content) > budget:
+            idx = content.rfind(_KEEP_FROM)
+            if idx <= 0:
+                idx = content.rfind("# Output")
+            head, tail = (content[:idx], content[idx:]) if idx > 0 else (content, "")
+            keep = max(300, budget - len(tail))
+            content = head[:keep] + "\n(... trimmed for a small model)\n" + tail
+        out[i]["content"] = content
+        rest = out[:i] + out[i + 1:]
+    else:
+        rest = out
+    turns = [m for m in rest if m.get("role") != "system"]
+    if len(turns) > 6:
+        rest = turns[-6:]
+    return ([out[system[0]]] if system else []) + rest
+
+
+def _openrouter_model(model: str, messages: list[dict], json_mode: bool, max_tokens: int, temperature: float, shrunk: int = 0) -> LLMResult:
     body = {
         "model": model,
         "messages": messages,
@@ -63,21 +169,11 @@ def _openrouter_model(model: str, messages: list[dict], json_mode: bool, max_tok
     data = res.json()
     if "choices" not in data:
         message = (data.get("error") or {}).get("message", str(data)[:200])
-        # Free-tier accounts get a small, shifting prompt cap ("Prompt tokens limit exceeded: 4759 > 4130").
-        # Shrink the longest message (the system prompt with knowledge) to fit and retry once rather than fail.
-        m = re.search(r"Prompt tokens limit exceeded: (\d+) > (\d+)", message)
-        if m and not shrunk:
-            ratio = int(m.group(2)) / int(m.group(1)) * 0.85
-            longest = max(range(len(messages)), key=lambda i: len(messages[i].get("content") or ""))
-            trimmed = [dict(msg) for msg in messages]
-            content = trimmed[longest]["content"]
-            # Keep the output-format instructions at the end intact; drop the tail of the knowledge sections.
-            idx = content.rfind("# Output")
-            head, tail = (content[:idx], content[idx:]) if idx > 0 else (content, "")
-            keep = max(200, int(len(content) * ratio) - len(tail))
-            trimmed[longest]["content"] = head[:keep] + "\n(... trimmed to fit the model's prompt limit)\n\n" + tail
-            log.warning("OpenRouter %s prompt over free cap, retrying with system prompt trimmed to %.0f%%", model, ratio * 100)
-            return _openrouter_model(model, trimmed, json_mode, max_tokens, temperature, shrunk=True)
+        # Shrink the system prompt to fit the cap and retry (up to MAX_CAP_TRIMS times) rather than fail.
+        trimmed = _fit_to_cap(messages, message, passes=shrunk) if shrunk < MAX_CAP_TRIMS else None
+        if trimmed is not None:
+            log.warning("OpenRouter %s prompt over cap (%s), retrying with trimmed system prompt (pass %d)", model, message[:80], shrunk + 1)
+            return _openrouter_model(model, trimmed, json_mode, max_tokens, temperature, shrunk=shrunk + 1)
         raise LLMError(message)
     text = (data["choices"][0]["message"].get("content") or "").strip()
     if not text:
@@ -93,6 +189,10 @@ def _openrouter(messages: list[dict], json_mode: bool, max_tokens: int, temperat
 
     A plain HTTP read timeout is not enough: OpenRouter keeps queued requests alive with
     whitespace, so a slow free model can hold a connection for over a minute.
+
+    A prompt-cap failure is retried with a trimmed prompt inside the same model's future
+    (see _openrouter_model); the deadline is extended by the time that failed attempt took so
+    the retry gets its own budget instead of being discarded as "no model answered in time".
     """
     if not settings.openrouter_api_key:
         raise LLMError("OPENROUTER_API_KEY not set")
@@ -107,6 +207,7 @@ def _openrouter(messages: list[dict], json_mode: bool, max_tokens: int, temperat
         launched += 1
         future = _hedge_pool.submit(_openrouter_model, model, messages, json_mode, max_tokens, temperature)
         future.model = model
+        future.started = time.monotonic()
         pending.add(future)
 
     launch()
@@ -125,8 +226,25 @@ def _openrouter(messages: list[dict], json_mode: bool, max_tokens: int, temperat
             except Exception as e:
                 errors.append(f"{future.model}: {e}")
                 log.warning("OpenRouter %s failed: %s", future.model, e)
+                if _is_cap_error(str(e)):
+                    # The trimmed re-POSTs already ran inside this future; give the next model the same grace.
+                    deadline += time.monotonic() - future.started
+                elif _is_account_error(str(e)):
+                    # Account-level (401/402): every remaining paid model fails the same way.
+                    launched = len(models)
         if launched < len(models) and (not done or not pending):
             launch()
+    # Last-resort tier: free models with a compact prompt, tried one at a time.
+    compact = None
+    for model in _fallback_models():
+        if model in models or time.monotonic() >= deadline + timeout:
+            continue
+        compact = compact or _compact(messages)
+        try:
+            log.warning("OpenRouter primaries failed (%s); trying fallback %s", "; ".join(errors)[:120], model)
+            return _openrouter_model(model, compact, json_mode, max_tokens, temperature)
+        except Exception as e:
+            errors.append(f"{model}: {e}")
     raise LLMError("; ".join(errors) or f"no model answered within {timeout}s")
 
 
@@ -153,8 +271,15 @@ PROVIDERS = {"openrouter": _openrouter, "sarvam": _sarvam}
 
 
 def _stream_sse(url: str, headers: dict, body: dict, first_token_timeout: float):
-    """OpenAI-compatible streaming chat. Yields content deltas; raises LLMError if no token arrives in time."""
+    """
+    OpenAI-compatible streaming chat. Yields content deltas; raises LLMError if no token arrives in
+    time, or if the whole stream runs past 3x that budget (a stream that starts and then stalls).
+
+    The wall-clock check runs on every line, including keepalive/comment lines
+    (": OPENROUTER PROCESSING"), which otherwise reset httpx's read timeout forever.
+    """
     started = time.monotonic()
+    deadline = started + first_token_timeout * 3
     with _client.stream("POST", url, headers=headers, json={**body, "stream": True},
                         timeout=httpx.Timeout(first_token_timeout, connect=3, read=first_token_timeout)) as res:
         if res.status_code >= 400:
@@ -162,26 +287,32 @@ def _stream_sse(url: str, headers: dict, body: dict, first_token_timeout: float)
             raise LLMError(f"{res.status_code}: {res.text[:200]}")
         got = False
         for line in res.iter_lines():
+            now = time.monotonic()
+            if not got and now - started > first_token_timeout:
+                raise LLMError("no content before timeout")
+            if now > deadline:
+                raise LLMError(f"stream stalled past {first_token_timeout * 3:.1f}s")
             if not line.startswith("data:"):
                 continue
             payload = line[5:].strip()
             if payload == "[DONE]":
                 break
             data = json.loads(payload)
+            if "error" in data:
+                # Gateways deliver some failures (rate limit, moderation, prompt cap) as an error frame with HTTP 200.
+                err = data["error"]
+                raise LLMError(str((err.get("message") if isinstance(err, dict) else err) or err or "stream error")[:200])
             choices = data.get("choices") or []
             delta_obj = choices[0].get("delta") or {} if choices else {}
             content = delta_obj.get("content")
             tool_calls = delta_obj.get("tool_calls")
-            
+
             if content:
                 got = True
                 yield content
             if tool_calls:
                 got = True
                 yield {"tool_calls": tool_calls}
-                
-            if not got and time.monotonic() - started > first_token_timeout:
-                raise LLMError("no content before timeout")
         if not got:
             raise LLMError("empty stream")
 
@@ -199,16 +330,45 @@ def _stream_attempts(tools: list[dict] | None) -> list[tuple[str, str]]:
             attempts.append(("sarvam", settings.sarvam_llm_model))
         elif name == "openrouter" and settings.openrouter_api_key:
             attempts += [("openrouter", m.strip()) for m in settings.openrouter_models.split(",") if m.strip()]
+    if settings.openrouter_api_key:
+        primary = {m for n, m in attempts}
+        attempts += [("openrouter-fallback", m) for m in _fallback_models() if m not in primary]
     return attempts
+
+
+# Swapped in for the tool instructions when a tools-enabled call has to fall back to a provider without tools.
+SPOKEN_ONLY_FALLBACK = ("\n\n# Tools unavailable right now\n"
+                        "Answer out loud in 1-2 short sentences of plain speech. Do not call any tool. "
+                        "If a meeting or callback time was agreed, repeat the day and time back to confirm it.\n")
+
+
+def _without_tools(messages: list[dict]) -> list[dict]:
+    """Copy of `messages` with the god-mode tool instructions replaced by spoken-only guidance."""
+    stripped = [dict(msg) for msg in messages]
+    for msg in stripped:
+        content = msg.get("content")
+        if msg.get("role") == "system" and isinstance(content, str) and "# GOD MODE ACTIVE" in content:
+            msg["content"] = content.split("\n\n# GOD MODE ACTIVE", 1)[0] + SPOKEN_ONLY_FALLBACK
+    return stripped
 
 
 def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4, tools: list[dict] | None = None):
     """
     Streaming completion for live calls, in LLM_PROVIDERS order. Falls back to the next provider only
     if the current one fails before producing any text (a half-spoken reply is never restarted).
+
+    A prompt-cap / context-length failure retries the same model with a trimmed system prompt
+    (up to MAX_CAP_TRIMS times) before moving on: every free-tier OpenRouter model shares the same cap,
+    so failing over alone just repeats the error. When every tool-capable attempt fails, the turn is
+    retried once without tools (Sarvam included) so the caller still gets a spoken answer.
     """
     errors = []
+    dead: set[str] = set()  # providers that answered 401/402: skip their remaining models
+    compact = None
     for name, model in _stream_attempts(tools):
+        provider = "openrouter" if name == "openrouter-fallback" else name
+        if provider in dead and name != "openrouter-fallback":
+            continue
         if name == "sarvam":
             url, headers = "https://api.sarvam.ai/v1/chat/completions", {"api-subscription-key": settings.sarvam_api_key}
             # reasoning_effort null = no hidden thinking: first sentence in ~1s instead of ~3s
@@ -219,19 +379,43 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
             body = {"model": model, "reasoning": {"enabled": False}}
             if tools:
                 body["tools"] = tools
-        body.update(messages=messages, max_tokens=max_tokens, temperature=temperature)
-        produced = False
-        try:
-            for delta in _stream_sse(url, headers, body, settings.llm_timeout_seconds):
-                produced = True
-                yield delta
-            return
-        except Exception as e:
-            if produced:
-                log.warning("LLM stream %s/%s broke mid-reply: %s", name, model, e)
+        if name == "openrouter-fallback":
+            # Free tier: no tools, compact prompt so the free-model prompt cap is never hit.
+            body.pop("tools", None)
+            compact = compact or _compact(_without_tools(messages) if tools else messages)
+            if not errors:
+                continue  # primaries never ran (none configured); nothing to fall back from
+            log.warning("LLM primaries failed (%s); trying fallback %s", " | ".join(errors)[:160], model)
+        attempt_messages, trims = (compact if name == "openrouter-fallback" else messages), 0
+        while True:
+            body.update(messages=attempt_messages, max_tokens=max_tokens, temperature=temperature)
+            produced = False
+            try:
+                for delta in _stream_sse(url, headers, body, settings.llm_timeout_seconds):
+                    produced = True
+                    yield delta
                 return
-            errors.append(f"{name}/{model}: {e}")
-            log.warning("LLM stream %s/%s failed: %s", name, model, e)
+            except Exception as e:
+                if produced:
+                    log.warning("LLM stream %s/%s broke mid-reply: %s", name, model, e)
+                    return
+                trimmed = _fit_to_cap(attempt_messages, str(e), passes=trims) if trims < MAX_CAP_TRIMS else None
+                if trimmed is not None:
+                    trims += 1
+                    attempt_messages = trimmed
+                    log.warning("LLM stream %s/%s prompt over cap (%s), retrying with trimmed system prompt (pass %d)",
+                                name, model, str(e)[:80], trims)
+                    continue
+                errors.append(f"{name}/{model}: {e}")
+                log.warning("LLM stream %s/%s failed: %s", name, model, e)
+                if _is_account_error(str(e)):
+                    dead.add(provider)
+                break
+    if tools:
+        # Team/admin calls otherwise depend on OpenRouter alone; answer in speech rather than hang up.
+        log.warning("All tool-capable LLM streams failed (%s); retrying without tools", " | ".join(errors))
+        yield from stream(_without_tools(messages), max_tokens=max_tokens, temperature=temperature, tools=None)
+        return
     raise LLMError("All streaming LLM providers failed — " + " | ".join(errors))
 
 

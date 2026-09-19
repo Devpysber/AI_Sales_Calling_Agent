@@ -3,7 +3,7 @@ import {
   BookOpen, Check, CheckCircle2, RefreshCw, CircleAlert, CircleDashed, FilePlus2, FileText, FileType2, Loader2, Search, Sparkles,
   Trash2, Type, Upload, X,
 } from 'lucide-react'
-import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, PageHeader, Sheet, ShowMore, Skeleton, Tabs, Textarea, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
@@ -80,7 +80,8 @@ export default function Knowledge() {
     const files = Array.from(fl ?? [])
     for (const f of files) {
       const id = `${f.name}-${f.size}-${Date.now()}-${Math.random()}`
-      const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase()
+      const dot = f.name.lastIndexOf('.')
+      const ext = dot > 0 ? f.name.slice(dot).toLowerCase() : ''
       const reject = !ACCEPT.includes(ext) ? `Unsupported type (${ext || 'no extension'})` : f.size > MAX_BYTES ? 'Larger than 25 MB' : null
       if (docs.some((d) => d.filename === f.name && d.status !== 'failed') && !reject) {
         if (!(await confirm({ title: `“${f.name}” is already uploaded`, description: 'Upload it again as a separate document?', confirmLabel: 'Upload anyway' }))) continue
@@ -105,19 +106,32 @@ export default function Knowledge() {
   // AI-filled topics; before the first analysis finishes, fall back to matching document names
   const coverage = TOPICS.map((t) => {
     const fromAi = cov?.topics?.[t.key]
-    const doc = fromAi?.summary ? docs.find((d) => fromAi.documents.includes(d.title)) ?? docs.find((d) => d.status === 'ready')
+    // Only link a document the AI actually named; a paraphrased name means summary only (no arbitrary "View" target)
+    const doc = fromAi?.summary ? docs.find((d) => (fromAi.documents ?? []).includes(d.title))
       : cov?.status === 'ready' ? undefined : docs.find((d) => d.status === 'ready' && t.match.test(`${d.title} ${d.filename ?? ''}`))
     return { ...t, summary: fromAi?.summary ?? '', doc }
   })
   const covered = coverage.filter((c) => c.summary || c.doc).length
+  // Keep Refresh disabled from the click until the list has been refetched afterwards, so a second rebuild can't start
+  // in the gap between the POST resolving and coverage.status turning 'analyzing'
+  const [refreshedAt, setRefreshedAt] = useState<number | null>(null)
   const refresh = useMutation({
     mutationFn: () => api(`${base}/knowledge/coverage`, { method: 'POST' }),
+    onMutate: () => setRefreshedAt(Date.now()),
     onSuccess: () => { toast.success('Re-reading your documents', { description: 'Coverage updates in a few seconds.' }); setTimeout(() => qc.invalidateQueries({ queryKey: ['knowledge'] }), 800) },
-    onError: (e) => toast.error('Could not refresh coverage', { description: e.message }),
+    onError: (e) => { setRefreshedAt(null); toast.error('Could not refresh coverage', { description: e.message }) },
   })
+  const listSettledAt = Math.max(list.dataUpdatedAt, list.errorUpdatedAt)
+  useEffect(() => {
+    if (refreshedAt !== null && listSettledAt > refreshedAt) setRefreshedAt(null)
+  }, [refreshedAt, listSettledAt])
   const counts = { all: docs.length, ready: 0, processing: 0, failed: 0 } as Record<Filter, number>
-  docs.forEach((d) => counts[d.status]++)
-  const shown = docs.filter((d) => (filter === 'all' || d.status === filter) && `${d.title} ${d.filename ?? ''}`.toLowerCase().includes(find.toLowerCase()))
+  docs.forEach((d) => { counts[d.status] = (counts[d.status] ?? 0) + 1 })
+  // The processing/failed tabs disappear once their count hits 0; fall back to 'all' so the list never goes empty on a hidden tab
+  const active: Filter = filter === 'all' || filter === 'ready' || counts[filter] > 0 ? filter : 'all'
+  // Reset the hidden tab so it doesn't silently reapply once a document reaches that status again
+  useEffect(() => { if (active !== filter) setFilter(active) }, [active, filter])
+  const shown = docs.filter((d) => (active === 'all' || d.status === active) && `${d.title} ${d.filename ?? ''}`.toLowerCase().includes(find.toLowerCase()))
   const lastUpdate = docs.reduce<string | null>((a, d) => (!a || d.created_at > a ? d.created_at : a), null)
 
   return (
@@ -134,8 +148,9 @@ export default function Knowledge() {
           value={!stats || !stats.documents ? '—' : stats.semantic ? 'Hybrid' : 'Keyword'}
           sub={!stats || !stats.documents ? 'Add a document to switch it on'
             : stats.semantic ? 'Meaning + keyword, across languages' : 'Exact words only — embeddings unavailable for these documents'} />
-        <Stat label="Topic coverage" value={analyzing ? <span className="inline-flex items-center gap-2">{covered}/{TOPICS.length}<Loader2 className="size-4 animate-spin text-muted" /></span> : `${covered}/${TOPICS.length}`}
-          sub={analyzing ? 'AI is reading your documents…' : lastUpdate ? `Last added ${timeAgo(lastUpdate)}` : 'Nothing added yet'} />
+        <Stat label="Topic coverage"
+          value={list.isLoading || list.isError ? '—' : analyzing ? <span className="inline-flex items-center gap-2">{covered}/{TOPICS.length}<Loader2 className="size-4 animate-spin text-muted" /></span> : `${covered}/${TOPICS.length}`}
+          sub={list.isLoading ? 'Loading…' : list.isError ? 'Unavailable' : analyzing ? 'AI is reading your documents…' : lastUpdate ? `Last added ${timeAgo(lastUpdate)}` : 'Nothing added yet'} />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
@@ -144,18 +159,18 @@ export default function Knowledge() {
             onDragOver={(e) => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)}
             onDrop={(e) => { e.preventDefault(); setDrag(false); void uploadFiles(e.dataTransfer.files) }}
             className={cn('rounded-xl border-2 border-dashed transition', drag ? 'border-brand bg-brand-soft' : 'border-border-strong')}>
-            <button type="button" onClick={() => input.current?.click()} className="flex w-full items-center gap-4 rounded-xl p-5 text-left hover:bg-brand-soft/40">
+            <button type="button" onClick={() => input.current?.click()} className="flex w-full items-center gap-3 rounded-xl p-4 text-left hover:bg-brand-soft/40 sm:gap-4 sm:p-5">
               <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand"><FilePlus2 className="size-5" /></span>
               <span className="min-w-0"><span className="block font-semibold">{drag ? 'Drop to upload' : 'Drop brochures, price lists, FAQs or case studies'}</span><span className="text-sm text-muted">PDF, DOCX, TXT, MD or CSV · up to 25 MB each · text-based PDFs only (no scans)</span></span>
             </button>
             {uploads.length > 0 && (
               <ul className="divide-y divide-border border-t border-border">
                 {uploads.map((u) => (
-                  <li key={u.id} className="flex items-center gap-3 px-5 py-2.5 text-sm">
+                  <li key={u.id} className="flex min-h-11 items-center gap-3 px-4 py-2 text-sm sm:px-5">
                     {u.state === 'uploading' ? <Loader2 className="size-4 animate-spin text-brand" /> : u.state === 'done' ? <CheckCircle2 className="size-4 text-success" /> : <CircleAlert className="size-4 text-danger" />}
                     <span className="min-w-0 flex-1 truncate">{u.name}</span>
-                    <span className={cn('text-xs', u.state === 'error' ? 'text-danger' : 'text-muted')}>{u.state === 'uploading' ? 'Uploading…' : u.state === 'done' ? 'Uploaded' : u.error}</span>
-                    {u.state === 'error' && <button type="button" onClick={() => setUploads((x) => x.filter((y) => y.id !== u.id))} aria-label="Dismiss" className="text-muted hover:text-fg"><X className="size-4" /></button>}
+                    <span title={u.error} className={cn('min-w-0 max-w-[45%] truncate text-xs', u.state === 'error' ? 'text-danger' : 'text-muted')}>{u.state === 'uploading' ? 'Uploading…' : u.state === 'done' ? 'Uploaded' : u.error}</span>
+                    {u.state === 'error' && <button type="button" onClick={() => setUploads((x) => x.filter((y) => y.id !== u.id))} aria-label="Dismiss" className="-mr-2 grid size-10 shrink-0 place-items-center rounded-lg text-muted hover:text-fg sm:size-8"><X className="size-4" /></button>}
                   </li>
                 ))}
               </ul>
@@ -163,38 +178,46 @@ export default function Knowledge() {
           </div>
 
           <Card className="overflow-hidden">
-            <div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-3">
+            <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 sm:px-5">
               <h3 className="mr-auto text-[15px] font-semibold">Documents</h3>
-              <div className="relative">
+              <div className="relative min-w-0 flex-1 basis-40 sm:flex-none">
                 <Search className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-muted" />
-                <Input value={find} onChange={(e) => setFind(e.target.value)} placeholder="Filter by name" className="h-9 w-48 pl-8" />
+                <Input value={find} onChange={(e) => setFind(e.target.value)} placeholder="Filter by name" className="h-10 w-full pl-8 sm:h-9 sm:w-48" />
               </div>
-              <Tabs value={filter} onChange={setFilter} items={(['all', 'ready', 'processing', 'failed'] as Filter[])
+              <Tabs value={active} onChange={setFilter} items={(['all', 'ready', 'processing', 'failed'] as Filter[])
                 .filter((f) => f === 'all' || f === 'ready' || counts[f] > 0)
                 .map((f) => ({ value: f, label: `${f[0]!.toUpperCase()}${f.slice(1)} ${counts[f]}` }))} />
             </div>
 
             {list.isLoading ? <div className="space-y-2 p-5">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-14" />)}</div>
-              : !docs.length ? (
+              : list.isError ? (
+                <EmptyState icon={<CircleAlert />} title="Could not load documents" description={list.error.message}
+                  action={<Button onClick={() => void list.refetch()} loading={list.isFetching}><RefreshCw />Retry</Button>} />
+              ) : !docs.length ? (
                 <EmptyState icon={<BookOpen />} title="No knowledge yet"
                   description="Without documents the agent won't quote prices or specifics — it offers a follow-up with a specialist instead. Start with your pricing and services."
-                  action={<div className="flex gap-2"><Button onClick={() => setNote({ title: 'Pricing', text: TOPICS[2]!.template })}><Type />Write pricing note</Button><Button variant="primary" onClick={() => input.current?.click()}><Upload />Upload files</Button></div>} />
-              ) : !shown.length ? <p className="px-5 py-10 text-center text-sm text-muted">No documents match.</p> : (
+                  action={<><Button onClick={() => setNote({ title: 'Pricing', text: TOPICS[2]!.template })}><Type />Write pricing note</Button><Button variant="primary" onClick={() => input.current?.click()}><Upload />Upload files</Button></>} />
+              ) : !shown.length ? (
+                <div className="flex flex-col items-center gap-3 px-5 py-10 text-center text-sm text-muted">
+                  <p>No documents match.</p>
+                  {(find || active !== 'all') && <Button size="sm" onClick={() => { setFind(''); setFilter('all') }}><X />Clear filter</Button>}
+                </div>
+              ) : (
                 <ul className="divide-y divide-border">
                   {shown.map((d) => (
-                    <li key={d.id} className="group flex items-center gap-4 px-5 py-3.5">
+                    <li key={d.id} className="group flex items-center gap-3 px-4 py-3 sm:gap-4 sm:px-5 sm:py-3.5">
                       <FileIcon doc={d} />
                       <button className="min-w-0 flex-1 text-left disabled:cursor-default" disabled={d.status !== 'ready'} onClick={() => setViewId(d.id)}>
                         <div className="truncate font-medium group-hover:text-brand">{d.title}</div>
                         <div className="truncate text-xs text-muted">
                           {[d.filename ?? 'Written note', size(d.size_bytes), d.status === 'ready' && `${d.chunk_count} passages`, formatDate(d.created_at)].filter(Boolean).join(' · ')}
                         </div>
-                        {d.error && <div className="mt-0.5 text-xs text-danger">{d.error}</div>}
+                        {d.error && <div className="mt-0.5 text-xs break-words text-danger">{d.error}</div>}
                       </button>
-                      {d.status === 'processing' && <Badge tone="info"><Loader2 className="size-3 animate-spin" />Processing</Badge>}
-                      {d.status === 'ready' && <Badge tone={d.embedded ? 'success' : 'neutral'}><CheckCircle2 className="size-3" />{d.embedded ? 'Semantic' : 'Keyword'}</Badge>}
-                      {d.status === 'failed' && <Badge tone="danger"><CircleAlert className="size-3" />Failed</Badge>}
-                      <Button size="icon" variant="ghost" aria-label={`Remove ${d.title}`} onClick={() => askRemove(d)}><Trash2 /></Button>
+                      {d.status === 'processing' && <Badge tone="info"><Loader2 className="size-3 animate-spin" /><span className="hidden sm:inline">Processing</span></Badge>}
+                      {d.status === 'ready' && <Badge tone={d.embedded ? 'success' : 'neutral'} className="max-sm:hidden"><CheckCircle2 className="size-3" />{d.embedded ? 'Semantic' : 'Keyword'}</Badge>}
+                      {d.status === 'failed' && <Badge tone="danger"><CircleAlert className="size-3" /><span className="hidden sm:inline">Failed</span></Badge>}
+                      <Button size="icon" variant="ghost" aria-label={`Remove ${d.title}`} loading={remove.isPending && remove.variables === d.id} onClick={() => void askRemove(d)}><Trash2 /></Button>
                     </li>
                   ))}
                 </ul>
@@ -207,40 +230,57 @@ export default function Knowledge() {
 
           <Card>
             <CardHeader title="Coverage"
-              description={analyzing ? 'AI is reading your documents to fill each topic…'
+              description={list.isLoading ? 'Loading your documents…'
+                : list.isError ? 'Coverage is unavailable until the documents load.'
+                : analyzing ? 'AI is reading your documents to fill each topic…'
                 : cov?.status === 'failed' ? 'Could not analyse the documents. Try Refresh.'
                 : cov?.updated_at ? `What your documents say, filled by AI · ${timeAgo(cov.updated_at)}` : 'Topics prospects ask about most.'}
               action={docs.some((d) => d.status === 'ready') && (
-                <Button size="sm" variant="ghost" loading={refresh.isPending} disabled={analyzing} onClick={() => refresh.mutate()} title="Re-read documents"><RefreshCw />Refresh</Button>
+                <Button size="sm" variant="ghost" loading={refresh.isPending} disabled={analyzing || refreshedAt !== null} onClick={() => refresh.mutate()} title="Re-read documents"><RefreshCw />Refresh</Button>
               )} />
+            {list.isLoading ? <div className="space-y-2 p-4 sm:p-5">{TOPICS.map((t) => <Skeleton key={t.key} className="h-9" />)}</div>
+              : list.isError ? (
+                <ul className="divide-y divide-border">
+                  {TOPICS.map((t) => (
+                    <li key={t.key} className="flex gap-3 px-4 py-3 sm:px-5">
+                      <CircleDashed className="mt-0.5 size-4 shrink-0 text-muted" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium break-words text-fg-2">{t.label}</div>
+                        <div className="mt-0.5 text-xs break-words text-muted">Unavailable · {t.hint}</div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
             <ul className="divide-y divide-border">
               {coverage.map((c) => {
                 const filled = Boolean(c.summary || c.doc)
                 return (
-                  <li key={c.key} className="flex gap-3 px-5 py-3">
+                  <li key={c.key} className="flex gap-3 px-4 py-3 sm:px-5">
                     {analyzing && !filled ? <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin text-muted" />
                       : filled ? <Check className="mt-0.5 size-4 shrink-0 text-success" /> : <CircleDashed className="mt-0.5 size-4 shrink-0 text-muted" />}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className={cn('flex-1 text-sm font-medium', filled ? 'text-fg' : 'text-fg-2')}>{c.label}</span>
+                        <span className={cn('min-w-0 flex-1 text-sm font-medium break-words', filled ? 'text-fg' : 'text-fg-2')}>{c.label}</span>
                         {filled && c.doc
                           ? <Button size="sm" variant="ghost" onClick={() => setViewId(c.doc!.id)}>View</Button>
                           : !filled && <Button size="sm" onClick={() => setNote({ title: c.label, text: c.template })}>Add</Button>}
                       </div>
                       {c.summary
                         ? <div className="mt-1 text-xs leading-relaxed text-fg-2"><ShowMore text={c.summary} lines={3} limit={160} /></div>
-                        : <div className="mt-0.5 text-xs text-muted">{filled ? c.doc?.title : `Missing · ${c.hint}`}</div>}
+                        : <div className="mt-0.5 text-xs break-words text-muted">{filled ? c.doc?.title : `Missing · ${c.hint}`}</div>}
                     </div>
                   </li>
                 )
               })}
             </ul>
+              )}
           </Card>
         </div>
       </div>
 
       <NoteSheet initial={note} onClose={() => setNote(null)} />
-      <DocumentSheet id={viewId} onClose={() => setViewId(null)} onRemove={askRemove} />
+      <DocumentSheet key={viewId ?? 'none'} id={viewId} onClose={() => setViewId(null)} onRemove={(d) => void askRemove(d)} removing={remove.isPending && remove.variables === viewId} />
     </>
   )
 }
@@ -284,29 +324,30 @@ function RetrievalTester({ docs, onOpen }: { docs: KnowledgeDoc[]; onOpen: (id: 
   return (
     <Card>
       <CardHeader title={<span className="flex items-center gap-2"><Sparkles className="size-4 text-brand" />Test a question</span>} description="Ask what a prospect would ask and see what the agent would draw on." />
-      <form className="flex gap-2 px-4 pt-4" onSubmit={(e) => { e.preventDefault(); run(query) }}>
+      <form className="flex min-w-0 gap-2 px-4 pt-4" onSubmit={(e) => { e.preventDefault(); run(query) }}>
         <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="e.g. What does app development cost?" maxLength={500} />
         <Button type="submit" variant="primary" size="icon" loading={search.isPending} disabled={!query.trim()} aria-label="Search">{!search.isPending && <Search />}</Button>
       </form>
       {!results && (
         <div className="flex flex-wrap gap-1.5 px-4 pt-3">
-          {EXAMPLES.map((q) => <button key={q} type="button" onClick={() => run(q)} className="rounded-full border border-border px-2.5 py-1 text-xs text-fg-2 hover:border-brand hover:text-brand">{q}</button>)}
+          {EXAMPLES.map((q) => <button key={q} type="button" onClick={() => run(q)} className="min-h-10 rounded-full border border-border px-3 py-1 text-xs text-fg-2 hover:border-brand hover:text-brand sm:min-h-0 sm:px-2.5">{q}</button>)}
         </div>
       )}
       <div className="space-y-2 p-4">
+        {search.isError && <div className="rounded-lg bg-danger-soft px-3 py-2 text-xs font-medium break-words text-danger">Search failed: {search.error.message}</div>}
         {verdict && <div className={cn('rounded-lg px-3 py-2 text-xs font-medium', { success: 'bg-success-soft text-success', warning: 'bg-warning-soft text-warning', danger: 'bg-danger-soft text-danger' }[verdict.tone])}>{verdict.text}</div>}
         {results?.map((r, i) => {
           const doc = docs.find((d) => d.title === r.title)
           return (
             <button key={i} type="button" disabled={!doc} onClick={() => doc && onOpen(doc.id)} className="block w-full rounded-lg border border-border p-3 text-left transition enabled:hover:border-brand/50">
               <div className="flex items-center justify-between gap-2 text-xs">
-                <span className="truncate font-medium">{r.title}</span>
+                <span className="min-w-0 truncate font-medium">{r.title}</span>
                 <span className="flex shrink-0 items-center gap-2">
                   <span className="h-1.5 w-12 overflow-hidden rounded-full bg-surface-2"><span className={cn('block h-full', r.score > 0.45 ? 'bg-success' : r.score > 0.2 ? 'bg-warning' : 'bg-muted')} style={{ width: `${Math.round(Math.min(1, r.score) * 100)}%` }} /></span>
                   <span className="w-8 text-right text-muted tabular-nums">{Math.round(r.score * 100)}%</span>
                 </span>
               </div>
-              <p className="mt-1.5 line-clamp-4 text-[13px] text-fg-2">{r.text}</p>
+              <p className="mt-1.5 line-clamp-4 text-[13px] break-words text-fg-2">{r.text}</p>
             </button>
           )
         })}
@@ -317,7 +358,7 @@ function RetrievalTester({ docs, onOpen }: { docs: KnowledgeDoc[]; onOpen: (id: 
 
 /* ---------------- Sheets ---------------- */
 
-function DocumentSheet({ id, onClose, onRemove }: { id: number | null; onClose: () => void; onRemove: (d: KnowledgeDoc) => void }) {
+function DocumentSheet({ id, onClose, onRemove, removing }: { id: number | null; onClose: () => void; onRemove: (d: KnowledgeDoc) => void; removing?: boolean }) {
   const { base } = useAgent()
   const [find, setFind] = useState('')
   const doc = useQuery({ queryKey: ['knowledge', id], queryFn: () => api<KnowledgeDoc>(`${base}/knowledge/${id}`), enabled: id !== null })
@@ -334,19 +375,23 @@ function DocumentSheet({ id, onClose, onRemove }: { id: number | null; onClose: 
   return (
     <Sheet open={id !== null} onClose={() => { setFind(''); onClose() }} width="max-w-2xl"
       title={d?.title ?? 'Document'}
-      description={d && [d.filename ?? 'Written note', size(d.size_bytes), `${d.chunk_count} passages`, `${d.chars.toLocaleString()} characters`, `added ${formatDate(d.created_at)}`].join(' · ')}
-      footer={d && <Button variant="outline-danger" onClick={() => onRemove(d)}><Trash2 />Remove document</Button>}>
-      {!d ? <Skeleton className="h-64" /> : (
+      description={d && [d.filename ?? 'Written note', size(d.size_bytes ?? 0), `${d.chunk_count ?? 0} passages`, `${(d.chars ?? 0).toLocaleString()} characters`, `added ${formatDate(d.created_at)}`].join(' · ')}
+      footer={d && <Button variant="outline-danger" loading={removing} onClick={() => onRemove(d)}><Trash2 />Remove document</Button>}>
+      {doc.isError ? (
+        <EmptyState icon={<CircleAlert />} title="Could not load this document" description={doc.error.message}
+          action={<Button onClick={() => void doc.refetch()} loading={doc.isFetching}><RefreshCw />Retry</Button>} />
+      ) : !d ? <Skeleton className="h-64" /> : (
         <div className="space-y-3">
           <div className="relative">
             <Search className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-muted" />
             <Input value={find} onChange={(e) => setFind(e.target.value)} placeholder="Find in document" className="pl-8" />
           </div>
           {needle && <p className="text-xs text-muted">{chunks.length} of {d.chunks?.length ?? 0} passages match</p>}
+          {!d.chunks?.length && <p className="py-6 text-center text-sm text-muted">No passages to show.</p>}
           {chunks.map(({ text, i }) => (
             <div key={i} className="rounded-lg border border-border p-3">
               <div className="mb-1 text-xs text-muted">Passage {i + 1}</div>
-              <p className="text-sm whitespace-pre-wrap text-fg-2">{highlight(text)}</p>
+              <p className="text-sm break-words whitespace-pre-wrap text-fg-2">{highlight(text)}</p>
             </div>
           ))}
         </div>
@@ -381,12 +426,12 @@ function NoteForm({ initial, onClose, qc }: { initial: { title: string; text: st
   }
 
   return (
-    <Sheet open onClose={close} width="max-w-2xl" title="Knowledge note" description="Best for pricing, offers, FAQs and service descriptions. Write facts plainly; one topic per paragraph."
-      footer={<><Button onClick={close}>Cancel</Button><Button variant="primary" type="submit" form="note-form" loading={save.isPending}>Add to knowledge</Button></>}>
-      <form id="note-form" className="space-y-4" onSubmit={(e) => { e.preventDefault(); void submit() }}>
-        <Field label="Title" hint="Include the topic, e.g. “Pricing 2026” — it also powers coverage detection"><Input value={title} onChange={(e) => setTitle(e.target.value)} required maxLength={200} autoFocus={!initial.title} /></Field>
+    <Sheet open onClose={() => { if (!save.isPending) void close() }} width="max-w-2xl" title="Knowledge note" description="Best for pricing, offers, FAQs and service descriptions. Write facts plainly; one topic per paragraph."
+      footer={<><Button onClick={() => void close()} disabled={save.isPending}>Cancel</Button><Button variant="primary" type="submit" form="note-form" loading={save.isPending} disabled={!title.trim() || text.trim().length < 30}>Add to knowledge</Button></>}>
+      <form id="note-form" className="space-y-4" onSubmit={(e) => { e.preventDefault(); if (!save.isPending) void submit() }}>
+        <Field label="Title" hint="Include the topic, e.g. “Pricing 2026” — it also powers coverage detection"><Input value={title} onChange={(e) => setTitle(e.target.value)} required maxLength={200} autoFocus={!initial.title} disabled={save.isPending} /></Field>
         <Field label="Content" error={text.trim().length > 0 && text.trim().length < 30 ? 'At least 30 characters' : undefined} hint={`${text.length.toLocaleString()} characters`}>
-          <Textarea value={text} onChange={(e) => setText(e.target.value)} required minLength={30} maxLength={500_000} rows={20} className="font-[inherit]"
+          <Textarea value={text} onChange={(e) => setText(e.target.value)} required minLength={30} maxLength={500_000} rows={20} disabled={save.isPending} className="font-[inherit]"
             placeholder={'Mobile App Development\nWe build iOS and Android apps with React Native and Flutter. Typical projects take 8–12 weeks and start at ₹3,00,000.'} />
         </Field>
       </form>

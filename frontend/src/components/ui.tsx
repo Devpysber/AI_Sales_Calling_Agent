@@ -1,7 +1,7 @@
 import { Eye, EyeOff, Loader2, X } from 'lucide-react'
 import {
   createContext, forwardRef, useCallback, useContext, useEffect, useId, useRef, useState,
-  type ButtonHTMLAttributes, type HTMLAttributes, type InputHTMLAttributes, type ReactNode,
+  type ButtonHTMLAttributes, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type RefObject,
   type SelectHTMLAttributes, type TextareaHTMLAttributes,
 } from 'react'
 import { createPortal } from 'react-dom'
@@ -18,7 +18,13 @@ const variants: Record<Variant, string> = {
   danger: 'bg-danger text-white hover:brightness-110 shadow-sm',
   'outline-danger': 'border border-border text-danger hover:bg-danger-soft hover:border-danger/40',
 }
-const sizes = { sm: 'h-8 px-3 text-[13px] gap-1.5', md: 'h-9.5 px-4 text-sm gap-2', lg: 'h-11 px-5 text-[15px] gap-2', icon: 'h-9 w-9' }
+// Below sm every size is at least 40px tall so it is a comfortable touch target; desktop keeps the tighter heights.
+const sizes = {
+  sm: 'h-10 sm:h-8 px-3 text-[13px] gap-1.5',
+  md: 'h-10 sm:h-9.5 px-4 text-sm gap-2',
+  lg: 'h-11 px-5 text-[15px] gap-2',
+  icon: 'h-10 w-10 sm:h-9 sm:w-9',
+}
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant
@@ -52,10 +58,10 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
   
   if (isPassword) {
     return (
-      <div className="relative">
+      <div className="relative min-w-0">
         <input ref={ref} type={show ? 'text' : 'password'} className={cn(fieldBase, 'h-10 pr-10', className)} {...p} />
-        <button type="button" onClick={() => setShow(!show)} tabIndex={-1}
-          className="absolute inset-y-0 right-0 flex items-center pr-3 text-muted hover:text-fg-2">
+        <button type="button" onClick={() => setShow(!show)} disabled={p.disabled} aria-label={show ? 'Hide password' : 'Show password'}
+          className="absolute inset-y-0 right-0 flex w-10 items-center justify-center rounded-r-xl text-muted hover:text-fg-2 focus-visible:ring-2 focus-visible:ring-brand/40 focus-visible:outline-none disabled:pointer-events-none">
           {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
         </button>
       </div>
@@ -75,10 +81,10 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
 
 export function Field({ label, hint, error, children, className }: { label: string; hint?: ReactNode; error?: string; children: ReactNode; className?: string }) {
   return (
-    <label className={cn('grid gap-1.5', className)}>
+    <label className={cn('grid min-w-0 gap-1.5', className)}>
       <span className="text-[13px] font-semibold text-fg-2">{label}</span>
       {children}
-      {error ? <span className="text-xs text-danger">{error}</span> : hint ? <span className="text-xs text-muted">{hint}</span> : null}
+      {error ? <span className="text-xs break-words text-danger">{error}</span> : hint ? <span className="text-xs break-words text-muted">{hint}</span> : null}
     </label>
   )
 }
@@ -88,7 +94,9 @@ export function Switch({ checked, onChange, disabled, label }: { checked: boolea
     <button
       type="button" role="switch" aria-checked={checked} aria-label={label} disabled={disabled}
       onClick={() => onChange(!checked)}
+      // The ::after pseudo widens the hit area to ~40px without changing the drawn size.
       className={cn('group relative inline-flex h-5.5 w-10 shrink-0 items-center rounded-full transition-colors duration-300 disabled:opacity-50',
+        "after:absolute after:-inset-y-2.5 after:-inset-x-1 after:content-['']",
         checked ? 'bg-brand' : 'bg-border-strong')}
     >
       {/* The knob springs across and stretches while pressed, like a physical switch. */}
@@ -121,18 +129,27 @@ export function Badge({ tone = 'neutral', dot, pulse, children, className }: { t
 
 export function Card({ interactive, className, ...p }: HTMLAttributes<HTMLDivElement> & { interactive?: boolean }) {
   // interactive: the card is a link or opens something, so it lifts towards the pointer.
-  return <div className={cn('rounded-[var(--radius-card)] border border-border bg-surface shadow-card',
+  return <div className={cn('min-w-0 rounded-[var(--radius-card)] border border-border bg-surface shadow-card',
     interactive && 'lift cursor-pointer', className)} {...p} />
 }
 
 export function CardHeader({ title, description, action, className }: { title: ReactNode; description?: ReactNode; action?: ReactNode; className?: string }) {
   return (
-    <div className={cn('flex items-start justify-between gap-4 px-5 pt-5 pb-3', className)}>
-      <div className="min-w-0">
-        <h3 className="text-[15px] font-bold text-fg">{title}</h3>
-        {description && <p className="mt-0.5 text-[13px] text-muted">{description}</p>}
+    <div className={cn('flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-4 pt-4 pb-3 sm:px-5 sm:pt-5', className)}>
+      <div className="min-w-0 flex-1 basis-40">
+        <h3 className="text-[15px] font-bold break-words text-fg">{title}</h3>
+        {description && <p className="mt-0.5 text-[13px] break-words text-muted">{description}</p>}
       </div>
-      {action}
+      {action && <div className="flex min-w-0 max-w-full shrink-0 flex-wrap items-center gap-2">{action}</div>}
+    </div>
+  )
+}
+
+/** Horizontal scroll wrapper for wide content (tables) so the page itself never scrolls sideways. */
+export function TableScroll({ className, children }: { className?: string; children: ReactNode }) {
+  return (
+    <div className={cn('w-full min-w-0 overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]', className)}>
+      {children}
     </div>
   )
 }
@@ -145,7 +162,7 @@ export function ShowMore({ text, lines = 3, limit = 220, className }: { text: st
     <span className={className}>
       <span className={cn('whitespace-pre-wrap', long && !open && 'line-clamp-[var(--lines)]')} style={{ ['--lines' as string]: lines }}>{text}</span>
       {long && <button type="button" onClick={(e) => { e.stopPropagation(); setOpen(!open) }}
-        className="mt-1 block text-xs font-semibold text-brand hover:underline">{open ? 'Show less' : 'Show more'}</button>}
+        className="mt-1 flex min-h-10 items-center text-xs font-semibold text-brand hover:underline sm:min-h-0">{open ? 'Show less' : 'Show more'}</button>}
     </span>
   )
 }
@@ -158,11 +175,11 @@ export const Spinner = ({ className }: { className?: string }) => <Loader2 class
 
 export function EmptyState({ icon, title, description, action }: { icon?: ReactNode; title: string; description?: ReactNode; action?: ReactNode }) {
   return (
-    <div className="flex flex-col items-center justify-center px-6 py-14 text-center">
+    <div className="flex flex-col items-center justify-center px-4 py-10 text-center sm:px-6 sm:py-14">
       {icon && <div className="mb-4 grid size-14 place-items-center rounded-2xl bg-brand-soft text-brand [&_svg]:size-6">{icon}</div>}
-      <p className="font-semibold text-fg">{title}</p>
-      {description && <p className="mt-1 max-w-sm text-sm text-muted">{description}</p>}
-      {action && <div className="mt-4">{action}</div>}
+      <p className="font-semibold break-words text-fg">{title}</p>
+      {description && <p className="mt-1 max-w-sm text-sm break-words text-muted">{description}</p>}
+      {action && <div className="mt-4 flex flex-wrap justify-center gap-2">{action}</div>}
     </div>
   )
 }
@@ -181,17 +198,17 @@ export function PageHeader({ title, description, actions, eyebrow, children, vis
   visual?: ReactNode
 }) {
   return (
-    <div className="hero-wash relative -mx-4 -mt-6 mb-6 overflow-hidden border-b border-border/70 px-4 pt-7 pb-6 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+    <div className="hero-wash relative -mx-4 -mt-4 mb-6 sm:-mt-6 overflow-hidden border-b border-border/70 px-4 pt-7 pb-6 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
       <div className="relative flex flex-wrap items-end justify-between gap-4">
         {visual && <div className="hidden shrink-0 animate-rise sm:block">{visual}</div>}
-        <div className="min-w-0 flex-1 animate-rise">
-          {eyebrow && <div className="mb-2 flex items-center gap-2 text-xs font-bold tracking-wider text-brand uppercase">{eyebrow}</div>}
-          <h1 className="text-[28px] leading-tight font-extrabold tracking-tight text-fg">{title}</h1>
-          {description && <p className="mt-1.5 max-w-2xl text-[14.5px] text-muted">{description}</p>}
+        <div className="min-w-0 flex-1 basis-56 animate-rise">
+          {eyebrow && <div className="mb-2 flex flex-wrap items-center gap-2 text-xs font-bold tracking-wider text-brand uppercase">{eyebrow}</div>}
+          <h1 className="text-2xl leading-tight font-extrabold tracking-tight break-words text-fg sm:text-[28px]">{title}</h1>
+          {description && <p className="mt-1.5 max-w-2xl text-[14.5px] break-words text-muted">{description}</p>}
         </div>
-        {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+        {actions && <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">{actions}</div>}
       </div>
-      {children && <div className="relative mt-5">{children}</div>}
+      {children && <div className="relative mt-5 min-w-0">{children}</div>}
     </div>
   )
 }
@@ -201,18 +218,21 @@ export function Tabs<T extends string>({ value, onChange, items }: { value: T; o
   return (
     // Equal columns sized to the widest label (auto-cols-fr), so the pill's width and offset are exact
     // and no label wraps; flex-1 gave each button basis 0 and broke "All 1" over two lines.
-    <div className="relative inline-grid auto-cols-fr grid-flow-col rounded-xl border border-border bg-surface-2 p-1">
-      {/* One pill that travels to the selected tab: the movement is what shows which way you went. */}
-      <span aria-hidden
-        className="absolute top-1 bottom-1 left-1 rounded-lg bg-surface shadow-sm ring-1 ring-border transition-transform duration-250 ease-[var(--ease-entrance)] motion-reduce:transition-none"
-        style={{ width: `calc((100% - 0.5rem) / ${items.length})`, transform: `translateX(${active * 100}%)` }} />
-      {items.map((i) => (
-        <button key={i.value} type="button" onClick={() => onChange(i.value)}
-          className={cn('relative z-10 rounded-lg px-3 py-1.5 text-[13px] font-semibold whitespace-nowrap transition-colors',
-            value === i.value ? 'text-brand' : 'text-muted hover:text-fg')}>
-          {i.label}
-        </button>
-      ))}
+    // The outer wrapper scrolls sideways on narrow screens instead of pushing the page wider.
+    <div role="tablist" className="max-w-full overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="relative inline-grid auto-cols-fr grid-flow-col rounded-xl border border-border bg-surface-2 p-1">
+        {/* One pill that travels to the selected tab: the movement is what shows which way you went. */}
+        <span aria-hidden
+          className="absolute top-1 bottom-1 left-1 rounded-lg bg-surface shadow-sm ring-1 ring-border transition-transform duration-250 ease-[var(--ease-entrance)] motion-reduce:transition-none"
+          style={{ width: `calc((100% - 0.5rem) / ${Math.max(1, items.length)})`, transform: `translateX(${active * 100}%)` }} />
+        {items.map((i) => (
+          <button key={i.value} type="button" role="tab" aria-selected={value === i.value} onClick={() => onChange(i.value)}
+            className={cn('relative z-10 min-h-10 rounded-lg px-3 py-1.5 text-[13px] font-semibold whitespace-nowrap transition-colors sm:min-h-0',
+              value === i.value ? 'text-brand' : 'text-muted hover:text-fg')}>
+            {i.label}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
@@ -220,8 +240,8 @@ export function Tabs<T extends string>({ value, onChange, items }: { value: T; o
 export function Pagination({ page, pageSize, total, onPage }: { page: number; pageSize: number; total: number; onPage: (p: number) => void }) {
   const pages = Math.max(1, Math.ceil(total / pageSize))
   return (
-    <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-3 text-[13px] text-muted">
-      <span>{total ? `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} of ${total}` : '0 results'}</span>
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3 text-[13px] text-muted">
+      <span className="whitespace-nowrap">{total ? `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} of ${total}` : '0 results'}</span>
       <div className="flex items-center gap-2">
         <Button size="sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</Button>
         <span className="tabular-nums">{page} / {pages}</span>
@@ -233,36 +253,92 @@ export function Pagination({ page, pageSize, total, onPage }: { page: number; pa
 
 /* ---------------- Overlays ---------------- */
 
-function useEscape(open: boolean, onClose: () => void) {
+// Module-level stack of open overlays: only the topmost one closes on Escape, and the body scroll lock is
+// taken when the first overlay opens and released only when the last one closes (a Dialog over a Sheet
+// used to restore each other's saved overflow out of order and leave the page locked).
+const overlayStack: symbol[] = []
+let savedOverflow = ''
+
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+/** Escape-to-close, body scroll lock, and focus management (initial focus, Tab trap, restore on close) for one overlay. */
+function useEscape(open: boolean, onClose: () => void, panelRef?: RefObject<HTMLElement | null>) {
+  const onCloseRef = useRef(onClose)
+  useEffect(() => { onCloseRef.current = onClose }, [onClose])
   useEffect(() => {
     if (!open) return
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    const token = Symbol('overlay')
+    overlayStack.push(token)
+    if (overlayStack.length === 1) {
+      savedOverflow = document.body.style.overflow
+      document.body.style.overflow = 'hidden'
+    }
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusables = () => {
+      const panel = panelRef?.current
+      return panel ? Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)) : []
+    }
+    // Move focus inside on the next frame (after the portal paints) unless a caller's `autoFocus` already did.
+    const raf = requestAnimationFrame(() => {
+      const panel = panelRef?.current
+      if (!panel || panel.contains(document.activeElement)) return
+      const first = focusables()[0]
+      if (first) first.focus()
+      else { panel.tabIndex = -1; panel.focus() }
+    })
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return
+      if (overlayStack[overlayStack.length - 1] !== token) return
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onCloseRef.current()
+        return
+      }
+      if (e.key !== 'Tab') return
+      const panel = panelRef?.current
+      if (!panel) return
+      const list = focusables()
+      if (list.length === 0) { e.preventDefault(); panel.focus(); return }
+      const first = list[0], last = list[list.length - 1]
+      const active = document.activeElement
+      if (e.shiftKey && (active === first || !panel.contains(active))) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && (active === last || !panel.contains(active))) { e.preventDefault(); first.focus() }
+    }
     document.addEventListener('keydown', onKey)
-    const overflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = overflow }
-  }, [open, onClose])
+    return () => {
+      cancelAnimationFrame(raf)
+      document.removeEventListener('keydown', onKey)
+      const i = overlayStack.indexOf(token)
+      if (i >= 0) overlayStack.splice(i, 1)
+      if (overlayStack.length === 0) document.body.style.overflow = savedOverflow
+      if (previouslyFocused && previouslyFocused.isConnected) previouslyFocused.focus()
+    }
+  }, [open, panelRef])
 }
 
 export function Sheet({ open, onClose, title, description, children, footer, width = 'max-w-xl' }: {
   open: boolean; onClose: () => void; title: ReactNode; description?: ReactNode; children: ReactNode; footer?: ReactNode; width?: string
 }) {
-  useEscape(open, onClose)
+  const panelRef = useRef<HTMLElement>(null)
+  useEscape(open, onClose, panelRef)
   const id = useId()
   if (!open) return null
   return createPortal(
     <div className="fixed inset-0 z-50">
       <div className="absolute inset-0 animate-fade-in bg-black/40 backdrop-blur-[2px]" onClick={onClose} />
-      <aside role="dialog" aria-labelledby={id} className={cn('absolute inset-y-2 right-2 flex w-[calc(100%-1rem)] animate-slide-in flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-pop', width)}>
-        <header className="flex items-start justify-between gap-4 border-b border-border px-6 py-4">
-          <div className="min-w-0">
+      {/* Full-screen below sm; a floating right-hand panel from sm up. */}
+      <aside ref={panelRef} role="dialog" aria-modal="true" aria-labelledby={id}
+        className={cn('absolute inset-0 flex w-full animate-slide-in flex-col overflow-hidden border border-border bg-surface shadow-pop',
+          'sm:inset-y-2 sm:right-2 sm:left-auto sm:w-[calc(100%-1rem)] sm:rounded-2xl', width)}>
+        <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3 sm:px-6 sm:py-4">
+          <div className="min-w-0 flex-1">
             <h2 id={id} className="truncate text-lg font-bold">{title}</h2>
-            {description && <div className="mt-0.5 text-sm text-muted">{description}</div>}
+            {description && <div className="mt-0.5 text-sm break-words text-muted">{description}</div>}
           </div>
           <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close"><X /></Button>
         </header>
-        <div className="flex-1 overflow-y-auto px-6 py-5">{children}</div>
-        {footer && <footer className="flex flex-wrap justify-end gap-2 border-t border-border px-6 py-3">{footer}</footer>}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-5">{children}</div>
+        {footer && <footer className="flex flex-wrap justify-end gap-2 border-t border-border px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">{footer}</footer>}
       </aside>
     </div>,
     document.body,
@@ -272,18 +348,21 @@ export function Sheet({ open, onClose, title, description, children, footer, wid
 export function Dialog({ open, onClose, title, description, children, footer }: {
   open: boolean; onClose: () => void; title: ReactNode; description?: ReactNode; children?: ReactNode; footer?: ReactNode
 }) {
-  useEscape(open, onClose)
+  const panelRef = useRef<HTMLDivElement>(null)
+  useEscape(open, onClose, panelRef)
+  const id = useId()
   if (!open) return null
   return createPortal(
     <div className="fixed inset-0 z-[60] grid place-items-center p-4">
       <div className="absolute inset-0 animate-fade-in bg-black/45 backdrop-blur-[2px]" onClick={onClose} />
-      <div role="dialog" className="relative w-full max-w-md animate-pop-in rounded-2xl border border-border bg-elevated shadow-pop">
-        <div className="px-6 pt-5">
-          <h2 className="text-base font-semibold">{title}</h2>
-          {description && <p className="mt-1.5 text-sm text-muted">{description}</p>}
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-labelledby={id}
+        className="relative flex max-h-[calc(100dvh-2rem)] w-full max-w-[min(28rem,calc(100vw-2rem))] animate-pop-in flex-col rounded-2xl border border-border bg-elevated shadow-pop">
+        <div className="px-5 pt-5 sm:px-6">
+          <h2 id={id} className="text-base font-semibold break-words">{title}</h2>
+          {description && <p className="mt-1.5 text-sm break-words text-muted">{description}</p>}
         </div>
-        {children && <div className="px-6 pt-4">{children}</div>}
-        <div className="mt-5 flex justify-end gap-2 border-t border-border px-6 py-3">{footer}</div>
+        {children && <div className={cn('min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-4 sm:px-6', !footer && 'pb-5 sm:pb-6')}>{children}</div>}
+        {footer && <div className="mt-5 flex flex-wrap justify-end gap-2 border-t border-border px-5 py-3 sm:px-6">{footer}</div>}
       </div>
     </div>,
     document.body,
@@ -296,8 +375,10 @@ const ConfirmContext = createContext<(o: ConfirmOptions) => Promise<boolean>>(as
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<ConfirmOptions | null>(null)
   const resolver = useRef<(v: boolean) => void>(undefined)
-  const confirm = useCallback((o: ConfirmOptions) => new Promise<boolean>((resolve) => { resolver.current = resolve; setState(o) }), [])
-  const close = (value: boolean) => { resolver.current?.(value); setState(null) }
+  // A second confirm while one is open settles the first as "cancelled" so no caller awaits forever.
+  const confirm = useCallback((o: ConfirmOptions) => new Promise<boolean>((resolve) => { resolver.current?.(false); resolver.current = resolve; setState(o) }), [])
+  const close = (value: boolean) => { const r = resolver.current; resolver.current = undefined; r?.(value); setState(null) }
+  useEffect(() => () => { resolver.current?.(false); resolver.current = undefined }, [])
   return (
     <ConfirmContext.Provider value={confirm}>
       {children}
@@ -321,9 +402,9 @@ export function StatTile({ label, value, count, decimals, prefix, suffix, sub, i
 }) {
   const counted = count !== undefined
   return (
-    <Card className={cn("glint group relative overflow-hidden p-5", className)}>
+    <Card className={cn("glint group relative overflow-hidden p-4 sm:p-5", className)}>
       <div className="flex items-start justify-between gap-3">
-        <span className="text-[13px] font-semibold text-muted">{label}</span>
+        <span className="min-w-0 text-[13px] font-semibold break-words text-muted">{label}</span>
         {icon && (
           <span className={cn('grid size-9 place-items-center rounded-xl ring-1 ring-inset [&_svg]:size-4',
             'transition-transform duration-300 ease-[var(--ease-entrance)] group-hover:-rotate-6 group-hover:scale-105',
@@ -332,8 +413,8 @@ export function StatTile({ label, value, count, decimals, prefix, suffix, sub, i
           </span>
         )}
       </div>
-      <div className="mt-2 flex items-baseline gap-2">
-        <span className="text-[30px] leading-none font-extrabold tracking-tight tabular-nums">
+      <div className="mt-2 flex flex-wrap items-baseline gap-2">
+        <span className="min-w-0 truncate text-[26px] leading-none font-extrabold tracking-tight tabular-nums sm:text-[30px]">
           {counted ? <AnimatedNumber value={count} decimals={decimals} prefix={prefix} suffix={suffix} /> : value}
         </span>
         {trend}

@@ -25,6 +25,39 @@ LIVE_EMBED_TIMEOUT = 0.3        # a live turn waits this long for a query embedd
 COMPACT_AFTER_TURNS = 20        # a call this long gets its older turns folded into one summary line
 COMPACT_EVERY_TURNS = 6         # and re-folded this often after that
 KNOWLEDGE_CHARS = 600           # per retrieved passage in the prompt
+MIN_HISTORY_TURNS = 6           # the prompt budget never trims the window below this many turns
+LIVE_MAX_TOKENS = 160           # a live turn: 30 Devanagari words can cost 100+ tokens, the cap is a safety net
+TOOL_MAX_TOKENS = 400           # a tool-call round: send_email arguments (subject + body) must not be cut mid-JSON
+MAX_TOOL_ROUNDS = 3             # tool_call -> result -> tool_call loops before the model is made to speak
+FAREWELL = re.compile(r"(bye|take care|good ?night|see you|have a (?:good|great|nice)|thank(?:s| you)|"
+                      r"धन्यवाद|शुक्रिया|अलविदा|नमस्ते|शुभ|मिलते हैं|रखता हूँ|रखती हूँ|अच्छा दिन)", re.I)
+
+# Voices that speak as a woman: Hindi verb forms follow the voice, not a default male template.
+FEMALE_SPEAKERS = {"priya", "neha", "pooja", "simran", "kavya", "ishita", "shreya", "tanya", "shruti", "suhani",
+                   "kavitha", "rupali", "ritu", "roopa", "anushka", "manisha", "vidya", "arya", "maya", "meera"}
+# Masculine -> feminine first-person forms used in our Hindi templates and default greetings.
+_FEMININE = [("बोल रहा हूँ", "बोल रही हूँ"), ("सुन नहीं पाया", "सुन नहीं पाई"), ("जोड़ता हूँ", "जोड़ती हूँ"),
+             ("सकता हूँ", "सकती हूँ"), ("करता हूँ", "करती हूँ"), ("देता हूँ", "देती हूँ"), ("रहा हूँ", "रही हूँ"),
+             ("समझ गया", "समझ गई")]
+
+
+def gender(persona: dict) -> str:
+    """'female' or 'male', from the TTS voice the persona speaks with."""
+    return "female" if str(persona.get("voice_speaker") or "").strip().lower() in FEMALE_SPEAKERS else "male"
+
+
+def genderize(text: str, persona: dict) -> str:
+    """Hindi first-person verb forms matching the agent's voice (templates are written in the masculine)."""
+    if gender(persona) != "female":
+        return text
+    for masc, fem in _FEMININE:
+        text = text.replace(masc, fem)
+    return text
+
+
+def prompt_char_budget() -> int:
+    """Characters of prompt (system + history) a turn may carry; 0 disables the budget."""
+    return int(getattr(settings, "llm_prompt_char_budget", 12000) or 0)
 
 INTENTS = ["greeting", "question", "interested", "pricing", "objection", "meeting", "callback",
            "not_interested", "wrong_person", "do_not_call", "end_call", "other"]
@@ -60,7 +93,7 @@ def call_goal(lead: dict, purpose: str | None) -> str | None:
                 f"in this order: Language Preference (ask which language they prefer to speak in), {', '.join(wanted)}. "
                 "Acknowledge each answer briefly. If they ask something first, answer it very briefly, then immediately ask the next detail. "
                 "You must not skip asking for their Name. Once collected, help them and move to the primary call to action.")
-    if purpose == "team":
+    if purpose in ("team", "admin"):
         who = (lead.get("team_name") or "").strip()
         return ("This caller is one of OUR OWN COLLEAGUES" + (f", {who}" if who else "") + ", not a customer. They are "
                 "ringing the agent to check how it works. Do NOT sell, do NOT qualify them, do NOT ask for their name, "
@@ -122,6 +155,10 @@ RETURNING_GREETING_ANON = {"en": "Hi, {agent} here from {company}.",
 # Purposes that only ever happen after an earlier conversation.
 CONTINUATION = {"confirm_meeting", "follow_up", "missed_previous"}
 
+# A returning call with no specific purpose still needs to say why we rang, or the opener hangs in the air.
+RETURNING_SUFFIX = {"en": "I'm calling about our earlier conversation, is now a good time?",
+                    "hi": "पिछली बात को लेकर call किया है, अभी बात कर सकते हैं?"}
+
 GREETING_SUFFIX = {
     "confirm_meeting": {"hi": "आपकी {meeting} की meeting confirm करने के लिए call किया है।",
                         "en": "I'm calling to confirm your meeting on {meeting}."},
@@ -130,6 +167,16 @@ GREETING_SUFFIX = {
     "missed_previous": {"hi": "मैंने पहले call किया था, शायद आप busy थे। अभी बात कर सकते हैं?",
                         "en": "I tried calling earlier, you were probably busy. Is now a better time?"},
 }
+
+
+def is_returning(agent_id: int | None, lead: dict) -> bool:
+    """Someone we actually spoke to before: a completed call with a summary, or a summary on the lead.
+
+    last_contacted_at is stamped when a call is merely queued or rejected, so it says nothing about a conversation.
+    """
+    if (lead.get("summary") or "").strip():
+        return True
+    return bool(agent_id and past_conversations(agent_id, lead))
 
 
 def greeting(agent_id: int, lead: dict, language: str) -> str:
@@ -141,19 +188,24 @@ def greeting(agent_id: int, lead: dict, language: str) -> str:
     template = persona["greeting_en"] if english else persona["greeting_hi"]
     purpose = lead.get("call_purpose") or ""
     key = "en" if english else "hi"
-    if purpose == "team":
+    returning = False
+    if purpose in ("team", "admin"):
         team_name = (lead.get("team_name") or "").strip()
         template = TEAM_GREETING[key] if team_name else TEAM_GREETING_ANON[key]
         name = team_name or name
     elif purpose == "inbound":
         template = INBOUND_GREETING[key] if not name else INBOUND_GREETING_NAMED[key]
-    elif purpose in CONTINUATION or lead.get("last_contacted_at"):
+    elif purpose in CONTINUATION or is_returning(agent_id, lead):
         # Not a first contact: short opener, then the suffix says why we are calling.
         template = (RETURNING_GREETING if name else RETURNING_GREETING_ANON)[key]
+        returning = True
+    template = genderize(template, persona)
     values = {"name": name, "agent": persona["agent_name"], "company": persona["company_name"]}
     # Unknown or malformed placeholders are left as typed instead of crashing the call.
     text = re.sub(r"\{(\w+)\}", lambda m: values.get(m.group(1), m.group(0)), template)
     suffix = GREETING_SUFFIX.get(purpose, {}).get(key)
+    if returning and not suffix:
+        suffix = RETURNING_SUFFIX[key]
     if suffix:
         # Replace the generic "can we talk for a minute?" question with the reason for calling.
         text = re.split(r"(?<=[।.])\s+(?=[^।.]*\?\s*$)", text)[0] + " " + suffix.format(meeting=spoken_datetime(lead.get("meeting_at", ""), not english))
@@ -306,11 +358,17 @@ def team_brief(agent_id: int) -> str:
     return "\n".join(lines)
 
 
-def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: int | None = None) -> str:
+def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: int | None = None,
+                   brief_lines: int | None = None, calls_lines: int | None = None) -> str:
+    """brief_lines / calls_lines: keep only that many lines of the company brief / earlier calls (prompt budget)."""
     now = datetime.now(IST)
     handover = can_transfer(persona)
     brief = company_brief(agent_id) if agent_id else ""
     history = past_conversations(agent_id, lead) if agent_id else ""
+    if brief_lines is not None:
+        brief = "\n".join(brief.splitlines()[:brief_lines])
+    if calls_lines is not None:
+        history = "\n".join(history.splitlines()[:calls_lines])
     kb = "\n\n".join(f"[{i + 1}] ({k['title']}) {k['text'][:KNOWLEDGE_CHARS]}" for i, k in enumerate(knowledge)) or \
         ("(no passage matched this question: use the Company brief)" if brief else
          "(empty — no company information is available for this question)")
@@ -340,12 +398,16 @@ def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: i
         ("call_goal", "GOAL OF THIS CALL (follow this first)")] if lead.get(key))
 
     # A colleague checking the agent gets its live numbers; a customer never sees any of this.
-    status = team_brief(agent_id) if (agent_id and lead.get("call_purpose") == "team") else ""
+    status = team_brief(agent_id) if (agent_id and lead.get("call_purpose") in ("team", "admin")) else ""
     role = (persona.get("agent_role") or "").strip() or "senior sales consultant"
     caller_noun = (persona.get("customer_noun") or "").strip() or "customer"
     Caller = caller_noun[:1].upper() + caller_noun[1:]
+    female = gender(persona) == "female"
+    gender_line = (f"You are a {'woman' if female else 'man'}; in Hindi use {'feminine' if female else 'masculine'} "
+                   f"verb forms ({'बोल रही हूँ, करती हूँ, सकती हूँ' if female else 'बोल रहा हूँ, करता हूँ, सकता हूँ'}).")
 
     return f"""You are {persona['agent_name']}, a {role} at {persona['company_name']}{' — ' + persona['company_tagline'] if persona['company_tagline'] else ''}, speaking with a {caller_noun} on a live PHONE CALL.{(' Company website: ' + persona['website_url'] + ' (say it as a spoken domain if asked).') if persona.get('website_url') else ''}
+{gender_line}
 
 # Grounding (most important rule)
 {grounding}
@@ -380,13 +442,14 @@ Primary call to action: {persona['call_to_action']}
 - 1-2 short sentences per turn, natural spoken language, no lists, markdown, emojis or URLs.
 - Ask exactly one question at a time. Never repeat the greeting.
 - Never say a sentence you already said in this call. If you must ask something again, rephrase it shorter and differently, and never ask the same thing a third time — move on or close.
+- If the caller asks you to repeat ("kya bola", "dobara boliye", "sorry?", "come again"), say the same thing again, slower and in fewer words — this is the only time you may repeat a sentence. Never change a number, date, time or spelling when repeating it.
 - Read the conversation above before you reply. If you already asked something and they answered — even with just "haan", "नहीं" or a correction — that question is DONE. Never re-ask it. Asking a third time makes the customer shout "kitni baar bolunga".
 - Once they have asked for something specific (a callback, a message to the team, an email), that request is the call. Confirm it and close. Do NOT return to qualifying or product questions afterwards — asking "और कोई model देखना चाहेंगे?" after someone has asked you to hang up is the fastest way to lose them.
 - When they say the call is over ("रख दीजिए फोन", "call rakho", "बस इतना ही काम था", "मिलते हैं"), end it on that turn. Never ask another question first.
 - If they sound annoyed or repeat themselves ("kitni baar bolunga", "मैंने बोला ना", "अरे नहीं"), you have misunderstood. Do NOT repeat your question. Apologise in half a line, state plainly what you will do, and act on it.
 - When they correct a detail (a spelling, a date, an email), accept the correction, repeat the corrected version back once, and never revert to your earlier version.
 - If the customer refuses twice (any form of "no", "नहीं", "nahi", "not interested"), stop asking. Accept it warmly in one line, thank them, and end the call. Do not offer a specialist, another date, or a further question after a second refusal.
-- Reply in the customer's language: Hindi or Hinglish -> Hindi (Devanagari); English -> English. Supported: {', '.join(LANGUAGES.values())}.
+- Reply in the customer's language. Supported: {', '.join(LANGUAGES.values())}. (e.g., Hindi or Hinglish -> Hindi in Devanagari, Gujarati -> Gujarati).
 - Say numbers and prices the way people speak them.
 - Warm, friendly, human — like a real person on an Indian phone call, not a formal presentation. Never stiff, never bookish.
 - In Hindi/Hinglish, talk the way people actually talk: light fillers and acknowledgements (haan ji, ji bilkul, acha, theek hai, samajh gaya, koi baat nahi), and keep common English words in the sentence (meeting, budget, team, call, service). Do not translate them into heavy shuddh Hindi.
@@ -499,7 +562,7 @@ VOICE_OUTPUT = f"""# Output
 Say your reply directly as plain spoken text: 1-2 short sentences, at most 30 words in total. No JSON, quotes, labels or markdown.
 Never output tool calls, tags or crm_update: meetings, emails and follow-ups are saved automatically from the transcript.
 When a meeting is agreed, just confirm the day and time back to the customer out loud.
-If the call is wrapping up, you said goodbye, they answered 'no' to needing anything else, or the goal is achieved, put {END_MARK} at the very end. Do not ask any more questions if you are ending the call.
+If the call is wrapping up, you said goodbye, they answered 'no' to needing anything else, or the goal is achieved, put {END_MARK} at the very end. Keep the closing line short (one sentence), and also put {END_MARK} on its own line right before that closing sentence, so the hang-up is captured even if you get cut off. Do not ask any more questions if you are ending the call.
 {END_MARK} is what actually hangs up the phone. Any farewell you speak ("take care", "see you", "have a great day", "धन्यवाद", "अच्छा दिन हो") MUST carry {END_MARK} in the same reply — otherwise the line stays open and the customer has to ask you to hang up. Never speak a goodbye without it.
 Thanks, "ok bye", "theek hai", silence after the goal is achieved: say one short farewell with {END_MARK}. Do not offer more help a second time."""
 
@@ -512,8 +575,29 @@ def retrieval_query(history: list[dict], customer_text: str) -> str:
     return customer_text
 
 
+def history_window(history: list[dict], summary: str | None = None, compacted_upto: int | None = None) -> list[dict]:
+    """The verbatim turns to send, so every turn is either in the summary or in the prompt.
+
+    The summary is refreshed only every COMPACT_EVERY_TURNS turns and covers history[:compacted_upto];
+    without widening the window, the turns between the summary's edge and the last MAX_HISTORY_TURNS
+    (the agreed time, the corrected email) would be in neither.
+    """
+    start = len(history) - MAX_HISTORY_TURNS
+    if compacted_upto is not None:
+        start = max(int(compacted_upto), len(history) - MAX_HISTORY_TURNS - COMPACT_EVERY_TURNS)
+    elif summary:
+        start -= COMPACT_EVERY_TURNS - 1  # the widest the hole can be between two compactions
+    return history[max(start, 0):]
+
+
+def compacted_upto(history: list[dict]) -> int:
+    """Index up to which compact_history(history) summarised; persist it next to the summary."""
+    return max(len(history) - MAX_HISTORY_TURNS, 0)
+
+
 def build_messages(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True,
-                   top_k: int = 5, embed_timeout: float = 0.8, summary: str | None = None) -> tuple[list[dict], list[dict]]:
+                   top_k: int = 5, embed_timeout: float = 0.8, summary: str | None = None,
+                   compacted_upto: int | None = None) -> tuple[list[dict], list[dict]]:
     persona = agents.get_profile(agent_id)
 
     query = retrieval_query(history, customer_text)
@@ -522,21 +606,53 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
     except Exception:
         log.exception("RAG search failed")
         knowledge = []
+    knowledge = sorted(knowledge, key=lambda k: -float(k.get("score") or 0))
+    window = history_window(history, summary, compacted_upto)
 
-    system = _system_prompt(persona, lead, knowledge, agent_id)
-    if summary:
-        # Turns older than the window are one line instead of a transcript: a twenty-minute call
-        # costs about the same prompt as a two-minute one.
-        system += "\n# Earlier in this call\n" + summary + "\n"
+    def render(brief_lines=None, calls_lines=None) -> str:
+        system = _system_prompt(persona, lead, knowledge, agent_id, brief_lines=brief_lines, calls_lines=calls_lines)
+        if summary:
+            # Turns older than the window are one line instead of a transcript: a twenty-minute call
+            # costs about the same prompt as a two-minute one.
+            system += "\n# Earlier in this call\n" + summary + "\n"
+        return system
+
+    system = render()
+    budget = prompt_char_budget()
+    if budget:
+        # Trim to a size the provider accepts, cheapest context first, so the reactive trim in llm.py is the
+        # exception: (1) lowest-scored passage, (2) earlier-call lines, (3) oldest turns beyond 6, (4) brief lines.
+        brief_n = len(company_brief(agent_id).splitlines()) if agent_id else 0
+        calls_n = len(past_conversations(agent_id, lead).splitlines()) if agent_id else 0
+
+        def size() -> int:
+            return len(system) + sum(len(t["text"]) for t in window) + len(customer_text)
+
+        for _ in range(40):
+            if size() <= budget:
+                break
+            if knowledge:
+                knowledge.pop()
+            elif calls_n > 0:
+                calls_n -= 1
+            elif len(window) > MIN_HISTORY_TURNS:
+                window = window[1:]
+            elif brief_n > 0:
+                brief_n -= 1
+            else:
+                break
+            system = render(brief_lines=brief_n, calls_lines=calls_n)
+        if size() > budget:
+            log.warning("Prompt still over budget after trimming: %s chars (budget %s)", size(), budget)
     messages = [{"role": "system", "content": system}]
-    for turn in history[-MAX_HISTORY_TURNS:]:
+    for turn in window:
         messages.append({"role": "assistant" if turn["role"] == "assistant" else "user", "content": turn["text"]})
     messages.append({"role": "user", "content": customer_text})
     return messages, knowledge
 
 
 def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead: dict, guidance: str | None = None,
-                   language: str | None = None, summary: str | None = None):
+                   language: str | None = None, summary: str | None = None, compacted_upto: int | None = None):
     """
     Live-call turn as a stream of text deltas (plain speech, END_MARK when the call should end).
 
@@ -545,7 +661,7 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
     slow turn falls back to keyword search rather than making the caller wait.
     """
     messages, _ = build_messages(agent_id, history, customer_text, lead, use_embeddings=True, top_k=3,
-                                 embed_timeout=LIVE_EMBED_TIMEOUT, summary=summary)
+                                 embed_timeout=LIVE_EMBED_TIMEOUT, summary=summary, compacted_upto=compacted_upto)
     system = messages[0]["content"].rsplit("# Output", 1)[0]
     # The JSON-mode rules talk about fields; phrased as fields, the model emits tool calls instead of speech.
     for field_rule, spoken_rule in ((' set intent "do_not_call" and end_call true', f" and add {END_MARK}"),
@@ -573,7 +689,7 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
     if purpose in ("team", "admin"):
         from app.services.agent_tools import get_tools_for_role
         tools = get_tools_for_role(purpose)
-        
+
         god_mode_instructions = (
             "\n\n# GOD MODE ACTIVE\n"
             "You have direct access to backend tools and databases. If the caller asks you to check records, send emails, "
@@ -582,17 +698,17 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
             "Simply execute the required tool, and when you receive the result, summarize it back to the caller in their language."
             "\nCRITICAL: DO NOT fill the 'team_action' field. You are the team! Act immediately by executing a tool call instead of passing a message."
         )
-        
+
         # Remove team_action instruction from the system prompt
         clean_system = system.replace('- Fill team_action whenever the customer asked for a human to act ("team ko bata do", "unse baat karke bolo", "koi mujhe aakar mile", "call karke confirm karo"). Quote what they actually need done, not what the agent promised. Set urgent true when they are waiting somewhere or the matter cannot wait an hour.', '')
-        
+
         base_content = clean_system + VOICE_OUTPUT.replace("Never output tool calls, tags", "Never output tags") + god_mode_instructions
-        
+
         if purpose == "admin":
             base_content = "You are the Super Admin AI for the entire Psyber platform. You have root access. You can diagnose the website, check any agent's stats, and manage system resources.\n\n" + base_content
         else:
             base_content = "You are the Internal Team AI for this agent. You are assisting an internal team member. You have access to tools to manage operations.\n\n" + base_content
-            
+
         messages[0]["content"] = base_content
     else:
         messages[0]["content"] = system + VOICE_OUTPUT + transfer
@@ -604,16 +720,26 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
         messages[-1]["content"] += f"\n\n(Reply in {name}{script}, whatever language earlier turns used.)"
 
     tool_call_buffer = []
-    
-    def process_stream(msgs):
+    spoken: list[str] = []  # text streamed so far, to close a reply the provider cut off by length
+
+    def process_stream(msgs, with_tools=True):
         nonlocal tool_call_buffer
-        for delta in llm.stream(msgs, max_tokens=90, temperature=0.7, tools=tools):
-            if isinstance(delta, dict) and "tool_calls" in delta:
+        active_tools = tools if with_tools else None
+        cap = TOOL_MAX_TOKENS if active_tools else LIVE_MAX_TOKENS
+        for delta in llm.stream(msgs, max_tokens=cap, temperature=0.7, tools=active_tools):
+            if isinstance(delta, dict) and delta.get("finish_reason") == "length":
+                # Cut off by the cap: a farewell that lost its trailing marker must still hang up.
+                text = "".join(spoken).strip()
+                last = re.split(r"(?<=[।.!])\s+", text)[-1] if text else ""
+                if END_MARK not in text and FAREWELL.search(last) and "?" not in last:
+                    log.warning("Reply cut by max_tokens after a farewell: adding %s", END_MARK)
+                    yield " " + END_MARK
+            elif isinstance(delta, dict) and "tool_calls" in delta:
                 for tc in delta["tool_calls"]:
                     idx = tc.get("index", 0)
                     while len(tool_call_buffer) <= idx:
                         tool_call_buffer.append({"id": "", "function": {"name": "", "arguments": ""}})
-                    
+
                     if tc.get("id"):
                         tool_call_buffer[idx]["id"] = tc["id"]
                     if tc.get("function"):
@@ -623,14 +749,18 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
                         if func.get("arguments"):
                             tool_call_buffer[idx]["function"]["arguments"] += func["arguments"]
             elif isinstance(delta, str):
+                spoken.append(delta)
                 yield delta
 
-    while True:
+    for _round in range(MAX_TOOL_ROUNDS):
         yield from process_stream(messages)
         if not tool_call_buffer:
-            break
-        
+            return
+
         # We received complete tool calls. Execute them and get the next response.
+        for i, tc in enumerate(tool_call_buffer):
+            # A provider that streams deltas without an id would leave tool_call_id '' -> 400 from OpenRouter.
+            tc["id"] = tc["id"] or f"call_{_round}_{i}"
         messages.append({"role": "assistant", "tool_calls": [{"id": tc["id"], "type": "function", "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}} for tc in tool_call_buffer]})
         for tc in tool_call_buffer:
             func_name = tc["function"]["name"]
@@ -638,9 +768,15 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
             from app.services.agent_tools import execute_tool
             result = execute_tool(func_name, func_args, agent_id, purpose)
             messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": result})
-        
+
         # Clear buffer and recurse
         tool_call_buffer = []
+    else:
+        # The model kept calling tools (a failing tool, a retried parse error): make it speak instead.
+        log.warning("Tool loop hit %s rounds for purpose %s; answering without tools", MAX_TOOL_ROUNDS, purpose)
+        tool_call_buffer = []
+        messages.append({"role": "user", "content": "Answer the caller in speech now, using what you have so far."})
+        yield from process_stream(messages, with_tools=False)
 
 
 def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True,
@@ -650,12 +786,22 @@ def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, 
     """
     started = time.perf_counter()
     messages, knowledge = build_messages(agent_id, history, customer_text, lead, use_embeddings, summary=summary)
-    result = llm.complete(messages, json_mode=True, max_tokens=220, temperature=0.4)
+    result = llm.complete(messages, json_mode=True, max_tokens=400, temperature=0.4)
     try:
         data = llm.parse_json(result.text)
     except Exception:
-        log.warning("Non-JSON LLM reply, using raw text")
-        data = {"reply": result.text.strip().strip('"')}
+        raw = result.text.strip()
+        # A reply cut mid-JSON still has its spoken text: salvage it rather than read '{"reply": ...' aloud.
+        m = re.search(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)', raw)
+        if m:
+            log.warning("Truncated JSON LLM reply, salvaged the reply field")
+            data = {"reply": m.group(1).replace('\\"', '"').replace("\\n", " ")}
+        elif raw.startswith("{") or raw.startswith("```"):
+            log.warning("Non-JSON LLM reply with no usable text: asking the caller to continue")
+            data = {"reply": ""}
+        else:
+            log.warning("Non-JSON LLM reply, using raw text")
+            data = {"reply": raw.strip('"')}
 
     # Same gate as the streaming path: software words never reach a caller, whichever mode answered.
     reply = plain_speech(str(data.get("reply") or "").strip()) or "Sorry, could you say that again?"
@@ -739,9 +885,18 @@ def compact_history(history: list[dict], prior: str | None = None) -> str:
 
 def summarize(history: list[dict]) -> dict:
     transcript = "\n".join(f"{'Agent' if t['role'] == 'assistant' else 'Customer'}: {t['text']}" for t in history)
-    result = llm.complete(
-        [{"role": "system", "content": SUMMARY_PROMPT.format(today=datetime.now(IST).strftime("%A %d %B %Y, %H:%M"))},
-         {"role": "user", "content": transcript}],
-        json_mode=True, max_tokens=500, temperature=0.1, providers=settings.summary_llm_providers, timeout=20)
-    log.info("Call summary by %s/%s in %sms", result.provider, result.model, result.latency_ms)
-    return llm.parse_json(result.text)
+    messages = [{"role": "system", "content": SUMMARY_PROMPT.format(today=datetime.now(IST).strftime("%A %d %B %Y, %H:%M"))},
+                {"role": "user", "content": transcript}]
+    providers = settings.summary_llm_providers
+    reversed_providers = ",".join(reversed([p.strip() for p in providers.split(",") if p.strip()]))
+    # 18 fields plus a drafted email: 500 tokens cut the JSON and silently lost DNC / meeting / callback.
+    orders = [providers] + ([reversed_providers] if reversed_providers != providers else [])
+    for attempt, order in enumerate(orders):
+        try:
+            result = llm.complete(messages, json_mode=True, max_tokens=1200, temperature=0.1, providers=order, timeout=25)
+            log.info("Call summary by %s/%s in %sms", result.provider, result.model, result.latency_ms)
+            return llm.parse_json(result.text)
+        except Exception as e:  # noqa: BLE001 - one retry with the provider order reversed
+            if attempt == len(orders) - 1:
+                raise
+            log.warning("Call summary failed (%s); retrying with providers %s", e, reversed_providers)

@@ -1,10 +1,31 @@
 import subprocess
 import json
+from datetime import datetime, timezone, timedelta
 from app.services.notification_service import send_email
 from app.services.crm_service import CRMService
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.logging import get_logger
 from sqlalchemy import text
+
+log = get_logger(__name__)
+IST = timezone(timedelta(hours=5, minutes=30))
+QUALIFICATIONS = {"Hot", "Warm", "Cold"}
+
+
+def _to_ist_text(value: str) -> str | None:
+    """Parse an ISO-ish datetime (offset optional; naive means IST) into 'YYYY-MM-DD HH:MM' IST text."""
+    raw = str(value or "").strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        try:
+            dt = datetime.strptime(raw[:16], "%Y-%m-%d %H:%M")
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=IST)
+    return dt.astimezone(IST).strftime("%Y-%m-%d %H:%M")
 
 def send_email_tool(to: str, subject: str, body: str, agent_id: int) -> str:
     """Send an email to anyone."""
@@ -20,7 +41,7 @@ def check_records_tool(query: str, agent_id: int) -> str:
     leads = crm.list_leads(search=query, page=1, page_size=5).get("items", [])
     if not leads:
         return f"No records found for query: {query}"
-    
+
     result = "Found the following records:\n"
     for lead in leads:
         result += f"- {lead.get('name', 'Unknown')} ({lead.get('phone')}) - Status: {lead.get('status')}\n"
@@ -28,26 +49,35 @@ def check_records_tool(query: str, agent_id: int) -> str:
 
 def check_credits_tool() -> str:
     """Query the user's account balance/credit status."""
-    return "Your account credit is currently in good standing."
+    return "Account credit balance is unknown: no billing integration is connected, so do not quote a balance."
 
 def update_lead_status_tool(lead_id: int, new_status: str, agent_id: int) -> str:
     """Update a lead's status in the CRM."""
+    from app.services.call_service import JOURNEY, EXIT_STAGES
     crm = CRMService(agent_id)
+    value = str(new_status or "").strip()
+    if value in QUALIFICATIONS:
+        field = "qualification"
+    elif value in JOURNEY or value in EXIT_STAGES:
+        field = "status"
+    else:
+        allowed = ", ".join(list(JOURNEY) + sorted(EXIT_STAGES) + sorted(QUALIFICATIONS))
+        return f"Invalid status '{new_status}'. Allowed values: {allowed}."
     try:
-        crm.update(lead_id, {"status": new_status}, actor="system")
-        return f"Successfully updated lead {lead_id} status to '{new_status}'."
+        crm.update(lead_id, {field: value}, actor="system")
+        return f"Successfully updated lead {lead_id} {field} to '{value}'."
     except Exception as e:
         return f"Failed to update lead status: {str(e)}"
 
 def check_agent_schedule_tool(agent_id: int) -> str:
     """Check the calling window schedule for the agent."""
-    from app.services.agents import get_profile
-    profile = get_profile(agent_id)
-    start = profile.get("calling_hours_start", 9)
-    end = profile.get("calling_hours_end", 21)
-    days = profile.get("calling_days", [1, 2, 3, 4, 5])
+    from app.services.agents import get_automation
+    cfg = get_automation(agent_id)
+    start = cfg.get("calling_hours_start", 9)
+    end = cfg.get("calling_hours_end", 21)
+    days = cfg.get("calling_days") or [0, 1, 2, 3, 4, 5]
     day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    active_days = [day_names[d] for d in days] if days else ["None"]
+    active_days = [day_names[int(d)] for d in days if 0 <= int(d) < 7] or ["None"]
     return f"The agent calling window is from {start}:00 to {end}:00 IST on {', '.join(active_days)}."
 
 def system_diagnostics_tool() -> str:
@@ -60,21 +90,25 @@ def system_diagnostics_tool() -> str:
 
 def list_all_agents_tool() -> str:
     """List all agents in the system."""
-    from app.services.agents import list_all
-    agents = list_all()
+    from app.services.agents import list_agents
+    agents = list_agents()
     if not agents:
         return "No agents found in the system."
     result = "Active agents in the system:\n"
     for agent in agents:
-        result += f"- Agent {agent.get('id')}: {agent.get('name')} (Owner: {agent.get('owner')})\n"
+        result += f"- Agent {agent.get('id')}: {agent.get('name')} (Owner: {agent.get('created_by')})\n"
     return result
 
 def schedule_callback_tool(lead_id: int, date_time: str, agent_id: int) -> str:
     """Schedule a callback for a lead."""
+    from app.services.call_service import _valid_callback
     crm = CRMService(agent_id)
+    when = _valid_callback(_to_ist_text(date_time))
+    if not when:
+        return f"Invalid callback time '{date_time}': use 'YYYY-MM-DD HH:MM' in IST, not in the past and within 30 days."
     try:
-        crm.update(lead_id, {"callback_at": date_time, "status": "Pending"}, actor="system")
-        return f"Callback scheduled for lead {lead_id} at {date_time}."
+        crm.update(lead_id, {"callback_at": when, "call_status": "Pending"}, actor="system")
+        return f"Callback scheduled for lead {lead_id} at {when} IST."
     except Exception as e:
         return f"Failed to schedule callback: {str(e)}"
 
@@ -106,17 +140,30 @@ def send_sms_tool(to: str, message: str) -> str:
     except Exception as e:
         return f"Failed to send SMS to {to}. Error: {str(e)}"
 
-def book_calendar_event_tool(email: str, date_time: str, duration_minutes: int = 30) -> str:
-    """Book a calendar event."""
-    # This would integrate with Google Calendar / Outlook.
-    return f"Calendar event booked with {email} at {date_time} for {duration_minutes} minutes."
+def book_calendar_event_tool(email: str, date_time: str, duration_minutes: int = 30, agent_id: int | None = None) -> str:
+    """Record a meeting time on the CRM lead matching the email. No external calendar is connected."""
+    from app.services.call_service import _valid_meeting
+    if not agent_id or not email:
+        return "Calendar booking is not available: no calendar is connected and no lead email was given."
+    when = _valid_meeting(_to_ist_text(date_time))
+    if not when:
+        return f"Calendar booking not done: invalid meeting time '{date_time}'. Use 'YYYY-MM-DD HH:MM' in IST, in the future."
+    try:
+        crm = CRMService(agent_id)
+        leads = crm.list_leads(search=email, page=1, page_size=5).get("items", [])
+        lead = next((l for l in leads if (l.get("email") or "").strip().lower() == email.strip().lower()), None)
+        if not lead:
+            return f"Calendar booking is not available: no external calendar is connected and no CRM lead has the email {email}."
+        crm.update(lead["id"], {"meeting_at": when}, actor="system")
+        return f"Meeting recorded on CRM lead {lead['id']} ({lead.get('name')}) at {when} IST for {duration_minutes} minutes. No calendar invite was sent."
+    except Exception as e:
+        return f"Calendar booking is not available: {str(e)}"
 
 def check_active_calls_tool() -> str:
     """Check how many active calls are currently ongoing in the system (Admin only)."""
-    # Placeholder for querying active calls table.
     try:
         from app.services import call_session
-        count = len(call_session.SESSIONS)
+        count = call_session.active_count()
         return f"There are currently {count} active calls in the system."
     except Exception as e:
         return f"Failed to check active calls: {str(e)}"
@@ -172,7 +219,7 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "lead_id": {"type": "integer", "description": "The ID of the lead to update."},
-                    "new_status": {"type": "string", "description": "The new status (e.g., 'Hot', 'Cold', 'Pending', 'Do Not Call')."}
+                    "new_status": {"type": "string", "description": "Pipeline stage ('New', 'Contacted', 'Interested', 'Follow Up', 'Meeting Booked', 'Closed Won', 'Not Interested', 'Do Not Call', 'Closed Lost') or qualification ('Hot', 'Warm', 'Cold')."}
                 },
                 "required": ["lead_id", "new_status"]
             }
@@ -198,7 +245,7 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "lead_id": {"type": "integer", "description": "The ID of the lead."},
-                    "date_time": {"type": "string", "description": "The date and time for the callback in ISO format (e.g., '2026-10-15T14:30:00Z')."}
+                    "date_time": {"type": "string", "description": "The date and time for the callback as 'YYYY-MM-DD HH:MM' in IST (e.g., '2026-10-15 14:30')."}
                 },
                 "required": ["lead_id", "date_time"]
             }
@@ -223,12 +270,12 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "book_calendar_event",
-            "description": "Book a meeting on the calendar.",
+            "description": "Record a meeting time on the CRM lead with this email (no external calendar is connected).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "email": {"type": "string", "description": "The email of the attendee."},
-                    "date_time": {"type": "string", "description": "The date and time of the event."},
+                    "date_time": {"type": "string", "description": "The date and time of the event as 'YYYY-MM-DD HH:MM' in IST."},
                     "duration_minutes": {"type": "integer", "description": "Duration in minutes."}
                 },
                 "required": ["email", "date_time"]
@@ -312,7 +359,14 @@ def execute_tool(name: str, arguments: str, agent_id: int, role: str = "team") -
         args = json.loads(arguments)
     except Exception:
         return "Failed to parse arguments."
-        
+    try:
+        return _dispatch(name, args, agent_id, role)
+    except Exception as e:
+        log.exception("tool %s failed", name)
+        return f"Tool {name} failed: {e}"
+
+
+def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
     if name == "send_email":
         return send_email_tool(args.get("to"), args.get("subject"), args.get("body"), agent_id)
     elif name == "check_records":
@@ -328,8 +382,8 @@ def execute_tool(name: str, arguments: str, agent_id: int, role: str = "team") -
     elif name == "send_sms":
         return send_sms_tool(args.get("to"), args.get("message"))
     elif name == "book_calendar_event":
-        return book_calendar_event_tool(args.get("email"), args.get("date_time"), args.get("duration_minutes", 30))
-        
+        return book_calendar_event_tool(args.get("email"), args.get("date_time"), args.get("duration_minutes", 30), agent_id)
+
     # Admin tools
     if role == "admin":
         if name == "system_diagnostics":
@@ -342,5 +396,5 @@ def execute_tool(name: str, arguments: str, agent_id: int, role: str = "team") -
             return pause_agent_automation_tool(args.get("target_agent_id"))
         elif name == "check_active_calls":
             return check_active_calls_tool()
-            
+
     return f"Access Denied or Unknown tool: {name}"

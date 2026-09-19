@@ -6,11 +6,19 @@
  * something to hear. The state is always the real one passed in — nothing here fakes activity.
  */
 
-import { lazy, Suspense, useCallback, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 
-// three.js is ~600 KB: loaded only when a 3D orb is actually on screen.
-const VoiceOrb3D = lazy(() => import('@/components/VoiceOrb3D'))
+// three.js is ~600 KB: loaded only when a 3D orb is actually on screen. If the chunk fails to
+// load (offline, stale deploy), the CSS orb takes over instead of the page's error boundary firing.
+const VoiceOrb3D = lazy(() =>
+  import('@/components/VoiceOrb3D').catch(() => ({
+    default: function ChunkFailed({ onUnsupported }: { onUnsupported?: () => void }) {
+      useEffect(() => { onUnsupported?.() }, [onUnsupported])
+      return <></>
+    },
+  })),
+)
 
 type OrbState = 'idle' | 'listening' | 'speaking' | 'live'
 
@@ -29,7 +37,7 @@ export function VoiceOrb({ state = 'idle', size = 120, className }: { state?: Or
   const active = state !== 'idle'
   return (
     <div className={cn('voice-orb relative grid shrink-0 place-items-center', active && 'is-active', className)}
-      style={{ width: size, height: size, ['--orb-speed' as string]: ORB_SPEED[state] }} aria-hidden>
+      style={{ width: size, height: size, maxWidth: '100%', ['--orb-speed' as string]: ORB_SPEED[state] }} aria-hidden>
       {/* Rings travelling outwards: two while live, none while idle. */}
       {active && <>
         <span className="orb-ring absolute inset-0 rounded-full" />
@@ -80,9 +88,12 @@ export function Orb3D({ state = 'idle', size = 140, className }: { state?: OrbSt
   const [unsupported, setUnsupported] = useState(false)
   const onUnsupported = useCallback(() => setUnsupported(true), [])
   const fallback = <VoiceOrb state={state} size={size * 0.72} className="m-auto" />
-  if (unsupported) return <div className={cn('grid place-items-center', className)} style={{ width: size, height: size }}>{fallback}</div>
+  // Never wider than its container: on a 360px phone a 170px orb still fits, but a caller passing
+  // a larger size must not create horizontal scroll.
+  const box = { width: size, height: size, maxWidth: '100%' } as const
+  if (unsupported) return <div className={cn('grid shrink-0 place-items-center', className)} style={box}>{fallback}</div>
   return (
-    <div className={cn('relative grid place-items-center', className)} style={{ width: size, height: size }}>
+    <div className={cn('relative grid shrink-0 place-items-center', className)} style={box}>
       {/* Soft light under the particles, so the sphere sits on something instead of floating on the page. */}
       <span className="orb3d-glow pointer-events-none absolute inset-[14%] rounded-full" aria-hidden />
       <Suspense fallback={fallback}>

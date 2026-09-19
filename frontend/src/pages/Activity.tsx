@@ -1,6 +1,6 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Activity as ActivityIcon, Bot, CalendarCheck, Clock, PhoneCall, Search, Settings2, Users } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ActivityFeed from '@/components/ActivityFeed'
 import CallSheet from '@/components/CallSheet'
@@ -41,13 +41,32 @@ export default function Activity() {
     queryFn: ({ pageParam }) => api<ActivityEvent[]>(`${base}/activity`, { params: { type, before_id: pageParam, limit: 60 } }),
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (last) => (last.length === 60 ? last[last.length - 1]!.id : undefined),
+    // Polling refetches every loaded page each tick, so bound the cache: without maxPages a user
+    // who paged back five times would fire five 60-row requests every 8 seconds.
+    maxPages: 5,
     refetchInterval: 8000,
   })
+
+  // The server matches the type filter as a bare prefix, so a "call" page can be entirely
+  // "callback.*" rows that the dotted-prefix filter below drops. Keep pulling older pages while
+  // the visible result is empty so the user does not see a false "no events" state.
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = query
+  const loadedCount = query.data?.pages.flat().length ?? 0
+  const visibleCount = useMemo(
+    () => (query.data?.pages.flat() ?? []).filter((e) => !type || e.type.startsWith(`${type}.`)).length,
+    [query.data, type])
+  useEffect(() => {
+    if (type && loadedCount > 0 && visibleCount === 0 && hasNextPage && !isFetchingNextPage) void fetchNextPage()
+  }, [type, loadedCount, visibleCount, hasNextPage, isFetchingNextPage, fetchNextPage])
 
   const groups = useMemo(() => {
     const needle = q.toLowerCase().trim()
     const seen = new Set<string>()
     const events = (query.data?.pages.flat() ?? []).filter((e) => {
+      // The API matches the filter as a bare prefix, so "call" also returns "callback.*" events
+      // even though Callbacks has its own chip. Every event type is "<group>.<name>", so require
+      // the dotted prefix here.
+      if (type && !e.type.startsWith(`${type}.`)) return false
       if (needle && !`${e.title} ${e.detail ?? ''} ${e.lead_name ?? ''}`.toLowerCase().includes(needle)) return false
       // Scheduler runs every few minutes with the same result: keep only the latest of each per day.
       if (hideRoutine && type !== 'automation' && e.type === 'automation.run') {
@@ -75,47 +94,66 @@ export default function Activity() {
         title="History"
         description="A complete, time-ordered record of this agent: calls, AI CRM changes, meetings, imports, automation runs and settings changes." />
 
-      <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
-        <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
-          <Card className="p-2">
+      <div className="grid min-w-0 gap-4 sm:gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
+        <div className="min-w-0 space-y-4 lg:sticky lg:top-6 lg:self-start">
+          {/* On phones the filters run as a horizontal chip row; from lg they stack into the sidebar. */}
+          <Card className="flex gap-1 overflow-x-auto p-2 lg:flex-col lg:overflow-visible">
             {FILTERS.map(({ value, label, icon: Icon }) => (
-              <button key={value || 'all'} type="button" onClick={() => setType(value)}
-                className={cn('flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-[13.5px] font-semibold transition',
+              <button key={value || 'all'} type="button" onClick={() => setType(value)} aria-pressed={type === value}
+                className={cn('flex min-h-10 shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-left text-[13.5px] font-semibold whitespace-nowrap transition lg:w-full lg:gap-3',
                   type === value ? 'bg-fg text-bg' : 'text-fg-2 hover:bg-surface-2')}>
-                <Icon className="size-4" />{label}
+                <Icon className="size-4 shrink-0" />{label}
               </button>
             ))}
           </Card>
           <Card className="space-y-3 p-4">
             <div className="relative">
               <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
-              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search history" className="pl-9" />
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search history" aria-label="Search history" className="pl-9" />
             </div>
-            <label className="flex items-center justify-between gap-3 text-[13px]">
-              <span><span className="block font-semibold">Hide routine runs</span><span className="text-xs text-muted">Repeated scheduler results</span></span>
-              <Switch checked={hideRoutine} onChange={setHideRoutine} label="Hide routine automation runs" />
+            <label className="flex min-h-10 items-center justify-between gap-3 text-[13px]">
+              <span className="min-w-0"><span className="block font-semibold">Hide routine runs</span><span className="text-xs text-muted">Repeated scheduler results</span></span>
+              <Switch checked={hideRoutine} onChange={setHideRoutine} label="Hide routine runs" />
             </label>
-            <p className="text-xs text-muted">{query.isLoading ? 'Loading…' : `${total} event${total === 1 ? '' : 's'} shown`}
+            <p className="text-xs break-words text-muted">{query.isLoading ? 'Loading…' : `${total} event${total === 1 ? '' : 's'} shown`}
               {/* Filtering happens on what has been loaded, so say so rather than implying the count is everything. */}
               {!query.isLoading && q && query.hasNextPage ? ' — searching loaded events; use “Load older events” to go further back.' : ''}</p>
           </Card>
         </div>
 
-        <div className="space-y-6">
-          {query.isLoading ? <Card className="space-y-4 p-6">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-12" />)}</Card>
+        <div className="min-w-0 space-y-6">
+          {query.isLoading ? <Card className="space-y-4 p-4 sm:p-6">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-12" />)}</Card>
+            : query.isError && !query.data ? (
+              <Card><EmptyState icon={<ActivityIcon />} title="Couldn't load history"
+                description={query.error instanceof Error ? query.error.message : 'Something went wrong.'}
+                action={<Button loading={query.isFetching} onClick={() => { void query.refetch() }}>Try again</Button>} /></Card>
+            ) : !groups.length && query.hasNextPage && query.isFetchingNextPage ? <Card className="space-y-4 p-4 sm:p-6">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-12" />)}</Card>
             : groups.length ? groups.map((g) => (
-              <section key={g.day}>
-                <div className="sticky top-0 z-10 mb-3 flex items-center gap-3 bg-bg/90 py-1 backdrop-blur">
-                  <h2 className="text-[13px] font-extrabold tracking-wider uppercase">{g.day}</h2>
+              // Keyed by day plus the first event id: a backfilled event with an out-of-order created_at
+              // can make the same day label appear twice, which would otherwise duplicate the key.
+              <section key={`${g.day}-${g.events[0]?.id ?? 0}`}>
+                {/* Sits below the mobile top bar (h-12); on lg the top bar is hidden so it can hug the top. */}
+                <div className="sticky top-12 z-10 mb-3 flex items-center gap-3 bg-bg/90 py-1 backdrop-blur lg:top-0">
+                  <h2 className="truncate text-[13px] font-extrabold tracking-wider uppercase">{g.day}</h2>
                   <span className="h-px flex-1 bg-border" />
-                  <span className="text-xs font-semibold text-muted">{g.events.length}</span>
+                  <span className="text-xs font-semibold text-muted tabular-nums">{g.events.length}</span>
                 </div>
-                <Card className="p-6">
+                <Card className="p-4 sm:p-6">
                   <ActivityFeed events={g.events} showLead onLead={(id) => navigate(path(`/leads/${id}`))} onCall={setCallId} />
                 </Card>
               </section>
-            )) : <Card><EmptyState icon={<ActivityIcon />} title="Nothing here" description={q ? 'No events match your search.' : 'Events appear as leads are added and calls happen.'} /></Card>}
-          {query.hasNextPage && <div className="text-center"><Button loading={query.isFetchingNextPage} onClick={() => query.fetchNextPage()}>Load older events</Button></div>}
+            )) : <Card><EmptyState icon={<ActivityIcon />} title="Nothing here"
+              description={query.hasNextPage ? 'No matching events in the loaded range — load older events to keep looking.' : q ? 'No events match your search.' : type ? `No ${FILTERS.find((f) => f.value === type)?.label.toLowerCase() ?? type} events yet.` : 'Events appear as leads are added and calls happen.'}
+              action={(q || type) ? <Button variant="secondary" onClick={() => { setQ(''); setType('') }}>Clear filters</Button> : undefined} /></Card>}
+          {/* Background polls and next-page fetches can fail while data is retained: keep the loaded
+              history on screen and surface the failure inline instead of replacing everything. */}
+          {query.isError && query.data && (
+            <p role="status" className="text-center text-xs break-words text-danger">
+              {query.isFetchNextPageError ? "Couldn't load older events" : "Couldn't refresh history"}
+              {query.error instanceof Error && query.error.message ? ` — ${query.error.message}` : ''}
+            </p>
+          )}
+          {query.hasNextPage && <div className="text-center"><Button loading={query.isFetchingNextPage} disabled={query.isFetchingNextPage} onClick={() => { void query.fetchNextPage() }}>Load older events</Button></div>}
         </div>
       </div>
 

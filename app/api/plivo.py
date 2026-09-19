@@ -579,8 +579,8 @@ async def plivo_team_alert(request: Request, sid: str = Query(None)):
 def _dial_customer_back(session: dict):
     from app.services.plivo_service import PlivoService
 
-    backcall_session = call_session.create(session["agent_id"], session["lead_id"], session.get("lead") or {}, "en-IN")
-    call_session.save(backcall_session)
+    backcall_session = call_session.create(agent_id=session["agent_id"], lead_id=session["lead_id"],
+                                           lead=session.get("lead") or {}, language="en-IN")
     # No call row exists for this short courtesy call: passing the original call id would let its
     # hangup webhook overwrite the real call's status and duration.
     PlivoService().dial(session["customer_phone"], backcall_session["id"], None, max_minutes=2,

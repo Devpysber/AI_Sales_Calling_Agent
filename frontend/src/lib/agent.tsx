@@ -14,6 +14,11 @@ type AgentContextValue = {
 
 const AgentContext = createContext<AgentContextValue | null>(null)
 
+/** Null outside an agent workspace — for components rendered on both sides of the provider. */
+export function useAgentOptional() {
+  return useContext(AgentContext)
+}
+
 export function useAgent() {
   const value = useContext(AgentContext)
   if (!value) throw new Error('useAgent must be used inside an agent workspace')

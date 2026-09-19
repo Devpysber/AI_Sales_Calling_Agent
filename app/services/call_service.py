@@ -5,6 +5,7 @@ A CallService bound to an agent only sees and places that agent's calls.
 
 import contextlib
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -69,6 +70,81 @@ def _valid_callback(value) -> str | None:
     if dt < now - timedelta(minutes=5) or dt > now + timedelta(days=30):
         return None
     return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def _valid_date(value) -> str | None:
+    """Normalise an LLM-extracted follow-up date (YYYY-MM-DD); drop anything unparsable, past or more than a year out."""
+    try:
+        d = datetime.strptime(str(value or "").strip()[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    today = datetime.now(IST).date()
+    if d < today or d > today + timedelta(days=365):
+        return None
+    return d.strftime("%Y-%m-%d")
+
+
+def _next_callback_slot(cfg: dict, now: datetime | None = None) -> str:
+    """Two hours from now, pushed to the next opening of calling hours when that falls outside them."""
+    now = now or datetime.now(IST)
+    dt = (now + timedelta(hours=2)).replace(second=0, microsecond=0)
+    days = cfg.get("calling_days") or [0, 1, 2, 3, 4, 5]
+    start = int(cfg.get("calling_hours_start", 9))
+    end = int(cfg.get("calling_hours_end", 21))
+    for _ in range(8):
+        if dt.hour < start:
+            dt = dt.replace(hour=start, minute=0)
+        elif dt.hour >= end:
+            dt = (dt + timedelta(days=1)).replace(hour=start, minute=0)
+        if dt.weekday() in days and start <= dt.hour < end:
+            break
+        dt = (dt + timedelta(days=1)).replace(hour=start, minute=0)
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def _merge_text(existing: str | None, new: str | None, cap: int = 2000) -> str | None:
+    """Append sentences the stored text does not already contain; a short call must not wipe earlier discovery notes."""
+    existing = (existing or "").strip()
+    new = (new or "").strip()
+    if not new:
+        return None
+    if not existing:
+        return new[:cap]
+    low = existing.lower()
+    added = [part.strip() for part in re.split(r"(?<=[.!?।])\s+|\n+", new)
+             if part.strip() and part.strip().lower() not in low]
+    if not added:
+        return None
+    return (existing + " " + " ".join(added))[:cap]
+
+
+# Customer lines that mean "never call me again": marked from the transcript so a failed or mislabelled summary
+# cannot leave them dialable.
+DNC_RE = re.compile(r"(don'?t|do not|never|stop) call(ing)?( me)?|remove my number|call mat (karo|karna|kijiye)|dobara call mat"
+                    r"|फिर से (कॉल|call) मत|मुझे (कॉल|call) मत", re.I)
+
+_credit_alert_at: dict[str, float] = {}
+
+
+def _is_credit_error(err: Exception) -> bool:
+    text = str(err).lower()
+    return "402" in text or "credit" in text or "insufficient" in text or "quota" in text or "payment required" in text
+
+
+def merge_call_context(session_lead: dict, fresh: dict | None) -> dict:
+    """
+    Refresh the lead from the CRM without losing this call's context. The CRM row carries no `call_goal`, so using
+    it raw drops the instruction that tells the agent which details to ask a new caller for.
+    """
+    if not fresh:
+        return session_lead
+    carried = {k: v for k, v in (session_lead or {}).items()
+               if k in ("collect", "call_purpose", "call_goal") and v is not None}
+    lead = {**fresh, **carried}
+    if lead.get("collect") is not None and lead.get("call_purpose") == "inbound":
+        # Recomputed against the fresh row, so details already saved during this call drop off the ask list.
+        lead["call_goal"] = agent.call_goal(lead, "inbound_new")
+    return lead
 
 
 def _valid_meeting(value) -> str | None:
@@ -311,9 +387,16 @@ class CallService:
             call = db.get(Call, call_id)
             if call is None:
                 return
+            # Plivo retries hangup callbacks and hangup() may have already closed the call: one run per call.
+            if call.ended_at is not None or call.status not in ACTIVE:
+                return
             session_id, lead_id, agent_id, answered = call.session_id, call.lead_id, call.agent_id, call.answered_at is not None
             answered_at = call.answered_at
             trigger = call.trigger
+        # Webhooks arrive on an unscoped service; everything below (automation, emails, CRM) needs the call's agent.
+        if self.agent_id is None and agent_id is not None:
+            self.agent_id = agent_id
+            self.crm = CRMService(agent_id)
         session = call_session.get(session_id) or {}
         history = session.get("history", [])
         latencies = session.get("latencies") or []
@@ -339,7 +422,6 @@ class CallService:
             if status in RETRIABLE:
                 updates["retry_count"] = (lead.get("retry_count") or 0) + 1
                 if trigger in ("callback", "nurture", "auto_dial", "queue", "retry"):
-                    from app.api import agents
                     cfg = agents.get_automation(agent_id)
                     if cfg.get("retry_enabled") and updates["retry_count"] <= cfg.get("max_retries", 3):
                         delay = cfg.get("retry_interval_minutes", 60)
@@ -360,8 +442,43 @@ class CallService:
         # Live calls log the caller as "customer", the voicemail path as "user": counting only one of them
         # used to schedule the summary twice on some calls (double LLM spend, duplicate team alerts).
         customer_turns = sum(1 for t in history if t["role"] in ("customer", "user"))
-        if (status == "Completed" or status == "Failed") and customer_turns:
-            _turn_pool.submit(self._summarize, call_id, lead_id, history)
+        # Colleague test calls get no summary: a role-played customer must not trigger team mails or callbacks.
+        if (status == "Completed" or status == "Failed") and customer_turns and trigger != "internal":
+            self._submit_summary(call_id, lead_id, history)
+
+    def _submit_summary(self, call_id: int, lead_id: int | None, history: list[dict]):
+        def _done(f):
+            if f.exception() is not None:
+                log.error("Post-call summary for call %s crashed: %r", call_id, f.exception())
+        _turn_pool.submit(self._summarize, call_id, lead_id, history).add_done_callback(_done)
+
+    def resummarize_pending(self, hours: int = 48, max_attempts: int = 3) -> int:
+        """
+        Re-run the post-call summary for completed calls that never got one (provider out of credit, timeout).
+        Meant for an hourly scheduler job; attempts are counted in the error column so it stops after max_attempts.
+        """
+        cutoff = _utcnow() - timedelta(hours=hours)
+        todo = []
+        with get_db() as db:
+            query = self._scoped(select(Call).where(Call.status == "Completed", Call.summary.is_(None),
+                                                    Call.trigger != "internal", Call.created_at >= cutoff))
+            for call in db.scalars(query):
+                error = call.error or ""
+                if not error.startswith("summary_pending"):
+                    continue
+                attempts = int((re.search(r"summary_pending:(\d+)", error) or [None, "0"])[1])
+                if attempts >= max_attempts or not call.transcript:
+                    continue
+                try:
+                    history = json.loads(call.transcript)
+                except ValueError:
+                    continue
+                if any(t.get("role") in ("customer", "user") for t in history):
+                    todo.append((call.id, call.lead_id, call.agent_id, history))
+        for call_id, lead_id, agent_id, history in todo:
+            with contextlib.suppress(Exception):
+                CallService(agent_id)._summarize(call_id, lead_id, history)
+        return len(todo)
 
     def _team_handover(self, call_id: int, lead_id: int | None, summary: dict):
         """
@@ -379,18 +496,17 @@ class CallService:
         
         who = lead.get("name") or lead.get("phone")
         if not who:
-            from app.core.database import get_db
-            from app.models.call import Call
             from app.services import team_service
-            db = next(get_db())
-            call_obj = db.query(Call).filter(Call.id == call_id).first()
-            if call_obj:
-                who = team_service.name_for(call_obj.phone_number, self.agent_id) or call_obj.phone_number
+            with get_db() as db:
+                call_obj = db.get(Call, call_id)
+                number = call_obj.from_number if call_obj else None
+            if number:
+                who = team_service.name_for(number, self.agent_id) or number
         who = who or "A caller"
 
         from app.services.notification_service import notify_team
         events.record("call.handover", f"Action for the team: {action}", f"from {who}" + (" • urgent" if urgent else ""),
-                      lead_id=lead_id, call_id=call_id, actor="ai")
+                      agent_id=self.agent_id, lead_id=lead_id, call_id=call_id, actor="ai")
         persona = agents.get_profile(self.agent_id)
         lines = [f"{who} asked for someone on the team to act.", "", f"What they need: {action}", ""]
         for label, key in (("Phone", "phone"), ("Email", "email"), ("City", "city"), ("Company", "company")):
@@ -453,26 +569,89 @@ class CallService:
 
     def _summarize(self, call_id: int, lead_id: int | None, history: list[dict]):
         try:
+            self._summarize_inner(call_id, lead_id, history)
+        except Exception:
+            log.exception("Post-call summary for call %s failed", call_id)
+            raise
+
+    def _mark_summary_failed(self, call_id: int, lead_id: int | None, err: Exception):
+        with get_db() as db:
+            call = db.get(Call, call_id)
+            if call is not None:
+                attempts = int((re.search(r"summary_pending:(\d+)", call.error or "") or [None, "0"])[1]) + 1
+                call.error = f"summary_pending:{attempts} {str(err)[:200]}"
+                if not call.outcome:
+                    call.outcome = "summary_pending"
+        events.record("call.summary_failed", "Summary not generated", str(err)[:200], agent_id=self.agent_id,
+                      lead_id=lead_id, call_id=call_id, actor="system")
+        if _is_credit_error(err):
+            # One alert an hour, not one per call, while every provider is out of credit.
+            if time.monotonic() - _credit_alert_at.get("llm", -1e9) > 3600:
+                _credit_alert_at["llm"] = time.monotonic()
+                from app.services.notification_service import notify_team
+                with contextlib.suppress(Exception):
+                    notify_team("AI provider out of credits",
+                                f"Post-call summaries are failing: {str(err)[:300]}\n\nTop up the LLM provider; "
+                                "calls from the last 48 hours are summarised automatically once it works again.",
+                                agent_id=self.agent_id)
+
+    def _live_dnc(self, lead_id: int | None, history: list[dict]) -> bool:
+        """The caller said not to call again: mark it from the transcript, whatever the summary model decides."""
+        if not lead_id:
+            return False
+        said = any(DNC_RE.search(t.get("text") or "") for t in history if t.get("role") in ("customer", "user"))
+        if said:
+            current = self.crm.get(lead_id) or {}
+            if not current.get("do_not_call"):
+                self.crm.update(lead_id, {"do_not_call": True, "status": "Do Not Call"}, actor="ai",
+                                event_type="ai.crm_update", title="AI marked Do Not Call (caller asked not to be called again)")
+        return said
+
+    def _summarize_inner(self, call_id: int, lead_id: int | None, history: list[dict]):
+        # Idempotent: a duplicate hangup or a scheduler retry that raced a success must not send everything twice.
+        with get_db() as db:
+            call = db.get(Call, call_id)
+            if call is not None and call.summary:
+                return
+        asked_dnc = self._live_dnc(lead_id, history)
+        try:
             s = agent.summarize(history)
         except Exception as e:
             log.warning("Summary failed for call %s: %s", call_id, e)
+            self._mark_summary_failed(call_id, lead_id, e)
             return
+        if asked_dnc:
+            s["outcome"] = "do_not_call"
         qualification = s.get("qualification") if s.get("qualification") in ("Hot", "Warm", "Cold") else None
-        self._set(call_id, summary=s.get("summary"), qualification=qualification,
+        self._set(call_id, summary=s.get("summary") or "(no summary text)", qualification=qualification,
                   sentiment=s.get("sentiment"), outcome=s.get("outcome"))
+        with get_db() as db:
+            call = db.get(Call, call_id)
+            if call is not None and (call.error or "").startswith("summary_pending"):
+                call.error = None
         self._team_handover(call_id, lead_id, s)
         if lead_id:
-            updates = {k: s.get(k) for k in ("summary", "requirements", "objections", "follow_up_date", "email")
-                       if s.get(k)}
+            updates = {"summary": s["summary"]} if s.get("summary") else {}
+            follow_up = _valid_date(s.get("follow_up_date"))
+            if follow_up:
+                updates["follow_up_date"] = follow_up
             meeting_at = _valid_meeting(s.get("meeting_at"))
             if meeting_at:
                 updates["meeting_at"] = meeting_at
-            # Details the caller gave about themselves fill in empty fields (a known lead's data is never overwritten)
+            # Details the caller gave about themselves fill in empty fields (a known lead's data is never overwritten;
+            # a garbled spoken email must not replace one a person typed in).
             current = self.crm.get(lead_id) or {}
-            for key in ("name", "company", "city"):
+            for key in ("name", "company", "city", "email"):
                 value = str(s.get(key) or "").strip()
                 if value and not current.get(key) and len(value) <= 120:
                     updates[key] = value
+            if s.get("email") and current.get("email") and str(s.get("email_corrected") or "").lower() in ("true", "yes", "1"):
+                updates["email"] = str(s["email"]).strip()[:120]
+            # Requirements and objections accumulate across calls; a 40-second confirmation must not wipe discovery notes.
+            for key in ("requirements", "objections"):
+                merged_text = _merge_text(current.get(key), s.get(key))
+                if merged_text is not None:
+                    updates[key] = merged_text
             # Budget and timeline are restated on most calls: keep one current line each instead of
             # appending a near-duplicate after every conversation.
             notes_lines = [ln for ln in (current.get("notes") or "").splitlines() if ln.strip()]
@@ -488,6 +667,17 @@ class CallService:
             if merged != (current.get("notes") or ""):
                 updates["notes"] = merged
             callback_at = _valid_callback(s.get("callback_at"))
+            if not callback_at and (s.get("outcome") == "callback_requested" or str(s.get("callback_at") or "").strip()):
+                # A callback was promised but the model's time is unparsable or out of range: book the next slot
+                # inside calling hours rather than silently dropping the promise, and flag it for a person to fix.
+                try:
+                    cfg = agents.get_automation(self.agent_id)
+                except Exception:
+                    cfg = {}
+                callback_at = _next_callback_slot(cfg)
+                events.record("callback.unclear", f"Callback time unclear — scheduled for {callback_at}",
+                              f"Model gave: {str(s.get('callback_at') or '')[:60] or 'no time'}",
+                              agent_id=self.agent_id, lead_id=lead_id, call_id=call_id, actor="ai")
             if not callback_at and str(s.get("team_action") or "").strip():
                 # They asked the team to act and to be told the outcome, but named no time. Without a
                 # slot nothing dials them back and the promise is silently dropped.
@@ -506,10 +696,14 @@ class CallService:
                     updates["status"] = s["status"]
             if s.get("outcome") == "do_not_call":
                 updates["do_not_call"] = True
+                updates["status"] = "Do Not Call"
+                updates.pop("callback_at", None)
+                callback_at = None
             self.crm.update(lead_id, updates, actor="ai", event_type="ai.summary",
                             title=f"AI call summary · {qualification or 'unqualified'} · {s.get('outcome', '')}".strip(" ·"))
             if meeting_at:
-                events.record("meeting.booked", f"Meeting booked for {meeting_at}", lead_id=lead_id, call_id=call_id, actor="ai")
+                events.record("meeting.booked", f"Meeting booked for {meeting_at}", agent_id=self.agent_id, lead_id=lead_id,
+                              call_id=call_id, actor="ai")
                 self._confirm_meeting_email(lead_id, meeting_at, s)
             if agents.get_automation(self.agent_id).get("ai_auto_emails", True):
                 emails = s.get("send_email") or []
@@ -608,7 +802,9 @@ class CallService:
         agent_id = session.get("agent_id") or session_agent(session)
         try:
             persona = agents.get_profile(agent_id)
-            lead = (self.crm.get(session["lead_id"]) if session.get("lead_id") else None) or session.get("lead") or {}
+            # The CRM row carries no call_goal/call_purpose/collect: merge, so gather-mode turns keep the call's brief.
+            fresh = self.crm.get(session["lead_id"]) if session.get("lead_id") else None
+            lead = merge_call_context(session.get("lead") or {}, fresh) or {}
             # Live calls skip the embedding round-trip (~1s); keyword search answers instantly
             result = agent.respond(agent_id, session["history"], text, lead, use_embeddings=False,
                                    summary=session.get("summary"))

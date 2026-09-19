@@ -38,6 +38,25 @@ class PlivoService:
         )
         return response.message_uuid[0] if response.message_uuid else "Unknown"
 
+    # Seconds of grace between the persona's max_call_minutes and Plivo's hard cut. The stream's
+    # time watchdog wraps the conversation up inside the soft budget; the carrier limit is only
+    # a backstop, so it must always land after the goodbye rather than mid-sentence.
+    HARD_LIMIT_GRACE_SECONDS = 30
+
+    @classmethod
+    def soft_time_limit(cls, max_minutes: int | None) -> int:
+        """Conversation budget in seconds (what the agent plans its wrap-up against)."""
+        try:
+            minutes = int(max_minutes or 0)
+        except (TypeError, ValueError):
+            minutes = 0
+        return max(60, minutes * 60)
+
+    @classmethod
+    def hard_time_limit(cls, max_minutes: int | None) -> int:
+        """Plivo time_limit: soft budget plus grace so the soft wrap-up always precedes the cut."""
+        return cls.soft_time_limit(max_minutes) + cls.HARD_LIMIT_GRACE_SECONDS
+
     def dial(self, phone: str, session_id: str, call_id: int | None, max_minutes: int, detect_voicemail: bool = False,
              from_number: str | None = None, endpoint: str = "answer") -> str:
         params = {"sid": session_id, "cid": call_id}
@@ -49,7 +68,7 @@ class PlivoService:
             ring_url=self.webhook("ring", **params),
             hangup_url=self.webhook("hangup", **params),
             ring_timeout=60,
-            time_limit=max(60, max_minutes * 60),
+            time_limit=self.hard_time_limit(max_minutes),
             # Answering-machine detection gives false positives on Indian networks (caller tunes,
             # carrier announcements), so it is opt-in from the Agent settings.
             **({"machine_detection": "hangup", "machine_detection_time": 5000} if detect_voicemail else {}),

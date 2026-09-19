@@ -53,6 +53,14 @@ class Settings(BaseSettings):
         "nvidia/nemotron-3.5-lightning:free,inclusionai/ling-3.0-flash-vl:free,nex-agi/nex-n2.5-mini:free",
         alias="OPENROUTER_MODELS",
     )
+    # Last-resort tier: tried once after every primary provider/model fails (e.g. paid accounts out of credit).
+    # Free-tier models cap prompt tokens, so they get a compact prompt trimmed to FALLBACK_PROMPT_CHAR_BUDGET.
+    openrouter_fallback_models: str = Field(
+        "nvidia/nemotron-3.5-lightning:free,nex-agi/nex-n2.5-mini:free",
+        alias="OPENROUTER_FALLBACK_MODELS",
+    )
+    # Max characters of the compact prompt (system prompt without knowledge/brief/past calls + last turns)
+    fallback_prompt_char_budget: int = Field(6000, alias="FALLBACK_PROMPT_CHAR_BUDGET")
     openrouter_embedding_model: str = Field("openai/text-embedding-3-small", alias="OPENROUTER_EMBEDDING_MODEL")
     # Post-call summaries are not latency-sensitive: try free/cheap models first, paid Sarvam as fallback.
     summary_llm_providers: str = Field("openrouter,sarvam", alias="SUMMARY_LLM_PROVIDERS")

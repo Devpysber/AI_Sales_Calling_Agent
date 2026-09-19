@@ -11,7 +11,7 @@ import { AgentMark, LiveDot } from '@/components/AppShell'
 import { CallTimer, LiveNumber, LiveStamp, useArrivals } from '@/components/Live'
 import NewAgentSheet from '@/components/NewAgentSheet'
 import { CallStatusBadge } from '@/components/status'
-import { Badge, Button, Card, CardHeader, Input, PageHeader, Ring, Select, Skeleton, StatTile, Tabs } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, EmptyState, Input, PageHeader, Ring, Select, Skeleton, StatTile, Tabs, TableScroll } from '@/components/ui'
 import { api } from '@/lib/api'
 import { AnimatedNumber, Stagger } from '@/lib/motion'
 import { Orb3D, VoiceOrb, Waveform } from '@/components/VoiceViz'
@@ -73,7 +73,7 @@ function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?
   return (
     <Card className={cn('beam group relative flex min-w-0 flex-col overflow-hidden transition duration-300 hover:-translate-y-1 hover:shadow-pop',
       paused && 'opacity-90', s.live > 0 && !paused && 'is-live-card beam-on beam-live', className)}>
-      <Link to={base} className="absolute inset-0 z-0" aria-label={`Open ${agent.name}`} />
+      <Link to={base} className="absolute inset-0 z-[1]" aria-label={`Open ${agent.name}`} />
 
       <div className="relative p-5 pb-0">
         <div className="flex items-start gap-3">
@@ -91,7 +91,7 @@ function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?
             <Ring value={setupScore(agent)} size={40} stroke={4}>{Math.round(setupScore(agent) * 5)}/5</Ring>
             {role !== 'team' && (
               <button type="button" onClick={() => toggle.mutate()} disabled={toggle.isPending}
-                className={cn('inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold transition disabled:opacity-60',
+                className={cn('inline-flex min-h-10 items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] sm:min-h-8 font-bold transition disabled:opacity-60',
                   paused ? 'bg-success text-white hover:opacity-90' : 'border border-border text-fg-2 hover:border-border-strong hover:text-fg')}>
                 {paused ? <><Play className="size-3" />Resume</> : <><Pause className="size-3" />Pause</>}
               </button>
@@ -103,7 +103,7 @@ function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?
       </div>
 
       <div className="relative mt-3 h-16 px-1">
-        {p.calls ? <div className="draw-in h-full"><Sparkline data={agent.series} color="var(--fg)" id={`spark-${agent.id}`} /></div>
+        {p.calls ? <div className="draw-in h-full"><Sparkline data={agent.series ?? []} color="var(--fg)" id={`spark-${agent.id}`} /></div>
           : <div className="dot-grid mx-4 grid h-full place-items-center rounded-xl text-[11px] font-semibold text-muted">No calls in 14 days</div>}
       </div>
 
@@ -122,7 +122,7 @@ function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?
             <span>Pipeline</span>
             {s.hot > 0 && <span className="flex items-center gap-1 text-danger"><Flame className="size-3" />{s.hot} hot</span>}
           </div>
-          <PipelineBar pipeline={agent.pipeline} />
+          <div className="relative z-10"><PipelineBar pipeline={agent.pipeline} /></div>
         </div>
         {o && (
           <div className="grid grid-cols-2 gap-2 text-[11.5px]">
@@ -134,8 +134,8 @@ function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?
             ] as const).map(([Icon, label, value, to]) => {
               const body = <><Icon className={cn('size-3.5 shrink-0', label === 'Need attention' && value ? 'text-warning' : 'text-muted')} /><span className="min-w-0 flex-1 truncate text-muted">{label}</span><b className="tabular-nums text-fg">{value}</b></>
               return to
-                ? <Link key={label} to={to} className="relative z-10 flex min-w-0 items-center gap-1.5 rounded-lg bg-surface-2 px-2 py-1.5 hover:bg-surface-2/70">{body}</Link>
-                : <div key={label} className="flex min-w-0 items-center gap-1.5 rounded-lg bg-surface-2 px-2 py-1.5">{body}</div>
+                ? <Link key={label} to={to} className="relative z-10 flex min-h-10 min-w-0 items-center gap-1.5 rounded-lg bg-surface-2 px-2 py-1.5 hover:bg-surface-2/70 sm:min-h-0">{body}</Link>
+                : <div key={label} className="flex min-h-10 min-w-0 items-center gap-1.5 rounded-lg bg-surface-2 px-2 py-1.5 sm:min-h-0">{body}</div>
             })}
           </div>
         )}
@@ -145,7 +145,7 @@ function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?
           </div>
         )}
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[11.5px] text-muted">
-          <span className="flex min-w-0 items-center gap-1.5"><Phone className="size-3 shrink-0" /><span className="truncate font-mono">{o?.caller_id ?? agent.phone_number ?? '—'}</span>{o?.number_is_default && <span className="shrink-0 rounded bg-surface-2 px-1 text-[10px]">default</span>}</span>
+          <span className="flex min-w-0 items-center gap-1.5"><Phone className="size-3 shrink-0" /><span className="truncate font-mono">{(o?.caller_id && o.caller_id.length > 1 ? o.caller_id : agent.phone_number) || '—'}</span>{o?.number_is_default && <span className="shrink-0 rounded bg-surface-2 px-1 text-[10px]">default</span>}</span>
           <span className="flex shrink-0 items-center gap-1.5">
             <VoiceOrb state={paused ? 'idle' : s.live > 0 ? 'live' : 'listening'} size={18} />
             {s.live > 0 ? <b className="text-success">On a call now</b> : s.last_call_at ? `Last call ${timeAgo(s.last_call_at)}` : 'Never called'}
@@ -190,7 +190,8 @@ function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?
 function AgentTable({ agents }: { agents: AgentOverviewItem[] }) {
   const navigate = useNavigate()
   return (
-    <Card className="overflow-x-auto">
+    <Card className="overflow-hidden">
+      <TableScroll>
       <table className="rows-in w-full min-w-[860px] text-sm">
         <thead>
           <tr className="border-b border-border text-left text-[11px] font-bold tracking-wider text-muted uppercase">
@@ -201,7 +202,8 @@ function AgentTable({ agents }: { agents: AgentOverviewItem[] }) {
         </thead>
         <tbody className="divide-y divide-border">
           {agents.map((a) => (
-            <tr key={a.id} onClick={() => navigate(`/a/${a.id}`)} className="cursor-pointer transition hover:bg-surface-2/60">
+            <tr key={a.id} tabIndex={0} role="link" aria-label={`Open ${a.name}`} onClick={() => navigate(`/a/${a.id}`)} onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/a/${a.id}`) }}
+              className="cursor-pointer transition outline-none hover:bg-surface-2/60 focus-visible:bg-surface-2/60">
               <td className="px-5 py-3">
                 <div className="flex items-center gap-3">
                   <AgentMark agent={a} className={cn('size-9', a.status === 'paused' && 'grayscale')} />
@@ -217,12 +219,13 @@ function AgentTable({ agents }: { agents: AgentOverviewItem[] }) {
               <td className="px-3 py-3 text-right tabular-nums">{a.period.connect_rate === null ? '—' : `${Math.round(a.period.connect_rate)}%`}</td>
               <td className="px-3 py-3 text-right tabular-nums">{a.stats.meetings}</td>
               <td className="px-3 py-3 text-right text-muted tabular-nums">{formatDuration(a.period.talk_seconds)}</td>
-              <td className="h-12 px-3 py-1">{a.period.calls ? <Sparkline data={a.series} color="var(--fg)" id={`row-${a.id}`} /> : <span className="text-xs text-muted">—</span>}</td>
+              <td className="h-12 px-3 py-1">{a.period.calls ? <Sparkline data={a.series ?? []} color="var(--fg)" id={`row-${a.id}`} /> : <span className="text-xs text-muted">—</span>}</td>
               <td className="px-5 py-3"><Ring value={setupScore(a)} size={32} stroke={3.5}>{Math.round(setupScore(a) * 5)}</Ring></td>
             </tr>
           ))}
         </tbody>
       </table>
+      </TableScroll>
     </Card>
   )
 }
@@ -238,23 +241,28 @@ export default function Home() {
   const [status, setStatus] = useState<Status>('all')
   const [sort, setSort] = useState<Sort>('activity')
   const [view, setView] = useState<'grid' | 'table'>(() => { try { return (localStorage.getItem('agents-view') as 'grid' | 'table') || 'grid' } catch { return 'grid' } })
-  const { data, isLoading, dataUpdatedAt, isFetching } = useQuery({
+  const { data, isLoading, isError, error, refetch, dataUpdatedAt, isFetching } = useQuery({
     queryKey: ['agents', 'overview'],
     queryFn: () => api<AgentsOverview>('/api/agents/overview'),
     refetchInterval: 6000,
     refetchIntervalInBackground: true,
     staleTime: 0,
   })
-  // Live-calls poll separately faster — updates the header badge and live-calls panel every 3s
+  // While something is on the line, read the light /api/agents/live feed faster (3s) so the header badge and live-calls
+  // panel keep up. Same cache as the app-wide incoming-call banner: no extra polling of the heavy overview endpoint.
+  const anyLive = (data?.live_calls?.length ?? 0) > 0 || (data?.agents ?? []).some((a) => a.stats.live > 0)
   const livePoll = useQuery({
-    queryKey: ['agents', 'live'],
-    queryFn: () => api<{ live_calls: AgentsOverview['live_calls'] }>('/api/agents/overview'),
-    refetchInterval: 3000,
+    queryKey: ['live-calls'],
+    queryFn: () => api<{ live_calls: AgentsOverview['live_calls'] }>('/api/agents/live'),
+    enabled: anyLive,
+    refetchInterval: anyLive ? 3000 : false,
     refetchIntervalInBackground: true,
     staleTime: 0,
     select: (d) => d.live_calls,
   })
-  const liveCalls = livePoll.data ?? data?.live_calls ?? []
+  // Prefer whichever poll answered most recently: a stale fast-poll result must not outlive the main query.
+  const liveCalls = useMemo(() => (livePoll.data && livePoll.dataUpdatedAt >= dataUpdatedAt ? livePoll.data : data?.live_calls ?? []),
+    [livePoll.data, livePoll.dataUpdatedAt, dataUpdatedAt, data])
   const agents = useMemo(() => data?.agents ?? [], [data])
 
   const setViewStored = (v: 'grid' | 'table') => { setView(v); try { localStorage.setItem('agents-view', v) } catch { /* storage unavailable */ } }
@@ -265,9 +273,9 @@ export default function Home() {
       meetings: acc.meetings + a.stats.meetings, leads: acc.leads + a.stats.leads, hot: acc.hot + a.stats.hot, talk: acc.talk + a.period.talk_seconds,
       today: acc.today + a.stats.calls_today,
     }), { live: 0, calls: 0, connected: 0, meetings: 0, leads: 0, hot: 0, talk: 0, today: 0 })
-    // Use the faster live-calls poll for the live count so it's always up-to-date
-    return { ...t, live: liveCalls.length || t.live, rate: t.calls ? Math.round((100 * t.connected) / t.calls) : null }
-  }, [agents, liveCalls])
+    // The live-calls list is the freshest source; only fall back to per-agent sums before any poll has resolved.
+    return { ...t, live: data ? liveCalls.length : t.live, rate: t.calls ? Math.round((100 * t.connected) / t.calls) : null }
+  }, [agents, liveCalls, data])
 
   const shown = useMemo(() => {
     const needle = q.toLowerCase().trim()
@@ -309,17 +317,29 @@ export default function Home() {
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
-  if (isLoading) return <div className="space-y-4"><Skeleton className="h-28" /><div className="grid gap-4 md:grid-cols-5">{[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-28" />)}</div><Skeleton className="h-96" /></div>
+  if (isLoading) return <div className="space-y-4"><Skeleton className="h-28" /><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className={cn('h-28', i === 1 && 'sm:col-span-2 xl:col-span-2')} />)}</div><Skeleton className="h-96" /></div>
+
+  // A failed fetch must not masquerade as "no agents yet": that would invite the user to create a duplicate.
+  if (isError && !data) {
+    return (
+      <Card>
+        <EmptyState icon={<AlertTriangle />} title="Could not load your agents" description={(error as Error)?.message || 'The server did not respond.'}
+          action={<Button variant="primary" onClick={() => refetch()} disabled={isFetching}>Try again</Button>} />
+      </Card>
+    )
+  }
 
   if (!agents.length) {
     return (
       <>
-        <div className="mx-auto flex max-w-3xl flex-col items-center py-14 text-center">
+        <div className="mx-auto flex max-w-3xl flex-col items-center px-2 py-10 text-center sm:py-14">
           <div className="grid size-20 place-items-center rounded-3xl bg-brand text-brand-fg shadow-glow"><AudioWaveform className="size-10" /></div>
-          <h1 className="mt-8 text-4xl font-extrabold tracking-tight">Build your first voice agent</h1>
+          <h1 className="mt-8 text-3xl font-extrabold tracking-tight break-words sm:text-4xl">Build your first voice agent</h1>
           <p className="mt-4 max-w-xl text-[15px] text-muted">Run a separate AI caller for every product, campaign or client. Each agent gets its own persona, voice, phone number,
             knowledge base, leads and call history, so nothing ever mixes.</p>
-          <Button variant="primary" size="lg" className="mt-8" onClick={() => setCreating(true)}><Plus />Create agent</Button>
+          {canCreateAgent
+            ? <Button variant="primary" size="lg" className="mt-8" onClick={() => setCreating(true)}><Plus />Create agent</Button>
+            : <p className="mt-8 rounded-xl bg-warning-soft px-4 py-3 text-sm font-semibold text-warning">You can't create agents on this account yet. Ask an administrator to raise your agent allowance.</p>}
           <div className="mt-14 grid w-full gap-4 text-left sm:grid-cols-3">
             {[[Sparkles, '1. Shape the persona', 'Name, voice, script and guardrails.'], [BookOpen, '2. Teach it', 'Upload brochures, price lists and FAQs.'],
               [Upload, '3. Give it leads', 'Import a list and let it call.']].map(([Icon, t, d]) => {
@@ -341,14 +361,20 @@ export default function Home() {
         title={`${greeting}.`}
         description={`${agents.length} agent${agents.length > 1 ? 's' : ''} · ${totals.live ? `${totals.live} call${totals.live > 1 ? 's' : ''} live right now` : 'no calls live right now'} · ${totals.today} call${totals.today === 1 ? '' : 's'} today`}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <LiveStamp fetching={isFetching} updatedAt={dataUpdatedAt} />
+            {isError && !isFetching && (
+              <span role="status" className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-warning-soft px-2.5 py-1 text-[11px] font-semibold text-warning">
+                <AlertTriangle className="size-3 shrink-0" /><span className="truncate">Showing last known data</span>
+                <button type="button" onClick={() => refetch()} className="-my-1 inline-flex min-h-10 items-center px-2 underline underline-offset-2 hover:text-fg sm:min-h-0 sm:px-1">Retry</button>
+              </span>
+            )}
             {canCreateAgent && <Button variant="primary" onClick={() => setCreating(true)}><Plus />New agent</Button>}
           </div>
         }
       />
 
-      <Stagger className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <Stagger className="grid grid-flow-dense gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatTile label="Live now" value={<LiveNumber value={totals.live} />} icon={<PhoneCall />} tone="success" sub={totals.live ? 'Across all agents' : 'All lines quiet'}
           trend={<Waveform bars={6} active={totals.live > 0} className={cn('h-5', totals.live > 0 ? 'text-success' : 'text-muted/50')} />} />
         <Card className="relative overflow-hidden p-5 sm:col-span-2 xl:col-span-2">
@@ -368,7 +394,8 @@ export default function Home() {
                 <defs>
                   <linearGradient id="tot" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--fg)" stopOpacity={0.18} /><stop offset="100%" stopColor="var(--fg)" stopOpacity={0} /></linearGradient>
                 </defs>
-                <Tooltip contentStyle={tooltipStyle} labelFormatter={(d) => String(d)} />
+                <XAxis dataKey="date" hide />
+                <Tooltip contentStyle={tooltipStyle} labelFormatter={(d) => String(d).slice(5)} />
                 <Area type="monotone" dataKey="calls" name="Calls" stroke="var(--fg)" strokeWidth={2} fill="url(#tot)" isAnimationActive={false} />
                 <Area type="monotone" dataKey="connected" name="Connected" stroke="var(--muted)" strokeDasharray="4 3" strokeWidth={1.5} fill="transparent" isAnimationActive={false} />
               </AreaChart>
@@ -388,29 +415,31 @@ export default function Home() {
               { value: 'active', label: `Active ${agents.filter((a) => a.status === 'active').length}` },
               { value: 'paused', label: `Paused ${agents.filter((a) => a.status === 'paused').length}` },
             ]} />
-            <div className="flex-1" />
-            <div className="relative">
-              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
-              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find an agent" className="w-40 pl-9 2xl:w-52" aria-label="Find an agent" />
-            </div>
-            <Select value={sort} onChange={(e) => setSort(e.target.value as Sort)} className="w-40" aria-label="Sort agents">
-              <option value="activity">Sort: recent activity</option><option value="name">Sort: name</option><option value="calls">Sort: most calls</option>
-              <option value="rate">Sort: connect rate</option><option value="meetings">Sort: meetings</option><option value="leads">Sort: leads</option>
-            </Select>
-            <div className="inline-flex rounded-xl border border-border bg-surface-2 p-1">
-              {([['grid', LayoutGrid], ['table', List]] as const).map(([v, Icon]) => (
-                <button key={v} type="button" onClick={() => setViewStored(v)} aria-label={`${v} view`}
-                  className={cn('grid size-8 place-items-center rounded-lg transition', view === v ? 'bg-surface text-fg shadow-sm ring-1 ring-border' : 'text-muted hover:text-fg')}>
-                  <Icon className="size-4" />
-                </button>
-              ))}
+            <div className="flex w-full min-w-0 flex-wrap items-center gap-2 lg:ml-auto lg:w-auto">
+              <div className="relative min-w-0 flex-1 sm:flex-none">
+                <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
+                <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find an agent" className="w-full pl-9 sm:w-40 2xl:w-52" aria-label="Find an agent" />
+              </div>
+              <Select value={sort} onChange={(e) => setSort(e.target.value as Sort)} className="min-w-0 flex-1 sm:w-40 sm:flex-none" aria-label="Sort agents">
+                <option value="activity">Sort: recent activity</option><option value="name">Sort: name</option><option value="calls">Sort: most calls</option>
+                <option value="rate">Sort: connect rate</option><option value="meetings">Sort: meetings</option><option value="leads">Sort: leads</option>
+              </Select>
+              <div className="inline-flex shrink-0 rounded-xl border border-border bg-surface-2 p-0.5">
+                {([['grid', LayoutGrid], ['table', List]] as const).map(([v, Icon]) => (
+                  <button key={v} type="button" onClick={() => setViewStored(v)} aria-label={`${v} view`} aria-pressed={view === v}
+                    className={cn('grid size-10 place-items-center rounded-lg transition sm:size-9', view === v ? 'bg-surface text-fg shadow-sm ring-1 ring-border' : 'text-muted hover:text-fg')}>
+                    <Icon className="size-4" />
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
-          {view === 'table' ? (shown.length ? <AgentTable agents={shown} /> : null) : (
+          {!shown.length ? <Card className="py-14 text-center text-sm text-muted">No agent matches these filters.</Card>
+          : view === 'table' ? <AgentTable agents={shown} /> : (
             <Stagger className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {shown.map((a) => <AgentCard key={a.id} agent={a} role={role} />)}
-              {!q && status !== 'paused' && role !== 'team' && (
+              {!q && status !== 'paused' && canCreateAgent && (
                 <button type="button" onClick={() => setCreating(true)}
                   className="dot-grid flex min-h-[420px] flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border-2 border-dashed border-border text-muted transition hover:border-brand hover:text-brand">
                   <span className="grid size-12 place-items-center rounded-2xl bg-surface shadow-card ring-1 ring-border"><Plus className="size-6" /></span>
@@ -422,7 +451,6 @@ export default function Home() {
               )}
             </Stagger>
           )}
-          {!shown.length && <Card className="py-14 text-center text-sm text-muted">No agent matches these filters.</Card>}
 
           {agents.length > 1 && (
             <Card>
@@ -443,26 +471,30 @@ export default function Home() {
           )}
         </div>
 
-        <Stagger className="space-y-4" from="right" step={70}>
+        <Stagger className="min-w-0 space-y-4" from="right" step={70}>
           <Card>
             <CardHeader title={<span className="flex items-center gap-2"><LiveDot on={!!liveCalls.length} />Live calls</span>}
               description={liveCalls.length ? 'In progress across every agent' : 'Nothing on the line right now'} />
             <div className="px-3 pb-3">
               {liveCalls.length ? liveCalls.map((c) => {
-                const a = agents.find((x) => x.id === c.agent_id)
-                return (
-                  <Link key={c.id} to={`/a/${c.agent_id}/calls?status=active`}
-                    className={cn('flex items-center gap-3 rounded-xl px-2 py-2.5 hover:bg-surface-2',
-                      newCalls.has(c.id) && 'animate-pop-in bg-success/5')}>
+                const a = c.agent_id != null ? agents.find((x) => x.id === c.agent_id) : undefined
+                const agentId = c.agent_id ?? a?.id
+                const rowClass = cn('flex items-center gap-3 rounded-xl px-2 py-2.5', agentId != null && 'hover:bg-surface-2', newCalls.has(c.id) && 'animate-pop-in bg-success/5')
+                const body = (
+                  <>
                     {a && <AgentMark agent={a} className="size-8 rounded-lg text-[10px]" />}
                     <div className="min-w-0 flex-1 leading-tight">
                       <div className="truncate text-sm font-bold">{callParty(c)}</div>
                       {/* A live call shows its own clock: the panel then reads as running, not as a stale row. */}
-                      <div className="truncate text-xs text-muted">{c.agent_name} · <CallTimer since={c.answered_at ?? c.created_at} /> on the line</div>
+                      <div className="truncate text-xs text-muted">{c.agent_name ?? a?.name ?? 'Agent'} · <CallTimer since={c.answered_at ?? c.created_at} /> on the line</div>
                     </div>
                     <CallStatusBadge status={c.status} />
-                  </Link>
+                  </>
                 )
+                // A legacy call with no agent has no page to open: render a plain row instead of a link to /a/null.
+                return agentId != null
+                  ? <Link key={c.id} to={`/a/${agentId}/calls?status=active`} className={rowClass}>{body}</Link>
+                  : <div key={c.id} className={rowClass}>{body}</div>
               }) : (
                 <div className="dot-grid scan-line grid h-28 place-items-center rounded-xl text-xs font-semibold text-muted"><span className="flex items-center gap-3"><VoiceOrb state="listening" size={48} />Waiting for the next call</span></div>
               )}
@@ -473,8 +505,8 @@ export default function Home() {
             <CardHeader title={<span className="flex items-center gap-2"><AlertTriangle className="size-4 text-warning" />Needs attention</span>}
               description={attention.length ? `${attention.length} item${attention.length > 1 ? 's' : ''} to review` : 'Every agent is set up'} />
             <div className="px-3 pb-3">
-              {attention.slice(0, 6).map(({ a, text, to }, i) => (
-                <Link key={i} to={`/a/${a.id}${to}`} className="group flex items-center gap-3 rounded-xl px-2 py-2 hover:bg-surface-2">
+              {attention.slice(0, 6).map(({ a, text, to }) => (
+                <Link key={`${a.id}${to}${text}`} to={`/a/${a.id}${to}`} className="group flex items-center gap-3 rounded-xl px-2 py-2 hover:bg-surface-2">
                   <AgentMark agent={a} className="size-6 rounded-md text-[9px]" />
                   <div className="min-w-0 flex-1 leading-tight"><div className="truncate text-[13px] font-semibold">{text}</div><div className="truncate text-xs text-muted">{a.name}</div></div>
                   <ArrowUpRight className="size-4 text-muted opacity-0 group-hover:opacity-100" />
@@ -502,7 +534,7 @@ export default function Home() {
                     newEvents.has(e.id) && 'animate-rise')}>
                     <span className={cn('absolute top-1 -left-[5px] size-2.5 rounded-full ring-2 ring-surface',
                       newEvents.has(e.id) && 'animate-ping-once')} style={{ background: newEvents.has(e.id) ? 'var(--color-success)' : 'var(--fg)' }} />
-                    <Link to={`/a/${e.agent_id}/activity`} className="block text-[13px] leading-snug font-semibold hover:text-brand">
+                    <Link to={`/a/${e.agent_id}/activity`} className="-my-1 flex min-h-10 items-center py-1 text-[13px] leading-snug font-semibold hover:text-brand sm:min-h-0">
                       <span className="line-clamp-2">{e.title}</span>
                     </Link>
                     <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[11.5px] text-muted">
@@ -512,8 +544,8 @@ export default function Home() {
                   </li>
                 )
               })}
-              {!activity.length && <p className="text-sm text-muted">No activity yet.</p>}
             </ol>
+            {!activity.length && <p className="px-5 pb-5 text-sm text-muted">No activity yet.</p>}
           </Card>
         </Stagger>
       </div>
