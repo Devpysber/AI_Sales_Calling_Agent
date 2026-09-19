@@ -477,13 +477,13 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
       setHistory((h) => { setSelected(h.length); return [...h, { role: 'assistant', text: res.reply, meta: res }] })
       if (speak && res.audio_url) play(res.audio_url)
       else {
-        // Voice off, or no audio (TTS outage): still mouth the reply for roughly as long as it would take to say it.
+        // Voice off or TTS fallback active: mouth the reply for roughly as long as it would take.
         audio.current?.pause()
         setIsSpeaking(true)
         window.clearTimeout(mouthTimer.current)
         mouthTimer.current = window.setTimeout(() => setIsSpeaking(false), Math.min(12000, 600 + res.reply.length * 55))
       }
-      if (speak && res.audio_error) toast.warning('Voice unavailable', { description: res.audio_error })
+      // audio_error is suppressed: Edge TTS fallback handles it silently on the server side.
       if (res.end_call) setEnded(true)
     },
     onError: (e, { message, session: s }) => {
@@ -556,44 +556,35 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
 
   return (
     <div className="grid gap-4 grid-cols-1">
-      <Card className="relative flex h-[calc(100dvh-290px)] min-h-[640px] flex-col overflow-hidden sm:min-h-[540px]">
+      {/* ===== Main playground card ===== */}
+      <Card className="relative flex flex-col overflow-hidden" style={{ height: 'calc(100dvh - 280px)', minHeight: 680 }}>
 
-        {/* 3D Avatar – anchored to bottom 60% of card so the face stays clear of chat bubbles */}
-        <div className="absolute inset-x-0 bottom-0 top-[38%] z-0" aria-hidden>
-          <AgentAvatar zoomOut={true} isSpeaking={isSpeaking || send.isPending} isListening={listening} level={level} />
-        </div>
-        {/* Dark background for the chat/text area at the top */}
-        <div className="absolute inset-x-0 top-0 h-[38%] z-0 bg-surface" aria-hidden />
-        {/* Subtle gradient fade between chat area and avatar */}
-        <div className="absolute inset-x-0 top-[34%] z-[1] h-20 bg-gradient-to-b from-surface/80 to-transparent pointer-events-none" aria-hidden />
-
-        <div className="relative z-10 flex flex-wrap items-center gap-2 border-b border-border/50 bg-elevated/40 px-4 py-3 backdrop-blur-xl">
+        {/* ── Toolbar ──────────────────────────────────────────── */}
+        <div className="relative z-20 flex flex-wrap items-center gap-2 border-b border-white/10 bg-black/60 px-4 py-3 backdrop-blur-xl shrink-0">
           <div className="mr-auto flex min-w-0 items-center gap-2.5">
-            {/* The agent's orb: calm while it waits for you, spinning up while it thinks of a reply. */}
-            <VoiceOrb state={send.isPending ? 'speaking' : ended ? 'idle' : 'listening'} size={40} />
+            <VoiceOrb state={send.isPending ? 'speaking' : ended ? 'idle' : 'listening'} size={36} />
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold">{profile.agent_name} · {profile.company_name}</div>
-              <div className="truncate text-xs text-muted">{inbound ? 'Rehearsing an inbound call' : 'Rehearsing an outbound call'} · voice {titleCase(profile.voice_speaker)} · nothing is saved to the CRM</div>
+              <div className="truncate text-sm font-semibold text-white">{profile.agent_name} · {profile.company_name}</div>
+              <div className="truncate text-xs text-white/50">{inbound ? 'Rehearsing an inbound call' : 'Rehearsing an outbound call'} · voice {titleCase(profile.voice_speaker)} · nothing is saved to the CRM</div>
             </div>
           </div>
           <Tabs value={direction} onChange={(v) => { setDirection(v); clear() }}
             items={[{ value: 'outbound', label: 'Outbound' }, { value: 'inbound', label: 'Inbound' }]} />
-          <Select value={leadId} onChange={(e) => { setLeadId(e.target.value ? Number(e.target.value) : ''); clear() }} className="h-10 w-auto max-w-40 text-[13px] sm:h-8 sm:max-w-44" aria-label="Prospect">
+          <Select value={leadId} onChange={(e) => { setLeadId(e.target.value ? Number(e.target.value) : ''); clear() }} className="h-9 w-auto max-w-40 text-[13px]" aria-label="Prospect">
             <option value="">Sample {caller}</option>
             {leads.isPending && <option value="" disabled>Loading leads…</option>}
             {leads.data?.items.map((l) => <option key={l.id} value={l.id}>{l.name || l.phone}</option>)}
           </Select>
-          <Select value={lang} onChange={(e) => { setLang(e.target.value); clear() }} className="h-10 w-auto text-[13px] sm:h-8" aria-label="Greeting language">
+          <Select value={lang} onChange={(e) => { setLang(e.target.value); clear() }} className="h-9 w-auto text-[13px]" aria-label="Greeting language">
             {Object.entries(LANGUAGES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </Select>
-          <label className="flex h-10 items-center gap-2 rounded-lg border border-border px-2 text-[13px] text-muted sm:h-8"><Volume2 className="size-3.5" />Voice<Switch checked={speak} onChange={setSpeak} label="Speak replies" /></label>
+          <label className="flex h-9 items-center gap-2 rounded-lg border border-white/20 bg-white/5 px-2 text-[13px] text-white/70"><Volume2 className="size-3.5" />Voice<Switch checked={speak} onChange={setSpeak} label="Speak replies" /></label>
           <Button size="sm" variant="ghost" onClick={() => void reset()}><RotateCcw />Restart</Button>
-          {/* IST clock lives in the toolbar so it can wrap with the other controls instead of floating over them. */}
           <Clock />
         </div>
 
         {unsaved && (
-          <div className="relative z-10 flex flex-wrap items-center gap-2 border-b border-warning/30 bg-warning-soft/80 px-4 py-2 text-[13px] text-warning backdrop-blur-md">
+          <div className="relative z-20 flex flex-wrap items-center gap-2 border-b border-warning/30 bg-warning-soft/80 px-4 py-2 text-[13px] text-warning backdrop-blur-md shrink-0">
             <AlertTriangle className="size-4 shrink-0" />
             <span className="min-w-0 flex-1 basis-48 break-words">
               {invalid.length ? `Fix the unknown placeholder ${invalid.map((p) => `{${p}}`).join(', ')} in Persona & voice before saving.` : 'The playground uses your saved agent. Save your edits to test them.'}
@@ -602,67 +593,109 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
           </div>
         )}
 
-        {/* Transcript: stays in the upper zone so it never overlaps the face */}
-        <div className={cn('relative z-10 mt-auto flex flex-col gap-2 overflow-y-auto px-4 pt-4 pb-20 sm:pb-16',
-          showAll ? 'pointer-events-auto max-h-[55%] bg-black/25 backdrop-blur-sm' : 'pointer-events-none max-h-[38%] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden')}>
-          {history.length > 4 && (
-            <button type="button" onClick={() => setShowAll((v) => !v)}
-              className="pointer-events-auto sticky top-0 z-10 mb-1 min-h-10 self-start rounded-full bg-black/45 px-3 py-1 text-xs font-medium text-white/85 backdrop-blur-md hover:bg-black/60">
-              {showAll ? 'Show last 4 turns' : `Show full transcript (${history.length} turns)`}
-            </button>
-          )}
-          {greeting.isError && history.length === 0 && (
-            <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-danger/40 bg-danger-soft/80 px-3 py-2 text-[13px] text-danger backdrop-blur-md">
-              <AlertTriangle className="size-4 shrink-0" /><span className="min-w-0 break-words">Could not load the opening line: {greeting.error.message}</span>
-              <Button size="sm" variant="ghost" onClick={() => void greeting.refetch()}><RotateCcw />Retry</Button>
+        {/* ── Content: avatar (top 55%) + chat strip (bottom 45%) ── */}
+        <div className="relative flex-1 min-h-0 flex flex-col">
+
+          {/* Avatar hero zone — full width, top portion */}
+          <div className="relative shrink-0" style={{ height: '56%' }}>
+            {/* Solid dark bg so the canvas has something to paint over */}
+            <div className="absolute inset-0 bg-[#0a0a0f]" />
+            <AgentAvatar
+              zoomOut={false}
+              isSpeaking={isSpeaking || send.isPending}
+              isListening={listening}
+              level={level}
+              className="absolute inset-0"
+            />
+            {/* Gradient fade at bottom of avatar into chat */}
+            <div className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-[#0d0d14] to-transparent pointer-events-none z-10" />
+          </div>
+
+          {/* Chat messages strip — bottom 44%, dark bg, scrollable */}
+          <div className="relative flex-1 min-h-0 bg-[#0d0d14]">
+            <div
+              className={cn(
+                'absolute inset-0 flex flex-col gap-2 overflow-y-auto px-4 pt-3 pb-28',
+                showAll ? 'pointer-events-auto' : 'pointer-events-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+              )}
+            >
+              {history.length > 4 && (
+                <button type="button" onClick={() => setShowAll((v) => !v)}
+                  className="pointer-events-auto sticky top-0 z-10 mb-1 min-h-8 self-start rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80 backdrop-blur-md hover:bg-white/20">
+                  {showAll ? 'Show last 4 turns' : `Show full transcript (${history.length} turns)`}
+                </button>
+              )}
+              {greeting.isError && history.length === 0 && (
+                <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-danger/40 bg-danger-soft/80 px-3 py-2 text-[13px] text-danger backdrop-blur-md">
+                  <AlertTriangle className="size-4 shrink-0" /><span className="min-w-0 break-words">Could not load the opening line: {greeting.error.message}</span>
+                  <Button size="sm" variant="ghost" onClick={() => void greeting.refetch()}><RotateCcw />Retry</Button>
+                </div>
+              )}
+              {greeting.isPending && history.length === 0 && (
+                <div className="self-start rounded-2xl bg-white/8 px-3 py-2 text-[13px] text-white/60 backdrop-blur-md">Preparing the opening line…</div>
+              )}
+              {(showAll ? history : history.slice(-4)).map((t, i, arr) => (
+                <div key={history.length - arr.length + i} className={cn(
+                  'pointer-events-auto max-w-[80%] rounded-2xl px-3.5 py-2 text-[13px] leading-relaxed break-words shadow-lg',
+                  t.role === 'assistant'
+                    ? 'self-start bg-white/10 text-white backdrop-blur-md border border-white/10'
+                    : 'self-end bg-brand text-brand-fg'
+                )}>
+                  {t.text}
+                </div>
+              ))}
+              {send.isPending && <div className="self-start rounded-2xl bg-white/10 px-3.5 py-2 text-[13px] text-white/60 backdrop-blur-md border border-white/10">{profile.agent_name || 'Agent'} is thinking…</div>}
+              {failed && !send.isPending && (
+                <div className="pointer-events-auto flex max-w-[80%] flex-col gap-1.5 self-start rounded-2xl border border-danger/40 bg-danger-soft/90 px-3 py-2 text-[13px] text-danger">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <AlertTriangle className="size-4 shrink-0" />
+                    <span className="min-w-0 flex-1 basis-40 break-words">{profile.agent_name || 'The agent'} could not reply — {humanLlmError(failed.detail)}</span>
+                    <Button size="sm" variant="ghost" onClick={() => submit(failed.message)}><RotateCcw />Retry</Button>
+                  </div>
+                  <details className="text-xs opacity-80"><summary className="cursor-pointer">Technical detail</summary><p className="mt-1 break-words font-mono" title={failed.detail}>{failed.detail}</p></details>
+                </div>
+              )}
+              {ended && (
+                <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-warning/40 bg-warning-soft/90 px-3 py-2 text-[13px] text-warning">
+                  <AlertTriangle className="size-4 shrink-0" />The agent ended the call.<Button size="sm" variant="ghost" onClick={() => void reset()}><RotateCcw />Start again</Button>
+                </div>
+              )}
+              <div ref={bottom} />
             </div>
-          )}
-          {greeting.isPending && history.length === 0 && (
-            <div className="self-start rounded-2xl bg-black/40 px-3 py-2 text-[13px] text-white/80 backdrop-blur-md">Preparing the opening line…</div>
-          )}
-          {(showAll ? history : history.slice(-4)).map((t, i, arr) => (
-            <div key={history.length - arr.length + i} className={cn('pointer-events-auto max-w-[92%] rounded-2xl px-3.5 py-2 text-[13px] leading-relaxed break-words shadow-lg backdrop-blur-md sm:max-w-[70%]',
-              t.role === 'assistant' ? 'self-start bg-black/45 text-white' : 'self-end bg-brand text-brand-fg')}>
-              {t.text}
-            </div>
-          ))}
-          {send.isPending && <div className="self-start rounded-2xl bg-black/40 px-3.5 py-2 text-[13px] text-white/70 backdrop-blur-md">{profile.agent_name || 'Agent'} is thinking…</div>}
-          {failed && !send.isPending && (
-            <div className="pointer-events-auto flex max-w-[92%] flex-col gap-1.5 self-start rounded-2xl border border-danger/40 bg-danger-soft/90 px-3 py-2 text-[13px] text-danger backdrop-blur-md sm:max-w-[70%]">
-              <div className="flex flex-wrap items-center gap-2">
-                <AlertTriangle className="size-4 shrink-0" />
-                <span className="min-w-0 flex-1 basis-40 break-words">{profile.agent_name || 'The agent'} could not reply — {humanLlmError(failed.detail)}</span>
-                <Button size="sm" variant="ghost" onClick={() => submit(failed.message)}><RotateCcw />Retry</Button>
+
+            {/* ── Input bar — absolutely pinned to bottom of card ── */}
+            <div className="pointer-events-auto absolute inset-x-0 bottom-0 z-20 border-t border-white/10 bg-black/70 px-4 py-3 backdrop-blur-xl">
+              {listening && (
+                <div className="mb-2 flex items-center gap-2">
+                  <div className="size-2 animate-pulse rounded-full bg-red-500" />
+                  <span className="text-xs font-medium text-red-400">Listening…</span>
+                </div>
+              )}
+              <div className="flex items-center gap-3">
+                <form onSubmit={(e) => { e.preventDefault(); submit(text) }}
+                  className="flex min-w-0 flex-1 items-center rounded-full border border-white/20 bg-white/8 px-4 py-2 transition-all focus-within:bg-white/14 focus-within:border-white/35">
+                  <Input
+                    value={text} onChange={(e) => setText(e.target.value)}
+                    disabled={inputLocked} maxLength={1000}
+                    placeholder={listening ? 'Listening...' : ended ? 'Call ended' : waitingForGreeting ? 'Preparing…' : 'Type reply…'}
+                    aria-label="Your reply"
+                    className="h-9 min-w-0 flex-1 border-none bg-transparent text-[13px] text-white shadow-none focus-visible:ring-0 placeholder:text-white/35"
+                  />
+                  <Button type="submit" variant="primary" size="sm" className="rounded-full px-3 ml-1 shrink-0"
+                    disabled={!text.trim() || inputLocked || send.isPending} loading={send.isPending} aria-label="Send">
+                    <SendHorizontal className="size-3.5" />
+                  </Button>
+                </form>
+                <button type="button" onClick={toggleMic} disabled={inputLocked || send.isPending}
+                  aria-label={listening ? 'Stop listening' : 'Speak'}
+                  className={cn(
+                    'flex size-11 shrink-0 items-center justify-center rounded-full text-white shadow-xl transition-all active:scale-95 disabled:opacity-40',
+                    listening ? 'bg-red-500 shadow-red-500/40 animate-pulse' : 'bg-white/15 hover:bg-white/25 border border-white/20',
+                  )}>
+                  {listening ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+                </button>
               </div>
-              <details className="text-xs opacity-80"><summary className="cursor-pointer">Technical detail</summary><p className="mt-1 break-words font-mono" title={failed.detail}>{failed.detail}</p></details>
             </div>
-          )}
-          {ended && (
-            <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-warning/40 bg-warning-soft/90 px-3 py-2 text-[13px] text-warning backdrop-blur-md">
-              <AlertTriangle className="size-4 shrink-0" />The agent ended the call.<Button size="sm" variant="ghost" onClick={() => void reset()}><RotateCcw />Start again</Button>
-            </div>
-          )}
-          <div ref={bottom} />
-        </div>
-
-        {/* Bottom controls: full width on phones, docked bottom-right from sm up. */}
-        <div className="pointer-events-auto absolute inset-x-3 bottom-3 z-20 flex flex-col items-end gap-3 sm:inset-x-auto sm:right-6 sm:bottom-6">
-          {listening && (
-            <div className="mr-2 animate-pulse rounded-full bg-red-500 px-3 py-1 text-xs font-bold text-white shadow-lg">
-              Listening...
-            </div>
-          )}
-
-          <div className="flex w-full items-center gap-3 sm:w-auto">
-            <form onSubmit={(e) => { e.preventDefault(); submit(text) }} className="flex min-w-0 flex-1 items-center rounded-full border border-white/20 bg-white/10 p-1.5 backdrop-blur-md transition-all focus-within:bg-white/20 sm:w-64 sm:flex-none sm:focus-within:w-80">
-              <Input value={text} onChange={(e) => setText(e.target.value)} disabled={inputLocked} maxLength={1000} placeholder={listening ? 'Listening...' : ended ? 'Call ended' : waitingForGreeting ? 'Preparing the opening line…' : 'Type reply...'} aria-label="Your reply" className="h-10 min-w-0 flex-1 border-none bg-transparent sm:h-9 text-[13px] text-white shadow-none focus-visible:ring-0 placeholder:text-gray-300" />
-              <Button type="submit" variant="primary" size="sm" className="rounded-full px-3" disabled={!text.trim() || inputLocked || send.isPending} loading={send.isPending} aria-label="Send"><SendHorizontal className="size-3.5" /></Button>
-            </form>
-
-            <button type="button" onClick={toggleMic} disabled={inputLocked || send.isPending} aria-label={listening ? 'Stop listening' : 'Speak'}
-              className={cn('flex size-12 shrink-0 items-center justify-center rounded-full text-white shadow-2xl transition-all active:scale-95 disabled:opacity-50 sm:size-14', listening ? 'bg-red-500 animate-pulse shadow-red-500/50' : 'bg-gray-800 shadow-black/50 hover:bg-gray-700')}>
-              {listening ? <MicOff className="size-5" /> : <Mic className="size-5" />}
-            </button>
           </div>
         </div>
       </Card>

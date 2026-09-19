@@ -28,6 +28,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import random
 import re
 import threading
 import time
@@ -58,13 +59,64 @@ LANGUAGE_SWITCH_CONFIDENCE = 0.6   # Sarvam language_probability needed to follo
 ECHO_TAIL_SECONDS = 0.6            # audio still in flight at Plivo after the last chunk was queued
 ECHO_OVERLAP = 0.6                 # share of a transcript's words that must come from the agent's own speech
 ECHO_MEMORY = 6                    # how many recent agent utterances to compare against
+# A goodbye from the agent. Bare "धन्यवाद" is deliberately absent: it opens ordinary mid-call sentences
+# ("धन्यवाद जी, आपकी email id बता दीजिए"), so only closings that end a conversation are listed.
 FAREWELL = re.compile(
     r"take care|have a (great|good|nice) day|see you (at|then|soon|there)|goodbye|bye for now|"
     r"thanks for your time|thank you for (calling|your time)|"
-    r"धन्यवाद|शुभ दिन|अच्छा दिन|फिर मिलते|अलविदा|ध्यान रखना", re.I)
+    r"समय के लिए धन्यवाद|बात करने के लिए धन्यवाद|शुभ दिन|अच्छा दिन|फिर मिलते|अलविदा|ध्यान रखना|दिन शुभ हो", re.I)
+# A reply that still asks the caller for something is not a farewell, whatever its last words are.
+REQUEST_WORDS = re.compile(r"email|e-mail|number|नंबर|बताइए|बताइये|बता दीजिए|बता दो|\bkab\b|कब|kitne|कितने|which|when|what|कौन", re.I)
+# Explicit goodbye tokens: these end the call wherever they appear in the caller's sentence.
+CALLER_GOODBYE = re.compile(
+    r"\b(bye|goodbye|ok bye|okay bye|alvida|cut the call|hang up|rakhta hoon|rakhti hoon|rakh do|milte hain|"
+    r"theek hai bye|thik hai bye)\b|अलविदा|रखता हूँ|रखती हूँ|रखता हूं|रखती हूं|रख दो|फ़ोन रखो|फोन रखो|कॉल काटो|फिर मिलते", re.I)
+# Acknowledgements that only count as a closing when they are the caller's whole short utterance:
+# "ठीक है, कर दीजिए" is agreement, "ठीक है" alone after a goodbye is a goodbye.
 CALLER_CLOSING = re.compile(
-    r"\b(bye|goodbye|thanks|thank you|thank u|ok bye|okay bye|cut the call|hang up|that'?s all|nothing else|no thanks)\b|"
-    r"धन्यवाद|शुक्रिया|ठीक है|अलविदा|बस इतना|और कुछ नहीं|फ़ोन रखो|कॉल काटो", re.I)
+    r"^\W*(ok|okay|ji|haan|haan ji|acha|accha)?\W*(thanks|thank you|thank u|no thanks|that'?s all|nothing else|"
+    r"theek hai|thik hai|thik|chalo|chalo theek hai|chalo thik hai|"
+    r"धन्यवाद|शुक्रिया|ठीक है|बस इतना|और कुछ नहीं|चलो)( ji| जी| bhai| sir| madam)?\W*$", re.I)
+# Short acknowledgements a listener makes while the agent talks ("haan", "ji", "hmm"): never a barge-in.
+BACKCHANNEL = re.compile(r"^(hmm+|h+m+|haan( ji)?|haa|han|ji( haan)?|ha|ok(ay)?|accha|acha|achha|theek( hai)?|thik( hai)?|"
+                         r"right|yes|yeah|yep|sure|hello|हाँ|हां|जी( हाँ| हां)?|हम्म+|ठीक( है)?|अच्छा|ओके|सही)[.!]?$", re.I)
+# Voicemail greetings and carrier announcements, in the languages Indian networks play them in.
+VOICEMAIL = re.compile(
+    r"leave (a|your) message|after the (tone|beep)|voice ?mail|not reachable|switched off|not answering|"
+    r"out of coverage|cannot be reached|is busy|not available|कृपया (बाद में|थोड़ी देर)|संपर्क नहीं|उपलब्ध नहीं|"
+    r"बंद है|संदेश (छोड़|रिकॉर्ड)|पहुंच से बाहर|पहुँच से बाहर|कवरेज क्षेत्र", re.I)
+VOICEMAIL_WINDOW_SECONDS = 15.0    # only the opening of a call can be a recording
+# The caller asks for a moment ("ek minute", "hold on", "रुकिए"): the silence loop waits instead of prompting.
+HOLD = re.compile(r"(ek|one|एक) (minute|second|sec|min|मिनट|सेकंड)|hold on|hold kar|रुकिए|रुको|\bruko\b|rukiye|ek min\b|"
+                  r"थोड़ा रुक|just a (sec|second|moment)|one moment|\bwait\b", re.I)
+HOLD_SECONDS = 45.0
+HOLD_ACK_AFTER = 20.0
+# A transcript that ends on one of these is not a finished sentence: wait longer before replying.
+CONNECTOR_END = re.compile(r"(^|\s)(aur|और|lekin|लेकिन|toh|तो|matlab|मतलब|and|but|so|like|around|about|ke|ka|ki|"
+                           r"के|का|की|main|mera|मेरा|मेरी|मैं|par|पर|ya|या|or|se|से|ko|को|the|a|an|"
+                           r"is|are|was|for|to|in|of|with|my|our|your|मुझे)\W*$", re.I)
+NUMBER_FRAGMENT = re.compile(r"(^|\s)(\d+|one|two|three|four|five|six|seven|eight|nine|ten|ek|do|teen|char|paanch|"
+                             r"एक|दो|तीन|चार|पांच|पाँच|lakh|लाख|hazaar|हज़ार|hazar|crore|करोड़|thousand|hundred)\W*$", re.I)
+SHORT_ANSWER = re.compile(r"^\W*(haan|nahi|nahin|yes|no|ok|okay|ji|हाँ|हां|नहीं|जी|ठीक है|theek hai)\W*$", re.I)
+UNFINISHED_GRACE_MS = 700
+# Lines the stream speaks on its own (the plivo module's PROMPTS cover the shared ones).
+STREAM_PROMPTS = {
+    "still_there": {"en": "Hello? Can you hear me?", "hi": "हैलो? आवाज़ आ रही है?"},
+    "hold_ack": {"en": "Sure, I'm still on the line.", "hi": "जी, मैं line पर हूँ।"},
+}
+# Seconds before the persona's max_call_minutes budget at which the agent is told to wrap up, so the
+# goodbye is spoken before Plivo's hard time_limit (budget + PlivoService.HARD_LIMIT_GRACE_SECONDS) cuts the line.
+WRAP_UP_LEAD_SECONDS = 45
+WRAP_UP_GUIDANCE = ("You are almost out of time for this call. In one or two short sentences, sum up what was agreed "
+                    "or offer a callback, thank the caller and say goodbye. End your reply with <END>.")
+QUIET_GUIDANCE = ("The caller has gone quiet. In a few words check they are still there and repeat your last "
+                  "question, shorter. Do not start a new topic.")
+FAREWELL_SILENCE_SECONDS = 3.0     # after the agent said goodbye, this much quiet ends the call without another word
+STT_RETRY_BASE = 0.3               # reconnect backoff for Sarvam STT: 0.3s doubling to STT_RETRY_CAP, with jitter
+STT_RETRY_CAP = 5.0
+STT_MAX_FAILURES = 5               # consecutive failed connects before the caller is handed over
+TTS_STALL_SECONDS = 6.0            # no audio and no "final" after the text was flushed: the socket is stuck
+REPLY_DEADLINE_SECONDS = 45.0      # a whole turn (LLM + speech) can never take longer than this
 SPOKEN_ONLY = ("Answer out loud in 1-2 short sentences of plain speech. Do not call any tool. "
                "If a meeting or callback time was agreed, repeat the day and time back to confirm it.")
 
@@ -172,6 +224,40 @@ def looks_like_echo(text: str, spoken: list[str]) -> bool:
 def split_sentences(text: str) -> list[str]:
     parts = [p.strip() for p in SENTENCE_SPLIT.split(text.strip()) if p.strip()]
     return parts or [text.strip()]
+
+
+def is_farewell(reply: str) -> bool:
+    """The agent's reply ends the conversation: its last sentence says goodbye and nothing in it asks for anything."""
+    if not reply or "?" in reply or REQUEST_WORDS.search(reply):
+        return False
+    return bool(FAREWELL.search(split_sentences(reply)[-1]))
+
+
+def is_caller_closing(text: str) -> bool:
+    """The caller is saying goodbye: an explicit goodbye anywhere, or a short acknowledgement that is all they said."""
+    text = (text or "").strip()
+    if not text:
+        return False
+    if CALLER_GOODBYE.search(text):
+        return True
+    return len(text.split()) <= 4 and bool(CALLER_CLOSING.match(text))
+
+
+def turn_grace_ms(text: str) -> int:
+    """
+    How long to wait after a transcript before answering. A sentence that stops on a connector, a bare
+    number or without any punctuation is probably not finished ("my budget is around... ten lakh"), so
+    the agent waits longer; a question or a one-word answer is complete and gets the short grace.
+    """
+    base = settings.turn_end_grace_ms
+    text = (text or "").strip()
+    if not text:
+        return base
+    if text.endswith("?") or SHORT_ANSWER.match(text):
+        return base
+    if CONNECTOR_END.search(text) or NUMBER_FRAGMENT.search(text) or not re.search(r"[।.!?]$", text):
+        return max(base, UNFINISHED_GRACE_MS)
+    return base
 
 
 # ---------------- Sarvam streaming STT ----------------
@@ -415,8 +501,49 @@ class LocalTTS(SarvamTTS):
         pass
 
 
+class EdgeTTS(SarvamTTS):
+    """
+    Fallback TTS backed by Microsoft Edge TTS (free, no API key).
+    Uses the same _LocalSocket interface — text is buffered into sentences,
+    synthesized via tts.synthesize_pcm (which uses Edge TTS), converted to
+    8 kHz mu-law and sent to Plivo, exactly as LocalTTS does.
+    """
+
+    def warm(self):
+        if self.ws is None or self.ws.state.name != "OPEN":
+            self.ws = _LocalSocket(self.language, self.speaker)
+
+    async def get(self):
+        self.warm()
+        return self.ws
+
+    async def reset(self):
+        old, self.ws = self.ws, None
+        if old is not None:
+            with contextlib.suppress(Exception):
+                await old.close()
+        self.warm()
+
+    async def ping(self):
+        pass
+
+    async def close(self):
+        if self.ws is not None:
+            with contextlib.suppress(Exception):
+                await self.ws.close()
+
+
 def make_tts(language: str, speaker: str | None):
-    return LocalTTS(language, speaker) if settings.tts_engine.lower() == "indicf5" else SarvamTTS(language, speaker)
+    engine = settings.tts_engine.lower()
+    if engine == "indicf5":
+        return LocalTTS(language, speaker)
+    # Use Sarvam streaming WebSocket only when the API key is present.
+    # If not set, go straight to Edge TTS (free neural voices, no WebSocket).
+    if settings.sarvam_api_key:
+        return SarvamTTS(language, speaker)
+    log.warning("SARVAM_API_KEY not set – phone calls will use Edge TTS fallback")
+    return EdgeTTS(language, speaker)
+
 
 
 # Words the plain-speech rewrites read together with the noun that follows them.
@@ -524,10 +651,17 @@ class CallStream:
         self.agent_quiet_at = 0.0            # when the last audio finished playing at Plivo
         self.usage = {"tts_chars": 0, "stt_seconds": 0.0, "llm_requests": 0, **((self.session or {}).get("usage") or {})}
         self.speech_ended_at: float | None = None
+        self.started_at = time.monotonic()      # when Plivo's stream started: voicemail detection only applies early on
+        self.last_reply_farewell = False        # the agent's last line was a goodbye: brief silence ends the call quietly
+        self.hold_until = 0.0                   # the caller asked for a moment: no silence prompts until then
+        self.hold_acked = False
+        self.language_votes: list[str] = []     # consecutive auto-detected languages, for switch hysteresis
+        self.stt_failures = 0                   # consecutive failed Sarvam STT connects
 
         # Live supervision
         self.mode = "ai"                   # "ai" answers the caller; "human" = supervisor speaks, AI stays silent
         self.guidance: str | None = None   # one-shot instruction for the next AI reply
+        self.wrap_up_asked = False          # the time-budget wrap-up nudge has been given
         self.direction: str | None = None  # standing instruction for every AI reply until cleared
         self.monitors: dict[asyncio.Queue, dict] = {}
         from app.services.live_bridge import CallBridge
@@ -597,8 +731,10 @@ class CallStream:
         if action == "takeover":
             self.mode = "human"
             await self.interrupt(force=True)
+            self.flush_heard()
         elif action == "release":
             self.mode = "ai"
+            self.flush_heard()
             self.quiet_since = time.monotonic()
         elif action == "guide":
             if not text:
@@ -643,6 +779,24 @@ class CallStream:
         self.publish_state()
         return self.state()
 
+    def flush_heard(self):
+        """
+        Move any buffered caller words into the transcript instead of leaving them for the AI to answer later.
+
+        Used around a supervisor takeover: the cancelled reply put its caller text back in self.heard, and
+        answering it minutes later, after the person has dealt with it, would make no sense.
+        """
+        if self.commit_task and not self.commit_task.done():
+            self.commit_task.cancel()
+        if self.heard:
+            self.turn("customer", " ".join(self.heard))
+            self.save_session()
+        self.heard.clear()
+        self.pending_bargein = False
+
+    def customer_spoke(self) -> bool:
+        return any(t["role"] != "assistant" for t in self.session.get("history", []))
+
     async def human_audio(self, pcm: bytes):
         """Supervisor's microphone (16-bit PCM, 8 kHz) straight to the caller, only while they have the call."""
         if self.mode == "human" and pcm:
@@ -673,6 +827,10 @@ class CallStream:
     async def clear_audio(self):
         self.agent_speaking = False
         self.agent_quiet_at = time.monotonic()
+        # The reply that was just cut off may have armed a hangup/transfer on its checkpoint. A late
+        # playedStream for that mark must not end the call in the middle of the next answer.
+        self.hangup_on_mark = None
+        self.transfer_on_mark = None
         await self.send({"event": "clearAudio", "streamId": self.stream_id})
 
     async def say_fixed(self, text: str, hangup: bool = False):
@@ -799,8 +957,17 @@ class CallStream:
             for t in tasks + [self.reply_task, self.commit_task]:
                 if t and not t.done():
                     t.cancel()
+            for t in tasks:
+                if t.done() and not t.cancelled() and t.exception():
+                    log.error("Stream task failed for session %s: %r", self.session_id[:8], t.exception())
             await self.stt.close()
             await self.tts.close()
+            # A loop that died leaves the caller on a silent open line until Plivo's time limit unless
+            # the call is ended here. After a transfer Plivo owns the call, so it is left alone.
+            if not self.transferred:
+                await self.hangup()
+            with contextlib.suppress(Exception):
+                await self.ws.close()
             log.info("Stream closed for session %s", self.session_id[:8])
 
     async def plivo_loop(self):
@@ -820,6 +987,7 @@ class CallStream:
                     start = msg.get("start") or {}
                     self.stream_id = start.get("streamId") or msg.get("streamId")
                     self.call_uuid = start.get("callId") or msg.get("callId")
+                    self.started_at = time.monotonic()
                     log.info("Stream started session=%s call=%s", self.session_id[:8], self.call_uuid)
                     asyncio.create_task(self.greet())
                 elif event == "playedStream":
@@ -838,18 +1006,32 @@ class CallStream:
                     return
         except (WebSocketDisconnect, RuntimeError):
             return
+        except (ValueError, KeyError, TypeError) as e:
+            # A malformed frame: reported, and run()'s cleanup ends the call instead of leaving it open.
+            log.error("Bad Plivo frame on session %s: %s", self.session_id[:8], e)
+            raise
 
     async def stt_loop(self):
         while not self.closed:
             try:
                 ws = await self.stt.connect()
+                self.stt_failures = 0
                 async for raw in ws:
                     await self.on_stt(json.loads(raw))
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                log.warning("Sarvam STT stream dropped (%s), reconnecting", e)
-                await asyncio.sleep(0.3)
+                self.stt_failures += 1
+                if self.stt_failures >= STT_MAX_FAILURES:
+                    # A bad key, exhausted quota or dead DNS: hammering the API every 300 ms for the rest of
+                    # the call helps nobody, and the caller is sitting on a line that cannot hear them.
+                    log.error("Sarvam STT unavailable after %s attempts on session %s: %s",
+                              self.stt_failures, self.session_id[:8], e)
+                    await self.fail_turn(f"speech recognition unavailable: {e}")
+                    return
+                delay = min(STT_RETRY_CAP, STT_RETRY_BASE * 2 ** (self.stt_failures - 1)) * random.uniform(0.7, 1.3)
+                log.warning("Sarvam STT stream dropped (%s), reconnecting in %.1fs", e, delay)
+                await asyncio.sleep(delay)
 
     async def silence_loop(self):
         ticks = 0
@@ -858,20 +1040,79 @@ class CallStream:
             ticks += 1
             if ticks % 30 == 0:
                 await self.tts.ping()
-            busy = self.mode != "ai" or self.agent_speaking or self.caller_speaking or self.heard or (self.reply_task and not self.reply_task.done())
+            replying = bool(self.reply_task and not self.reply_task.done())
+            committing = bool(self.commit_task and not self.commit_task.done())
+            idle = self.mode == "ai" and not (self.agent_speaking or self.caller_speaking or committing or replying)
+            # Time budget: nudge the model to wrap up shortly before the persona's limit, and if it is
+            # still talking at the limit say goodbye ourselves, before Plivo's hard cut drops the line.
+            elapsed = time.monotonic() - self.started_at
+            budget = self.persona.get("max_call_minutes")
+            soft_limit = max(60, int(budget) * 60) if budget else float("inf")  # mirrors PlivoService.soft_time_limit
+            if self.mode == "ai" and not self.wrap_up_asked and elapsed >= soft_limit - WRAP_UP_LEAD_SECONDS:
+                self.wrap_up_asked = True
+                self.guidance = WRAP_UP_GUIDANCE
+                if idle:
+                    self.reply_task = asyncio.create_task(self.run_reply(None, time.monotonic()))
+                    replying = True
+                    idle = False
+            elif self.mode == "ai" and elapsed >= soft_limit and idle and not self.heard:
+                from app.api.plivo import PROMPTS
+                log.info("Call time budget reached on session %s, saying goodbye", self.session_id[:8])
+                await self.say_recorded(PROMPTS["goodbye"][self.lang_key()], hangup=True)
+                return
+            # A barge-in that never produced a transcript (noise, a cough, a false VAD trigger) cancels
+            # the reply, which puts the caller's words back in self.heard with nothing left to commit
+            # them. Without this the buffer keeps silence_loop "busy" forever and the call goes dead.
+            if self.mode == "ai" and self.heard and not committing and not replying and not self.caller_speaking:
+                self.commit_task = asyncio.create_task(self.commit_turn())
+                committing = True
+            busy = self.mode != "ai" or self.agent_speaking or self.caller_speaking or committing or replying
             if busy:
                 self.quiet_since = time.monotonic()
                 continue
-            if time.monotonic() - self.quiet_since < SILENCE_PROMPT_SECONDS:
-                continue
-            self.silent_prompts += 1
-            from app.api.plivo import PROMPTS
-            caller_spoke = any(t["role"] != "assistant" for t in self.session.get("history", []))
-            if self.silent_prompts > (MAX_SILENT_PROMPTS if caller_spoke else 1):
-                await self.say_fixed(PROMPTS["goodbye"][self.lang_key()], hangup=True)
+            quiet_for = time.monotonic() - self.quiet_since
+            try:
+                if self.last_reply_farewell and quiet_for >= FAREWELL_SILENCE_SECONDS:
+                    # The agent already said goodbye (the model just forgot the end marker) and the caller
+                    # has nothing more: end the call without "Sorry, I didn't catch that".
+                    log.info("Silence after farewell, hanging up session %s", self.session_id[:8])
+                    await self.hangup()
+                    return
+                if time.monotonic() < self.hold_until:
+                    # The caller asked for a moment ("ek minute"): no prompting, just one reassurance.
+                    if not self.hold_acked and quiet_for >= HOLD_ACK_AFTER:
+                        self.hold_acked = True
+                        await self.say_recorded(STREAM_PROMPTS["hold_ack"][self.lang_key()])
+                        self.quiet_since = time.monotonic()
+                    continue
+                if quiet_for < SILENCE_PROMPT_SECONDS:
+                    continue
+                self.silent_prompts += 1
+                from app.api.plivo import PROMPTS
+                caller_spoke = self.customer_spoke()
+                if self.silent_prompts > (MAX_SILENT_PROMPTS if caller_spoke else 1):
+                    await self.say_recorded(PROMPTS["goodbye"][self.lang_key()], hangup=True)
+                    return
+                if caller_spoke:
+                    # A person would check the line and repeat their question, not ask the caller to
+                    # repeat something they never said. One LLM call, but it sounds like a person.
+                    self.guidance = QUIET_GUIDANCE
+                    self.reply_task = asyncio.create_task(self.run_reply(None, time.monotonic()))
+                else:
+                    await self.say_recorded(STREAM_PROMPTS["still_there"][self.lang_key()])
+                self.quiet_since = time.monotonic()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 - a dead silence loop leaves the call open forever
+                log.error("Silence handling failed on session %s: %s", self.session_id[:8], e)
+                await self.hangup()
                 return
-            await self.say_fixed(PROMPTS["repeat"][self.lang_key()])
-            self.quiet_since = time.monotonic()
+
+    async def say_recorded(self, text: str, hangup: bool = False):
+        """A fixed line the transcript (and the model) must know about, unlike a scripted greeting replay."""
+        await self.say_fixed(text, hangup=hangup)
+        self.turn("assistant", text)
+        self.save_session()
 
     # ----- conversation -----
 
@@ -881,13 +1122,22 @@ class CallStream:
         text = history[-1]["text"] if history and history[-1]["role"] == "assistant" and len(history) > 1 else \
             next((t["text"] for t in history if t["role"] == "assistant"), None)
         if not text:
-            text = agent.greeting(self.agent_id, self.session.get("lead") or {}, self.session.get("language") or "en-IN")
+            # May translate through the LLM: never on the event loop, where it would freeze every live call.
+            text = await asyncio.to_thread(agent.greeting, self.agent_id, self.session.get("lead") or {},
+                                           self.session.get("language") or "en-IN")
             self.turn("assistant", text)
             self.save_session()
         try:
             await self.say_fixed(text)
         except Exception as e:
             log.error("Greeting TTS failed: %s", e)
+
+    def mark_greeting_interrupted(self):
+        """The caller spoke over the greeting: tell the model its opening line was cut short."""
+        history = self.session.get("history") or []
+        if history and history[-1]["role"] == "assistant" and not history[-1]["text"].endswith("(interrupted)"):
+            history[-1]["text"] = history[-1]["text"].rstrip() + " — (interrupted)"
+            self.save_session()
 
     async def on_stt(self, msg: dict):
         kind, data = msg.get("type"), msg.get("data") or {}
@@ -919,13 +1169,42 @@ class CallStream:
                 self.publish({"type": "echo", "text": text})
                 self.pending_bargein = False
                 return
+            if (text and self.mode == "ai" and not self.heard and not self.customer_spoke()
+                    and time.monotonic() - self.started_at < VOICEMAIL_WINDOW_SECONDS and VOICEMAIL.search(text)):
+                # A voicemail greeting or carrier announcement: a person hangs up in two seconds, and so
+                # do we, without pitching to a recording. The turn is marked so the call ends as a
+                # no-answer (retry logic kept, no summary) rather than a conversation.
+                log.info("Voicemail/announcement on session %s, hanging up: %s", self.session_id[:8], text)
+                self.pending_bargein = False
+                await self.interrupt(force=True)
+                self.turn("customer", f"[voicemail/announcement: {text}]")
+                self.save_session(voicemail=True)
+                await self.hangup()
+                return
             if text and self.pending_bargein:
                 self.pending_bargein = False
-                await self.interrupt()
+                if len(text.split()) <= 2 and BACKCHANNEL.match(text):
+                    # "haan", "ji", "hmm", "ok": the caller is listening along, not taking the floor.
+                    # Cutting the agent off and answering "haan" as a new turn is what made it stutter.
+                    log.info("Backchannel on session %s: %s", self.session_id[:8], text)
+                    self.publish({"type": "heard", "text": text})
+                    return
+                if not await self.interrupt(text=text):
+                    return  # the hand-off or goodbye being played is left to finish
+                if not self.customer_spoke():
+                    self.mark_greeting_interrupted()
             spoken = data.get("language_code")
             if (text and spoken in tts.LANGUAGES and spoken != self.session.get("language")
                     and (data.get("language_probability") or 0) >= LANGUAGE_SWITCH_CONFIDENCE and len(text.split()) >= 2):
-                await self.switch_language(spoken)
+                # Hysteresis: one English sentence from a Hindi caller ("ok what is the price") must not
+                # rebuild the TTS socket and flip the whole call. Two transcripts in a row, or one long
+                # and confident one, do.
+                self.language_votes = (self.language_votes + [spoken])[-2:]
+                confident = (data.get("language_probability") or 0) >= 0.85 and len(text.split()) >= 4
+                if confident or self.language_votes == [spoken, spoken]:
+                    await self.switch_language(spoken, explicit=False)
+            elif text:
+                self.language_votes.clear()
             if text and self.mode != "ai":
                 # Supervisor has the call: log what the caller said, the AI does not answer
                 self.turn("customer", text)
@@ -967,26 +1246,48 @@ class CallStream:
                         f"could not continue.\n\nPlease call them back.\n\nWhat went wrong: {error[:300]}",
                         lead_id=lead_id, agent_id=self.agent_id)
 
-    async def interrupt(self, force: bool = False):
-        """Caller (or supervisor) talks over the agent: stop audio and drop the reply in flight."""
+    async def interrupt(self, force: bool = False, text: str | None = None) -> bool:
+        """
+        Caller (or supervisor) talks over the agent: stop audio and drop the reply in flight.
+
+        Returns False when the barge-in was ignored because the audio being played is the hand-off line
+        ("connecting you now"): clearing it would also clear the checkpoint that runs the transfer, and
+        the caller would be pulled back into the conversation. A caller who talks over the goodbye with
+        a closing of their own is hung up on right away instead of answered again.
+        """
+        current = f"m{self.mark}"
+        if not force and self.agent_speaking and self.transfer_on_mark == current:
+            log.info("Barge-in during hand-off ignored on session %s", self.session_id[:8])
+            return False
+        if not force and self.agent_speaking and self.hangup_on_mark == current and text and is_caller_closing(text):
+            log.info("Caller closed during the goodbye, hanging up session %s", self.session_id[:8])
+            await self.clear_audio()
+            await self.hangup()
+            return False
         if self.reply_task and not self.reply_task.done():
             self.reply_task.cancel()
         if self.agent_speaking or force:
             await self.clear_audio()
             await self.tts.reset()
             log.info("Barge-in on session %s", self.session_id[:8])
+        return True
 
-    async def switch_language(self, language: str):
-        """Follow the caller's language: recognition, voice, prompts and the lead record."""
+    async def switch_language(self, language: str, explicit: bool = True):
+        """
+        Follow the caller's language: recognition, voice and prompts. The lead record is only updated when
+        the caller asked for the language (explicit=True): an auto-detected switch reflects what they said
+        last, not what they prefer, and would otherwise be rewritten on every flip.
+        """
         if language == self.session.get("language") or language not in tts.LANGUAGES:
             return
         log.info("Language switch %s -> %s on session %s", self.session.get("language"), language, self.session_id[:8])
         self.session["language"] = language
+        self.language_votes.clear()
         await self.tts.close()
         self.tts = make_tts(language, self.persona.get("voice_speaker"))
         self.tts.warm()
         self.save_session()
-        if self.session.get("lead_id"):
+        if explicit and self.session.get("lead_id"):
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(CallService(self.agent_id).crm.update, self.session["lead_id"], {"language": language}, "ai",
                                         "lead.updated", f"Language switched to {tts.LANGUAGES[language]} on request")
@@ -1015,18 +1316,72 @@ class CallStream:
         self.publish({"type": "caller", **updates})
 
     async def commit_turn(self):
-        await asyncio.sleep(settings.turn_end_grace_ms / 1000)
+        await asyncio.sleep(turn_grace_ms(" ".join(self.heard)) / 1000)
         if self.caller_speaking or not self.heard:
             return
+        if self.reply_task and not self.reply_task.done():
+            # Cancel first and let the cancellation land: the cut-off reply puts its own caller text back
+            # in self.heard, so the merged turn below answers everything. Switching the voice underneath
+            # a streaming reply would instead surface as a socket error and trip the failure path.
+            self.reply_task.cancel()
+            await asyncio.wait([self.reply_task])
         text = " ".join(self.heard)
-        self.heard = []
+        if HOLD.search(text):
+            self.hold_until = time.monotonic() + HOLD_SECONDS
+            self.hold_acked = False
+        # self.heard keeps the words until the reply starts: a barge-in during these awaits cancels this
+        # task, and the next commit picks them up instead of losing them.
         await self.capture_caller_details(text)
         wanted = requested_language(text)
         if wanted:
             await self.switch_language(wanted)
-        if self.reply_task and not self.reply_task.done():
-            self.reply_task.cancel()
-        self.reply_task = asyncio.create_task(self.reply(text, self.speech_ended_at or time.monotonic()))
+        if self.caller_speaking:
+            return
+        self.heard = []
+        self.reply_task = asyncio.create_task(self.run_reply(text, self.speech_ended_at or time.monotonic()))
+
+    async def run_reply(self, text: str | None, speech_ended_at: float):
+        """reply() under a hard deadline, so a stuck provider can never hold the line open until Plivo's limit."""
+        try:
+            await asyncio.wait_for(self.reply(text, speech_ended_at), REPLY_DEADLINE_SECONDS)
+        except asyncio.TimeoutError:
+            log.error("Reply exceeded %ss on session %s", REPLY_DEADLINE_SECONDS, self.session_id[:8])
+            if text is not None and self.heard[:1] == [text]:
+                self.heard.pop(0)  # put back by the cancelled reply: recorded here instead of answered again
+                self.turn("customer", text)
+            await self.tts.reset()
+            await self.fail_turn("reply timed out")
+
+    async def fail_turn(self, error: str):
+        """
+        Nothing left to keep the conversation going (every LLM provider refused, speech recognition is gone,
+        a reply hung). Hanging up on a caller mid-conversation is the worst outcome, so hand them to a
+        person when a number exists, and promise a callback otherwise; neither line mentions a fault.
+
+        Only once per call: if the team did not pick up and the caller was returned to the agent, or the
+        session already failed before, a second hand-off would loop them between "let me put you through"
+        and "what do you need?" until the time limit. The breakdown is recorded the first time, so a day
+        of failing calls never looks like a day of transfers.
+        """
+        from app.api.plivo import FALLBACK_LINES, PROMPTS
+        failures = int(self.session.get("failures") or 0) + 1
+        self.save_session(failures=failures)
+        history = self.session.get("history") or []
+        returned = any(t.get("role") == "assistant" and t.get("text") in FALLBACK_LINES.values() for t in history[-4:])
+        if failures == 1:
+            await asyncio.to_thread(self.escalate_failure, error)
+        if failures == 1 and not returned and self.has_human_line():
+            line = PROMPTS["handover"][self.lang_key()]
+            self.turn("assistant", line)
+            await self.say_fixed(line)
+            await self.checkpoint(transfer=True)
+        else:
+            # Recorded like any other spoken line: a transcript that ends on the caller's question makes
+            # the call look like the agent never answered at all.
+            line = PROMPTS["error"][self.lang_key()]
+            self.turn("assistant", line)
+            await self.say_fixed(line, hangup=True)
+        self.save_session()
 
     async def reply(self, text: str | None, speech_ended_at: float):
         """
@@ -1070,11 +1425,37 @@ class CallStream:
         spoken: list[str] = []
         first_audio_ms = None
         feeder = None
+        unsent = ""            # text the feeder holds back until a whole word is available
+        llm_done = False       # the feeder consumed the whole LLM stream
+        played_upto = 0        # len(spoken) when the last audio chunk arrived: text the caller may have heard
+        last_audio_at = time.monotonic()
+        recorded = False       # the caller's line is in the transcript
+        tts_fault: Exception | None = None
+
+        def on_cancel():
+            """A barge-in: leave the transcript honest about what was already said."""
+            stop.set()
+            if feeder:
+                feeder.cancel()
+            if recorded:
+                return
+            partial = " ".join("".join(spoken).split()) if first_audio_ms is not None else ""
+            if partial:
+                # The caller heard at least the start of this: the model must know it was cut off
+                # mid-sentence, otherwise it restarts the same sentence or skips the point. What it
+                # heard from the caller goes in front of it.
+                if text is not None:
+                    self.turn("customer", text)
+                self.turn("assistant", partial + " — (interrupted)")
+                self.save_session()
+            elif text is not None:
+                self.heard.insert(0, text)  # caller kept talking before we said anything: answer everything together
+
         try:
             tts_ws = await self.tts.get()
 
             async def feed():
-                unsent = ""  # Sarvam rejects whitespace-only text messages
+                nonlocal unsent, llm_done, last_audio_at
 
                 async def push(chunk: str, final: bool = False):
                     nonlocal unsent
@@ -1086,16 +1467,18 @@ class CallStream:
                         spoken.append(ready)
                         self.note_spoken(ready)
                         self.meter("tts_chars", len(ready))
-                        await tts_ws.send(json.dumps({"type": "text", "data": {"text": ready}}))
                         unsent = unsent[cut:]
+                        await tts_ws.send(json.dumps({"type": "text", "data": {"text": ready}}))
 
                 while (item := await deltas.get()) is not None:
                     if isinstance(item, Exception):
                         raise item
                     await push(cleaner.feed(item))
+                llm_done = True
                 await push(cleaner.flush(), final=True)
                 if "".join(spoken).strip():
                     await tts_ws.send(json.dumps({"type": "flush"}))
+                    last_audio_at = max(last_audio_at, time.monotonic())  # the stall clock starts at the flush
 
             feeder = asyncio.create_task(feed())
             while True:
@@ -1104,6 +1487,10 @@ class CallStream:
                         raise feeder.exception()
                     if not "".join(spoken).strip():
                         break  # only markup: no audio will come
+                    if time.monotonic() - last_audio_at > TTS_STALL_SECONDS:
+                        # The flush was dropped or the completion event never comes: without this the
+                        # turn never finishes and silence_loop treats the call as busy forever.
+                        raise RuntimeError("Sarvam TTS: no audio or completion after the text was flushed")
                 try:
                     raw = await asyncio.wait_for(tts_ws.recv(), timeout=0.25)
                 except asyncio.TimeoutError:
@@ -1113,87 +1500,117 @@ class CallStream:
                     audio = base64.b64decode(msg["data"]["audio"])
                     if first_audio_ms is None:
                         first_audio_ms = int((time.monotonic() - speech_ended_at) * 1000)
+                    last_audio_at = time.monotonic()
+                    played_upto = len(spoken)
                     await self.send_mulaw(audio)
                 elif msg.get("type") == "event" and (msg.get("data") or {}).get("event_type") == "final":
                     break
                 elif msg.get("type") == "error":
                     raise RuntimeError(f"Sarvam TTS: {msg.get('data')}")
         except asyncio.CancelledError:
-            stop.set()
-            if feeder:
-                feeder.cancel()
-            if text is not None:
-                self.heard.insert(0, text)  # caller kept talking: answer everything together
+            on_cancel()
             raise
         except Exception as e:
-            stop.set()
             if feeder:
                 feeder.cancel()
-            log.error("Reply failed for session %s: %s", self.session_id[:8], e)
-            await self.tts.reset()
+            from app.services.llm import LLMError
+            if isinstance(e, websockets.ConnectionClosed) or (isinstance(e, RuntimeError) and not isinstance(e, LLMError)
+                                                              and str(e).startswith("Sarvam TTS")):
+                # The voice socket hiccuped, not the model: the words exist, so finish saying them below
+                # with one-shot synthesis instead of booking a callback and dropping the caller.
+                tts_fault = e
+            else:
+                stop.set()
+                log.error("Reply failed for session %s: %s", self.session_id[:8], e)
+                await self.tts.reset()
+                if text is not None:
+                    self.turn("customer", text)
+                self.save_session()
+                await self.fail_turn(str(e))
+                return
+
+        try:
+            if tts_fault is not None:
+                log.warning("TTS socket failed mid-reply on session %s (%s), finishing the turn without it",
+                            self.session_id[:8], tts_fault)
+                await self.tts.reset()
+                rest = "".join(spoken[played_upto:]) + unsent
+                try:
+                    if not llm_done:
+                        while (item := await asyncio.wait_for(deltas.get(), 20)) is not None:
+                            if isinstance(item, Exception):
+                                raise item
+                            rest += cleaner.feed(item)
+                        rest += cleaner.flush()
+                except Exception as e:  # noqa: BLE001 - the model failed too: this is the real breakdown
+                    stop.set()
+                    log.error("Reply failed for session %s: %s", self.session_id[:8], e)
+                    if text is not None:
+                        self.turn("customer", text)
+                    self.save_session()
+                    await self.fail_turn(str(e))
+                    return
+                rest = " ".join(rest.split())
+                del spoken[played_upto:]
+                if rest:
+                    spoken.append(rest)
+                    self.note_spoken(rest)
+                    self.meter("tts_chars", len(rest))
+                    await self.play_pcm(await asyncio.to_thread(tts.synthesize_pcm, rest, tts.detect_language(rest, language),
+                                                                self.persona.get("voice_speaker")))
+
+            reply = " ".join("".join(spoken).split())
+            if not reply and not cleaner.end_call:
+                # The model emitted a tool call instead of speech (typically when a meeting is agreed).
+                # Ask once more, streaming and short, with an explicit spoken-only instruction.
+                with contextlib.suppress(Exception):
+                    retry = ReplyFilter()
+                    spoken_only = ((guidance + " ") if guidance else "") + SPOKEN_ONLY
+                    self.meter("llm_requests")
+                    raw = await asyncio.to_thread(lambda: "".join(agent.respond_stream(
+                        self.agent_id, history, prompt_text, lead, spoken_only, language,
+                        summary=self.session.get("summary"))))
+                    reply = " ".join((retry.feed(raw) + retry.flush()).split())
+                    cleaner.end_call = retry.end_call
+                    if reply:
+                        spoken.append(reply)
+                        self.note_spoken(reply)
+                        language = tts.detect_language(reply, self.session.get("language") or "en-IN")
+                        await self.play_pcm(await asyncio.to_thread(tts.synthesize_pcm, reply, language, self.persona.get("voice_speaker")))
+                        self.meter("tts_chars", len(reply))
+            if not reply:
+                # Still nothing to say (never hang up). "I didn't catch that" is only honest when they said
+                # nothing: after a caller has spoken, the failure is ours, so invite them to carry on instead.
+                from app.api.plivo import PROMPTS
+                fallback = "goodbye" if cleaner.end_call else ("continue" if (text or "").strip() else "repeat")
+                reply = PROMPTS[fallback][self.lang_key()]
+                spoken.append(reply)
+                await self.say_fixed(reply)
+            self.note_spoken(reply)
+            farewell = is_farewell(reply)
+            if not cleaner.end_call and text and farewell and is_caller_closing(text):
+                # Both sides said goodbye but the model left out the end marker: hang up anyway, so the
+                # caller never has to ask us to cut the call.
+                log.info("Ending call on mutual farewell without end marker, session=%s", self.session_id[:8])
+                cleaner.end_call = True
+            # A goodbye without a closing from the caller: if they now stay quiet, silence_loop ends the
+            # call without asking them to repeat themselves.
+            self.last_reply_farewell = farewell and not cleaner.end_call
             if text is not None:
                 self.turn("customer", text)
-            self.save_session()
-            from app.api.plivo import PROMPTS
-            # Something broke on our side (typically every LLM provider refusing in a row). Hanging up
-            # on a caller mid-conversation is the worst outcome, so hand them to a person whenever a
-            # number exists, and promise a callback otherwise. Neither line mentions a fault.
-            # However the call ends, the breakdown is recorded: a handover used to hide it completely,
-            # so a day of failing calls looked like a day of transfers.
-            await asyncio.to_thread(self.escalate_failure, str(e))
-            if self.has_human_line():
-                await self.say_fixed(PROMPTS["handover"][self.lang_key()])
-                self.turn("assistant", PROMPTS["handover"][self.lang_key()])
+            self.turn("assistant", reply, by="ai-guided" if supervised else None)
+            recorded = True
+            if first_audio_ms is not None:
+                self.session["latencies"] = (self.session.get("latencies") or []) + [first_audio_ms]
+            self.save_session(silent_prompts=0)
+            log.info("Turn: first audio %sms after caller stopped, session=%s", first_audio_ms, self.session_id[:8])
+            self.compact_history_soon()
+            if cleaner.transfer and self.can_transfer():
                 await self.checkpoint(transfer=True)
             else:
-                # Recorded like any other spoken line: a transcript that ends on the caller's
-                # question makes the call look like the agent never answered at all.
-                line = PROMPTS["error"][self.lang_key()]
-                await self.say_fixed(line, hangup=True)
-                self.turn("assistant", line)
-            self.save_session()
-            return
-
-        reply = " ".join("".join(spoken).split())
-        if not reply and not cleaner.end_call:
-            # The model emitted a tool call instead of speech (typically when a meeting is agreed).
-            # Ask once more, streaming and short, with an explicit spoken-only instruction.
-            with contextlib.suppress(Exception):
-                retry = ReplyFilter()
-                spoken_only = ((guidance + " ") if guidance else "") + SPOKEN_ONLY
-                self.meter("llm_requests")
-                raw = await asyncio.to_thread(lambda: "".join(agent.respond_stream(
-                    self.agent_id, history, prompt_text, lead, spoken_only, language,
-                    summary=self.session.get("summary"))))
-                reply = " ".join((retry.feed(raw) + retry.flush()).split())
-                cleaner.end_call = retry.end_call
-                if reply:
-                    self.note_spoken(reply)
-                    language = tts.detect_language(reply, self.session.get("language") or "en-IN")
-                    await self.play_pcm(await asyncio.to_thread(tts.synthesize_pcm, reply, language, self.persona.get("voice_speaker")))
-                    self.meter("tts_chars", len(reply))
-        if not reply:
-            # Still nothing to say (never hang up). "I didn't catch that" is only honest when they said
-            # nothing: after a caller has spoken, the failure is ours, so invite them to carry on instead.
-            from app.api.plivo import PROMPTS
-            fallback = "goodbye" if cleaner.end_call else ("continue" if (text or "").strip() else "repeat")
-            reply = PROMPTS[fallback][self.lang_key()]
-            await self.say_fixed(reply)
-        self.note_spoken(reply)
-        if not cleaner.end_call and text and FAREWELL.search(reply) and "?" not in reply and CALLER_CLOSING.search(text):
-            # Both sides said goodbye but the model left out the end marker: hang up anyway, so the
-            # caller never has to ask us to cut the call.
-            log.info("Ending call on mutual farewell without end marker, session=%s", self.session_id[:8])
-            cleaner.end_call = True
-        if text is not None:
-            self.turn("customer", text)
-        self.turn("assistant", reply, by="ai-guided" if supervised else None)
-        if first_audio_ms is not None:
-            self.session["latencies"] = (self.session.get("latencies") or []) + [first_audio_ms]
-        self.save_session(silent_prompts=0)
-        log.info("Turn: first audio %sms after caller stopped, session=%s", first_audio_ms, self.session_id[:8])
-        self.compact_history_soon()
-        if cleaner.transfer and self.can_transfer():
-            await self.checkpoint(transfer=True)
-        else:
-            await self.checkpoint(hangup=cleaner.end_call)
+                await self.checkpoint(hangup=cleaner.end_call)
+        except asyncio.CancelledError:
+            # A barge-in during the retry, the fallback line or the checkpoint: the caller's words are
+            # still kept, either in the transcript or in the next turn.
+            on_cancel()
+            raise
