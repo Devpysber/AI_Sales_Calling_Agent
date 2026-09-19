@@ -66,33 +66,53 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
   const host = useRef<HTMLDivElement>(null)
   const reduced = useReducedMotion()
   // Read by the render loop each frame, so toggling them never rebuilds the scene or reloads the model.
-  const state = useRef({ isSpeaking, isListening, level })
+  const state = useRef({ isSpeaking, isListening, level, reduced, zoomOut })
   state.current.isSpeaking = isSpeaking
   state.current.isListening = isListening
   state.current.level = level
+  state.current.reduced = reduced
+  state.current.zoomOut = zoomOut
 
   useEffect(() => {
     const el = host.current
     if (!el) return
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-    renderer.setPixelRatio(window.devicePixelRatio || 1)
+    let renderer: THREE.WebGLRenderer
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+    } catch {
+      // No WebGL (headless, blocked GPU, exhausted contexts): leave the host empty rather than crash the page.
+      return
+    }
+    // Cap the ratio: 3x phones would render 9x the pixels for no visible gain on a small panel.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
 
     const scene = new THREE.Scene()
     // 30 FOV is closer to a real human portrait lens
     const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 1000)
-    // Frame face and shoulders: face spans y 11.9..14, shirt tops out at y 12, so aim just below the face centre
-    const EYE_LINE = 13.3
-    camera.position.set(0, EYE_LINE, 12)
+    // Frame face close-up: face spans y 11.9..14, aim at eye level
+    const EYE_LINE = 13.5
+    camera.position.set(0, EYE_LINE, 9.5)
 
     const updateSize = () => {
       const rect = el.getBoundingClientRect()
-      camera.aspect = rect.width / rect.height
+      const w = Math.max(1, Math.floor(rect.width)), h = Math.max(1, Math.floor(rect.height))
+      camera.aspect = w / h
       camera.updateProjectionMatrix()
-      renderer.setSize(rect.width, rect.height)
+      // Re-read the DPR every resize: browser zoom or moving the window to a differently scaled monitor
+      // changes it, and a stale ratio renders the canvas blurry (zoomed in) or oversampled (zoomed out).
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+      renderer.setSize(w, h, false)
     }
     updateSize()
-    window.addEventListener('resize', updateSize)
+    // The panel resizes when the playground stacks on mobile or a sibling column collapses, not only on
+    // window resize; observe the host itself. Fall back to the window event where ResizeObserver is missing.
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateSize) : null
+    if (ro) ro.observe(el)
+    else window.addEventListener('resize', updateSize)
+    renderer.domElement.style.width = '100%'
+    renderer.domElement.style.height = '100%'
+    renderer.domElement.style.display = 'block'
     el.appendChild(renderer.domElement)
 
     // Lighting (Portfolio matched)
@@ -122,9 +142,32 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
     let teeth: THREE.Mesh | undefined
     let teethIndex: number | null = null
     let head: THREE.Object3D | undefined
+    let blinkAction: THREE.AnimationAction | null = null
 
+    // Dispose every geometry/material/texture under a subtree. Used both on teardown and when the GLB
+    // resolves after teardown, so a scene that never reached the renderer still frees its GPU buffers.
+    const disposeTree = (root: THREE.Object3D) => {
+      root.traverse((o: any) => {
+        if (!o.isMesh) return
+        o.geometry?.dispose()
+        for (const m of ([] as THREE.Material[]).concat(o.material ?? [])) {
+          for (const v of Object.values(m)) if ((v as any)?.isTexture) (v as any).dispose()
+          m.dispose()
+        }
+      })
+    }
+
+    // Fade the model in once it is added: the 2.3 MB GLB takes seconds on mobile networks and would
+    // otherwise pop into an empty panel in a single frame. Reduced motion skips the ramp.
+    renderer.domElement.style.opacity = '0'
+    renderer.domElement.style.transition = state.current.reduced ? 'none' : 'opacity 600ms ease-out'
+
+    let running = true
     const loader = new GLTFLoader()
     loader.load('/models/character.glb', (gltf) => {
+      // The effect can be torn down (route change, StrictMode double-mount) before the GLB arrives.
+      // The parsed scene never reaches `scene`, so the teardown traversal cannot free it; do it here.
+      if (!running) { disposeTree(gltf.scene); return }
       const model = gltf.scene
       model.traverse((child: any) => {
         const original: string | undefined = child.userData?.name
@@ -156,41 +199,76 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       lowerArm(model, 'R')
 
       group.add(model)
+      el.dataset.loaded = 'true'
+      renderer.domElement.style.opacity = '1'
 
+      // ORDER MATTERS: the Blink clip binds Face.002.morphTargetInfluences as an EntireArray of 3 values,
+      // but addJawMorph above made the array 4 long, so every mixer.update() writes buffer garbage into
+      // the jaw slot. The render loop overwrites morphTargetInfluences[jawIndex] AFTER mixer.update()
+      // in the same frame, which is what keeps the mouth correct. Do not reorder those two steps.
       mixer = new THREE.AnimationMixer(model)
       const blink = gltf.animations.find((c) => c.name === 'Blink')
-      if (blink) mixer.clipAction(blink).play()
+      // Blinking is motion too. Always start the action and pause/unpause it per frame below, so the
+      // in-app motion toggle (and prefers-reduced-motion) applies live like every other motion here.
+      if (blink) {
+        blinkAction = mixer.clipAction(blink)
+        blinkAction.paused = state.current.reduced
+        blinkAction.play()
+      }
+    }, undefined, (err) => {
+      // A missing/blocked model must not surface as an unhandled rejection; the empty panel is the fallback.
+      console.warn('AgentAvatar: could not load /models/character.glb', err)
     })
 
     const clock = new THREE.Clock()
     let raf = 0
-    let running = true
     let mouth = 0
+    // Once the analyser has reported real loudness during a speaking bout, trust it for the rest of that
+    // bout, including the ~0 readings between words and sentences, so pauses close the mouth. Only when
+    // no live level ever arrives (analyser unsupported/blocked) do we fall back to the synthetic rhythm.
+    let analyserLive = false
+    // Pause rendering while the panel is scrolled out of view or covered: a constant 60 fps at 2x DPR is a
+    // real battery/thermal cost on phones and nobody can see the result.
+    let visible = true
 
     const frame = () => {
       if (!running) return
+      if (!visible) { raf = 0; return }
       const dt = Math.min(clock.getDelta(), 0.1)
       const t = clock.elapsedTime
-      const { isSpeaking, isListening, level } = state.current
+      const { isSpeaking, isListening, level, reduced, zoomOut } = state.current
 
+      // See the ORDER MATTERS note where the mixer is created: the jaw influence is written below,
+      // after this update, on purpose.
+      if (blinkAction && blinkAction.paused !== reduced) blinkAction.paused = reduced
       mixer?.update(dt)
+
+      // Zoomed out shows the shoulders as well; ease the camera so toggling it does not cut.
+      // Under reduced motion snap instead of easing so nothing glides.
+      const camZ = zoomOut ? 11 : 9.5
+      camera.position.z = reduced ? camZ : THREE.MathUtils.lerp(camera.position.z, camZ, 0.08)
 
       // Listen: lean in and cock the head slightly. Idle: a slow breathing sway so it never looks frozen.
       const targetZ = isListening ? 1.5 : 0
-      group.position.z = THREE.MathUtils.lerp(group.position.z, targetZ, 0.05)
+      group.position.z = reduced ? targetZ : THREE.MathUtils.lerp(group.position.z, targetZ, 0.05)
       if (head) {
         const sway = reduced ? 0 : Math.sin(t * 0.7) * 0.02
         const nod = isSpeaking && !reduced ? Math.sin(t * 2.3) * 0.025 : 0
-        head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, (isListening ? 0.15 : 0) + sway, 0.05)
-        head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, isListening ? 0.08 : 0, 0.05)
-        head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, nod, 0.1)
+        const ry = (isListening ? 0.15 : 0) + sway
+        const rz = isListening ? 0.08 : 0
+        head.rotation.y = reduced ? ry : THREE.MathUtils.lerp(head.rotation.y, ry, 0.05)
+        head.rotation.z = reduced ? rz : THREE.MathUtils.lerp(head.rotation.z, rz, 0.05)
+        head.rotation.x = reduced ? nod : THREE.MathUtils.lerp(head.rotation.x, nod, 0.1)
       }
 
       // Mouth: follow the real voice level when audio is playing; otherwise layered sines that read as
       // syllables rather than a metronome. Snaps shut when done.
-      const live = level && level.current > 0.02 ? level.current : null
+      if (!isSpeaking) analyserLive = false
+      const lv = level?.current
+      const hasLevel = typeof lv === 'number' && Number.isFinite(lv)
+      if (isSpeaking && hasLevel && lv > 0.02) analyserLive = true
       const target = !isSpeaking || reduced ? 0
-        : live !== null ? Math.min(1, live * 2.2)
+        : analyserLive && hasLevel ? Math.min(1, Math.max(0, lv) * 2.2)
         : Math.max(0, 0.55 + 0.45 * Math.sin(t * 14) * Math.sin(t * 5.3 + 1) + 0.25 * Math.sin(t * 23))
       mouth = THREE.MathUtils.lerp(mouth, target, target > mouth ? 0.5 : 0.25)
       if (face && jawIndex !== null && face.morphTargetInfluences) face.morphTargetInfluences[jawIndex] = mouth
@@ -202,27 +280,36 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
     }
     raf = requestAnimationFrame(frame)
 
+    const io = typeof IntersectionObserver !== 'undefined'
+      ? new IntersectionObserver((entries) => {
+          const now = entries.some((e) => e.isIntersecting)
+          if (now === visible) return
+          visible = now
+          if (visible && running && !raf) {
+            clock.getDelta() // drop the time spent hidden so the first frame back does not jump
+            raf = requestAnimationFrame(frame)
+          }
+        })
+      : null
+    if (io) io.observe(el)
+
     return () => {
       running = false
-      window.removeEventListener('resize', updateSize)
+      if (ro) ro.disconnect()
+      else window.removeEventListener('resize', updateSize)
+      if (io) io.disconnect()
       cancelAnimationFrame(raf)
       mixer?.stopAllAction()
       // Free GPU memory and the WebGL context; browsers cap contexts, and route changes remount this.
-      scene.traverse((o: any) => {
-        if (!o.isMesh) return
-        o.geometry?.dispose()
-        for (const m of ([] as THREE.Material[]).concat(o.material ?? [])) {
-          for (const v of Object.values(m)) if ((v as any)?.isTexture) (v as any).dispose()
-          m.dispose()
-        }
-      })
+      disposeTree(scene)
       renderer.dispose()
       renderer.forceContextLoss()
       renderer.domElement.remove()
     }
-  }, [reduced, zoomOut])
+    // Props are read through `state` each frame, so nothing here should rebuild the scene or refetch the GLB.
+  }, [])
 
   return (
-    <div ref={host} className={className} style={{ width: '100%', height: '100%', pointerEvents: 'none' }} />
+    <div ref={host} aria-hidden="true" className={className} style={{ width: '100%', height: '100%', minWidth: 0, minHeight: 0, overflow: 'hidden', pointerEvents: 'none' }} />
   )
 }
