@@ -82,8 +82,13 @@ def create_agent(body: AgentIn, request: Request, response: Response):
             from app.core.auth import COOKIE, TTL, make_token
             https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
             response.set_cookie(COOKIE, make_token(payload), max_age=TTL, httponly=True, samesite="lax", secure=https, path="/")
-                
-        return result
+
+        # The client seeds its agent list with this response and the shell reads .stats/.persona/.setup from
+        # it before the refetch lands, so return the same shape as GET /api/agents, not the bare row.
+        summary = next((a for a in agents.list_agents() if a["id"] == result["id"]), result)
+        if user == "team":
+            summary["locked"] = False
+        return summary
     except (ValueError, TypeError) as e:
         raise HTTPException(400, str(e))
 
@@ -218,7 +223,7 @@ async def playground(body: PlaygroundMessage, agent_id: int = Depends(workspace)
         raise HTTPException(502, str(e))
     # A voice outage (quota, network) must not hide the text reply: return it without audio and say why.
     try:
-        audio_id = await asyncio.to_thread(tts.cached_audio_id, res["reply"], res.get("language") or "en-IN", agents.get_profile(agent_id)["voice_speaker"])
+        audio_id = await asyncio.to_thread(tts.prepare_audio_id, res["reply"], res.get("language") or "en-IN", agents.get_profile(agent_id)["voice_speaker"])
         res["audio_url"] = tts.audio_url(audio_id) if audio_id else ""
     except TTSError as e:
         res["audio_url"] = ""
