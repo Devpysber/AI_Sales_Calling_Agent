@@ -1,8 +1,11 @@
 """
-Sarvam AI text-to-speech (bulbul).
+Sarvam AI text-to-speech (bulbul) with gTTS fallback.
 
 Generated audio is kept in the shared store (so any replica can serve it
 to Plivo) under a random id; fixed prompts are cached by content hash.
+
+If Sarvam TTS returns a quota/credit error (402/429) the call is
+automatically retried with Google gTTS (free, no API key required).
 """
 
 import base64
@@ -39,6 +42,101 @@ class TTSError(RuntimeError):
     pass
 
 
+# ---------------------------------------------------------------------------
+# Fallback TTS: Microsoft Edge TTS (neural voices, free, no API key needed)
+# Paired with miniaudio for clean MP3 → WAV / PCM conversion.
+# ---------------------------------------------------------------------------
+
+# Best Edge TTS neural voice per Indian language code
+_EDGE_VOICE_MAP: dict[str, str] = {
+    "hi-IN": "hi-IN-MadhurNeural",      # Hindi – male, natural
+    "en-IN": "en-IN-NeerjaNeural",      # Indian English – female
+    "bn-IN": "bn-IN-BashkarNeural",     # Bengali – male
+    "ta-IN": "ta-IN-ValluvarNeural",    # Tamil – male
+    "te-IN": "te-IN-MohanNeural",       # Telugu – male
+    "kn-IN": "kn-IN-GaganNeural",       # Kannada – male
+    "ml-IN": "ml-IN-MidhunNeural",      # Malayalam – male
+    "mr-IN": "mr-IN-ManoharNeural",     # Marathi – male
+    "gu-IN": "gu-IN-NiranjanNeural",    # Gujarati – male
+    "pa-IN": "hi-IN-MadhurNeural",      # Punjabi – Edge has no pa-IN; Hindi closest
+    "od-IN": "hi-IN-MadhurNeural",      # Odia – Edge has no od-IN; Hindi closest
+}
+
+
+def _is_quota_error(err_text: str) -> bool:
+    """Return True when Sarvam's response indicates a credits/quota failure."""
+    markers = ("402", "insufficient_quota", "no credits", "credit", "429")
+    low = err_text.lower()
+    return any(m in low for m in markers)
+
+
+def _edge_mp3_bytes(text: str, language: str | None = None) -> bytes:
+    """Return MP3 bytes from Microsoft Edge TTS (neural voice, no API key)."""
+    import asyncio
+    import io
+    import edge_tts
+
+    lang_code = language or detect_language(text)
+    voice = _EDGE_VOICE_MAP.get(lang_code, "hi-IN-MadhurNeural")
+
+    async def _run() -> bytes:
+        buf = io.BytesIO()
+        communicate = edge_tts.Communicate(text[:2500], voice)
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                buf.write(chunk["data"])
+        return buf.getvalue()
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, _run()).result(timeout=20)
+        return loop.run_until_complete(_run())
+    except RuntimeError:
+        return asyncio.run(_run())
+
+
+def _mp3_to_wav(mp3_bytes: bytes, sample_rate: int = 22050) -> bytes:
+    """Decode MP3 bytes to WAV bytes using miniaudio (no ffmpeg needed)."""
+    import io
+    import wave
+    import miniaudio
+
+    decoded = miniaudio.decode(mp3_bytes, output_format=miniaudio.SampleFormat.SIGNED16,
+                               nchannels=1, sample_rate=sample_rate)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(decoded.samples)
+    return buf.getvalue()
+
+
+def _mp3_to_pcm8k(mp3_bytes: bytes) -> bytes:
+    """Decode MP3 → raw 16-bit mono PCM at 8 kHz using miniaudio."""
+    import miniaudio
+
+    decoded = miniaudio.decode(mp3_bytes, output_format=miniaudio.SampleFormat.SIGNED16,
+                               nchannels=1, sample_rate=8000)
+    return bytes(decoded.samples)
+
+
+def _edge_synthesize_wav(text: str, language: str | None = None) -> bytes:
+    """Synthesise speech with Edge TTS and return WAV bytes."""
+    mp3 = _edge_mp3_bytes(text, language)
+    return _mp3_to_wav(mp3)
+
+
+def _edge_synthesize_pcm(text: str, language: str | None = None) -> bytes:
+    """Synthesise speech with Edge TTS and return raw 16-bit PCM at 8 kHz."""
+    mp3 = _edge_mp3_bytes(text, language)
+    return _mp3_to_pcm8k(mp3)
+
+
+
 def detect_language(text: str, default: str = "en-IN") -> str:
     for char in text:
         code = ord(char)
@@ -50,7 +148,8 @@ def detect_language(text: str, default: str = "en-IN") -> str:
 
 def _sarvam_synthesize(text: str, language: str | None = None, speaker: str | None = None) -> bytes:
     if not settings.sarvam_api_key:
-        raise TTSError("SARVAM_API_KEY not set")
+        log.warning("SARVAM_API_KEY not set – falling back to Edge TTS")
+        return _edge_synthesize_wav(text, language)
     body = {
         "text": text[:2500],
         "target_language_code": language or detect_language(text),
@@ -65,7 +164,11 @@ def _sarvam_synthesize(text: str, language: str | None = None, speaker: str | No
             res = _client.post("https://api.sarvam.ai/text-to-speech",
                                headers={"api-subscription-key": settings.sarvam_api_key}, json=body)
             if res.status_code >= 400:
-                raise TTSError(f"Sarvam TTS {res.status_code}: {res.text[:200]}")
+                err_msg = f"Sarvam TTS {res.status_code}: {res.text[:200]}"
+                if _is_quota_error(res.text + str(res.status_code)):
+                    log.warning("%s – switching to Edge TTS fallback", err_msg)
+                    return _edge_synthesize_wav(text, language)
+                raise TTSError(err_msg)
             return b"".join(base64.b64decode(chunk) for chunk in res.json()["audios"])
         except TTSError as e:
             last = e
@@ -79,14 +182,19 @@ def _sarvam_synthesize(text: str, language: str | None = None, speaker: str | No
 def _sarvam_synthesize_pcm(text: str, language: str | None = None, speaker: str | None = None) -> bytes:
     """Raw 16-bit little-endian mono PCM at 8 kHz, ready for the phone stream."""
     if not settings.sarvam_api_key:
-        raise TTSError("SARVAM_API_KEY not set")
+        log.warning("SARVAM_API_KEY not set – falling back to Edge TTS for PCM")
+        return _edge_synthesize_pcm(text, language)
     body = {"text": text[:2500], "target_language_code": language or detect_language(text), "model": settings.sarvam_tts_model,
             "speech_sample_rate": 8000, "output_audio_codec": "linear16"}
     if speaker:
         body["speaker"] = speaker
     res = _client.post("https://api.sarvam.ai/text-to-speech", headers={"api-subscription-key": settings.sarvam_api_key}, json=body)
     if res.status_code >= 400:
-        raise TTSError(f"Sarvam TTS {res.status_code}: {res.text[:200]}")
+        err_msg = f"Sarvam TTS {res.status_code}: {res.text[:200]}"
+        if _is_quota_error(res.text + str(res.status_code)):
+            log.warning("%s – switching to Edge TTS fallback for PCM", err_msg)
+            return _edge_synthesize_pcm(text, language)
+        raise TTSError(err_msg)
     pcm = b"".join(base64.b64decode(chunk) for chunk in res.json()["audios"])
     return pcm[44:] if pcm[:4] == b"RIFF" else pcm
 

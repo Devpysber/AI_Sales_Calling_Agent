@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { QualificationBadge } from '@/components/status'
-import { Badge, Button, Card, CardHeader, Field, Input, PageHeader, Select, Skeleton, Switch, Tabs, Textarea } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, PageHeader, Select, Skeleton, Switch, Tabs, Textarea } from '@/components/ui'
 import { api } from '@/lib/api'
 import type { AgentProfile, AgentTurnResult, KnowledgeDoc, Lead, Page, Turn } from '@/lib/types'
 import { cn, LANGUAGES, titleCase } from '@/lib/utils'
@@ -34,8 +34,9 @@ export default function Agent() {
   const tab = (['playground', 'persona', 'playbook'].includes(params.get('tab') ?? '') ? params.get('tab') : 'playground') as Section
   const setTab = (t: Section) => setParams((p) => { p.set('tab', t); return p }, { replace: true })
 
-  const { data } = useQuery({ queryKey: ['agent'], queryFn: () => api<ProfileResponse>(`${base}/profile`) })
+  const { data, isError, error, refetch, isFetching } = useQuery({ queryKey: ['agent'], queryFn: () => api<ProfileResponse>(`${base}/profile`) })
   const knowledge = useQuery({ queryKey: ['knowledge'], queryFn: () => api<KnowledgeResponse>(`${base}/knowledge`) })
+  useEffect(() => { if (knowledge.isError) toast.error('Could not load the knowledge base', { description: knowledge.error.message }) }, [knowledge.isError, knowledge.error])
 
   // One draft shared by every tab, so switching tabs never loses edits.
   const [draft, setDraft] = useState<AgentProfile | null>(null)
@@ -52,18 +53,29 @@ export default function Agent() {
   const invalid = draft ? [...unknownPlaceholders(draft.greeting_en), ...unknownPlaceholders(draft.greeting_hi)] : []
   const save = useMutation({
     mutationFn: (p: AgentProfile) => api<AgentProfile>(`${base}/profile`, { method: 'PUT', json: p }),
-    onSuccess: (profile) => {
+    onSuccess: (profile, vars) => {
       qc.setQueryData<ProfileResponse>(['agent'], (old) => old && { ...old, profile })
-      setDraft(profile)
+      // Keep edits typed while the PUT was in flight; only adopt the server copy if the draft is unchanged.
+      setDraft((d) => (d && JSON.stringify(d) !== JSON.stringify(vars) ? d : profile))
       window.dispatchEvent(new CustomEvent('agents:changed'))
       toast.success('Agent saved', { description: 'Changes apply to the next call and the playground.' })
     },
     onError: (e) => toast.error('Could not save', { description: e.message }),
   })
 
+  if (isError && !data) return (
+    <>
+      <PageHeader title="Agent" />
+      <Card>
+        <EmptyState icon={<AlertTriangle className="size-6 text-danger" />} title="Could not load this agent"
+          description={<span className="break-words">{error.message}</span>}
+          action={<Button variant="primary" loading={isFetching} onClick={() => void refetch()}><RotateCcw />Try again</Button>} />
+      </Card>
+    </>
+  )
   if (!data || !draft) return <><PageHeader title="Agent" /><Skeleton className="h-[560px] rounded-xl" /></>
 
-  const docs = knowledge.data?.stats.documents ?? 0
+  const docs = knowledge.data?.stats?.documents ?? knowledge.data?.documents?.length ?? 0
   const checks: { label: string; done: boolean; tab: Section }[] = [
     { label: 'Agent and company name', done: !!draft.agent_name.trim() && !!draft.company_name.trim(), tab: 'persona' },
     { label: 'Company tagline', done: !!draft.company_tagline.trim(), tab: 'persona' },
@@ -75,30 +87,32 @@ export default function Agent() {
   ]
 
   return (
-    <div className={cn(dirty && tab !== 'playground' && 'pb-20')}>
+    <div>
       <PageHeader eyebrow={<>{agent?.name} · Build</>} title="Persona & playground"
         description="Shape how this agent introduces itself, what it asks and how it handles pushback, then rehearse a call in the browser with its own voice and knowledge before it dials anyone."
         actions={<Tabs value={tab} onChange={setTab} items={[
           { value: 'playground', label: 'Playground' },
-          { value: 'persona', label: <span className="flex items-center gap-1.5">Persona & voice{dirty && <span className="size-1.5 rounded-full bg-warning" />}</span> },
-          { value: 'playbook', label: 'Call playbook' },
+          { value: 'persona', label: <span className="flex items-center gap-1.5"><span className="sm:hidden">Persona</span><span className="hidden sm:inline">Persona & voice</span>{dirty && <span className="size-1.5 rounded-full bg-warning" />}</span> },
+          { value: 'playbook', label: <><span className="sm:hidden">Playbook</span><span className="hidden sm:inline">Call playbook</span></> },
         ]} />} />
 
-      <AgentSummary profile={draft} saved={data.profile} voices={data.voices} languages={data.languages} docs={docs} checks={checks} onGo={setTab} />
+      <AgentSummary profile={draft} saved={data.profile} voices={data.voices} languages={data.languages} docs={docs} knowledgeError={knowledge.isError} checks={checks} onGo={setTab} />
 
       {tab === 'playground'
-        ? <Playground profile={data.profile} unsaved={dirty} onSave={() => save.mutate(draft)} saving={save.isPending} />
-        : <ProfileEditor section={tab} draft={draft} setDraft={setDraft} data={data} />}
+        ? <Playground profile={data.profile} unsaved={dirty} invalid={invalid} onSave={() => { if (!invalid.length) save.mutate(draft) }} saving={save.isPending} />
+        : <fieldset disabled={save.isPending} className="min-w-0 disabled:opacity-70"><ProfileEditor section={tab} draft={draft} setDraft={setDraft} data={data} /></fieldset>}
 
       {dirty && tab !== 'playground' && (
-        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface/95 backdrop-blur-md lg:left-64">
+        <div className="sticky bottom-0 z-30 -mx-4 mt-4 border-t border-border bg-surface/95 backdrop-blur-md sm:-mx-6 lg:-mx-8">
           <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-3 px-4 py-3 sm:px-6 lg:px-8">
-            <AlertTriangle className="size-4 text-warning" />
-            <span className="mr-auto text-sm font-medium">
+            <AlertTriangle className="size-4 shrink-0 text-warning" />
+            <span className="min-w-0 flex-1 basis-40 text-sm font-medium break-words">
               {invalid.length ? <span className="text-danger">Unknown placeholder {invalid.map((p) => `{${p}}`).join(', ')} — use {'{name}'}, {'{agent}'} or {'{company}'}</span> : 'You have unsaved changes'}
             </span>
-            <Button onClick={() => setDraft(data.profile)}><RotateCcw />Discard</Button>
-            <Button variant="primary" disabled={invalid.length > 0} loading={save.isPending} onClick={() => save.mutate(draft)}><Save />Save changes</Button>
+            <div className="flex gap-2">
+              <Button disabled={save.isPending} onClick={() => setDraft(data.profile)}><RotateCcw />Discard</Button>
+              <Button variant="primary" disabled={invalid.length > 0} loading={save.isPending} onClick={() => save.mutate(draft)}><Save />Save changes</Button>
+            </div>
           </div>
         </div>
       )}
@@ -108,8 +122,8 @@ export default function Agent() {
 
 /* ============================== Summary ============================== */
 
-function AgentSummary({ profile, saved, voices, languages, docs, checks, onGo }: {
-  profile: AgentProfile; saved: AgentProfile; voices: string[]; languages: Record<string, string>; docs: number
+function AgentSummary({ profile, saved, voices, languages, docs, knowledgeError, checks, onGo }: {
+  profile: AgentProfile; saved: AgentProfile; voices: string[]; languages: Record<string, string>; docs: number; knowledgeError?: boolean
   checks: { label: string; done: boolean; tab: Section }[]; onGo: (t: Section) => void
 }) {
   const { path } = useAgent()
@@ -122,7 +136,7 @@ function AgentSummary({ profile, saved, voices, languages, docs, checks, onGo }:
     ['Voice', changed('voice_speaker', voices.includes(profile.voice_speaker) ? titleCase(profile.voice_speaker) : profile.voice_speaker)],
     ['Language', changed('default_language', languages[profile.default_language] ?? profile.default_language)],
     ['Max length', changed('max_call_minutes', `${profile.max_call_minutes} min`)],
-    ['Knowledge', docs ? `${docs} document${docs > 1 ? 's' : ''}` : <span key="none" className="text-warning">None</span>],
+    ['Knowledge', knowledgeError ? <span key="err" className="text-danger">Failed to load</span> : docs ? `${docs} document${docs > 1 ? 's' : ''}` : <span key="none" className="text-warning">None</span>],
     ['Recording', profile.record_calls ? 'On' : 'Off'],
   ]
 
@@ -136,12 +150,12 @@ function AgentSummary({ profile, saved, voices, languages, docs, checks, onGo }:
             <div className="truncate text-sm text-muted">{profile.company_name}{profile.company_tagline && ` · ${profile.company_tagline}`}</div>
           </div>
         </div>
-        <dl className="flex flex-1 flex-wrap gap-x-8 gap-y-3">
+        <dl className="flex min-w-0 flex-1 basis-full flex-wrap gap-x-8 gap-y-3 sm:basis-auto">
           {facts.map(([k, v]) => (
-            <div key={k}><dt className="text-xs text-muted">{k}</dt><dd className="text-sm font-medium">{v}</dd></div>
+            <div key={k} className="min-w-0"><dt className="text-xs text-muted">{k}</dt><dd className="truncate text-sm font-medium">{v}</dd></div>
           ))}
         </dl>
-        <button type="button" onClick={() => setOpen(!open)} className="flex items-center gap-3 rounded-lg px-2 py-1 text-left hover:bg-surface-2" aria-expanded={open}>
+        <button type="button" onClick={() => setOpen(!open)} className="flex min-h-10 items-center gap-3 rounded-lg px-2 py-1 text-left hover:bg-surface-2" aria-expanded={open}>
           <Ring pct={pct} />
           <div><div className="text-sm font-medium">{pct === 100 ? 'Ready to call' : 'Setup'}</div><div className="text-xs text-muted">{done}/{checks.length} complete</div></div>
         </button>
@@ -151,9 +165,9 @@ function AgentSummary({ profile, saved, voices, languages, docs, checks, onGo }:
           {checks.map((c) => (
             <li key={c.label}>
               {c.label.includes('knowledge') && !c.done
-                ? <Link to={path('/knowledge')} className="flex items-center gap-2 py-1 text-sm text-fg-2 hover:text-brand"><CircleDashed className="size-4 text-muted" />{c.label}</Link>
-                : <button type="button" onClick={() => onGo(c.tab)} className={cn('flex items-center gap-2 py-1 text-left text-sm', c.done ? 'text-muted' : 'text-fg-2 hover:text-brand')}>
-                    {c.done ? <Check className="size-4 text-success" /> : <CircleDashed className="size-4 text-muted" />}{c.label}
+                ? <Link to={path('/knowledge')} className="flex min-h-10 items-center gap-2 py-1 text-sm text-fg-2 hover:text-brand"><CircleDashed className="size-4 shrink-0 text-muted" />{c.label}</Link>
+                : <button type="button" onClick={() => onGo(c.tab)} className={cn('flex min-h-10 items-center gap-2 py-1 text-left text-sm', c.done ? 'text-muted' : 'text-fg-2 hover:text-brand')}>
+                    {c.done ? <Check className="size-4 shrink-0 text-success" /> : <CircleDashed className="size-4 shrink-0 text-muted" />}{c.label}
                   </button>}
             </li>
           ))}
@@ -201,7 +215,9 @@ function ProfileEditor({ section, draft, setDraft, data }: {
   const set = <K extends keyof AgentProfile>(k: K, v: AgentProfile[K]) => setDraft((p) => p && { ...p, [k]: v })
   const [playing, setPlaying] = useState<string | null>(null)
   const audio = useRef<HTMLAudioElement | null>(null)
-  useEffect(() => () => audio.current?.pause(), [])
+  // Bumped on every preview start/stop so a request that resolves after Stop (or after a newer request) is ignored.
+  const previewToken = useRef(0)
+  useEffect(() => () => { previewToken.current++; audio.current?.pause() }, [])
 
   // What this agent calls the person on the line: patient, guest, student, customer…
   const caller = (draft.customer_noun || 'customer').trim()
@@ -209,16 +225,35 @@ function ProfileEditor({ section, draft, setDraft, data }: {
   const fill = (t: string) => t.replace(/\{(\w+)\}/g, (m, k: string) => ({ name: 'Rahul', agent: draft.agent_name, company: draft.company_name })[k] ?? m)
 
   const preview = async (key: string, text: string, language: string) => {
+    const token = ++previewToken.current
     if (playing === key) { audio.current?.pause(); setPlaying(null); return }
     audio.current?.pause()
     setPlaying(key)
     try {
       const blob = await api<Blob>(`${base}/voice-preview`, { method: 'POST', json: { text: text.slice(0, 600), language, speaker: draft.voice_speaker } })
-      const a = new Audio(URL.createObjectURL(blob))
+      if (token !== previewToken.current) return // stopped or superseded while fetching
+      if (!(blob instanceof Blob) || !blob.size) throw new Error('The voice service returned no audio')
+      const url = URL.createObjectURL(blob)
+      const a = new Audio(url)
       audio.current = a
-      a.onended = () => setPlaying(null)
+      const done = () => { URL.revokeObjectURL(url); setPlaying((p) => (p === key ? null : p)) }
+      a.onended = done
+      a.onpause = done
+      a.onerror = () => { done(); toast.error('Voice preview failed', { description: 'The browser could not play the audio.' }) }
       await a.play()
-    } catch (e) { toast.error('Voice preview failed', { description: (e as Error).message }); setPlaying(null) }
+    } catch (e) {
+      if (token !== previewToken.current) return
+      toast.error('Voice preview failed', { description: (e as Error).message }); setPlaying(null)
+    }
+  }
+
+  // Max call length is edited as free text so backspacing to empty does not snap to 1; it is clamped when the field loses focus.
+  const [minutes, setMinutes] = useState(String(draft.max_call_minutes))
+  useEffect(() => { setMinutes(String(draft.max_call_minutes)) }, [draft.max_call_minutes])
+  const commitMinutes = () => {
+    const n = Math.min(30, Math.max(1, Math.round(Number(minutes)) || 1))
+    setMinutes(String(n))
+    if (n !== draft.max_call_minutes) set('max_call_minutes', n)
   }
 
   const insert = (key: 'greeting_en' | 'greeting_hi', token: string) => set(key, `${draft[key]}${draft[key].endsWith(' ') || !draft[key] ? '' : ' '}{${token}}`)
@@ -284,7 +319,7 @@ function ProfileEditor({ section, draft, setDraft, data }: {
           <div className="grid gap-4 sm:grid-cols-3">
             <Field label="Speaker"><Select value={draft.voice_speaker} onChange={(e) => set('voice_speaker', e.target.value)}>{data.voices.map((v) => <option key={v} value={v}>{titleCase(v)}</option>)}</Select></Field>
             <Field label="Default language" hint="Used when a lead has none"><Select value={draft.default_language} onChange={(e) => set('default_language', e.target.value)}>{Object.entries(data.languages).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></Field>
-            <Field label="Max call length" hint="Plivo hangs up after this"><div className="relative"><Input type="number" min={1} max={30} value={draft.max_call_minutes} onChange={(e) => set('max_call_minutes', Math.min(30, Math.max(1, Number(e.target.value) || 1)))} className="pr-12" /><span className="pointer-events-none absolute top-2 right-3 text-sm text-muted">min</span></div></Field>
+            <Field label="Max call length" hint="Plivo hangs up after this"><div className="relative"><Input type="number" min={1} max={30} value={minutes} onChange={(e) => setMinutes(e.target.value)} onBlur={commitMinutes} className="pr-12" /><span className="pointer-events-none absolute top-2 right-3 text-sm text-muted">min</span></div></Field>
           </div>
         </Section>
 
@@ -297,11 +332,11 @@ function ProfileEditor({ section, draft, setDraft, data }: {
                 <div key={key} className="grid gap-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="mr-auto text-[13px] font-medium text-fg-2">{label}</span>
-                    {PLACEHOLDERS.map((p) => <button key={p} type="button" onClick={() => insert(key, p)} className="rounded-md border border-border px-1.5 py-0.5 font-mono text-[11px] text-muted hover:border-brand hover:text-brand">{`{${p}}`}</button>)}
+                    {PLACEHOLDERS.map((p) => <button key={p} type="button" onClick={() => insert(key, p)} className="min-h-10 rounded-md border border-border px-2.5 py-0.5 font-mono text-[11px] text-muted hover:border-brand hover:text-brand sm:min-h-0 sm:px-1.5">{`{${p}}`}</button>)}
                   </div>
                   <Textarea rows={2} value={draft[key]} maxLength={400} onChange={(e) => set(key, e.target.value)} className={cn(bad.length && 'border-danger focus:border-danger focus:ring-danger/15')} />
                   <div className="flex items-start gap-3 rounded-lg bg-surface-2 px-3 py-2.5">
-                    <Button size="icon" variant="ghost" className="-my-1 -ml-1 size-8" onClick={() => preview(key, fill(draft[key]), lang)} disabled={!draft[key].trim()} aria-label={`Play ${label} greeting`}>{playing === key ? <Square /> : <Play />}</Button>
+                    <Button size="icon" variant="ghost" className="-my-2 -ml-1 size-10 sm:-my-1 sm:size-8" onClick={() => preview(key, fill(draft[key]), lang)} disabled={!draft[key].trim()} aria-label={`Play ${label} greeting`}>{playing === key ? <Square /> : <Play />}</Button>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm text-fg-2">{fill(draft[key]) || <span className="text-muted">Empty</span>}</p>
                       <p className={cn('mt-0.5 text-xs', bad.length ? 'text-danger' : words > 25 ? 'text-warning' : 'text-muted')}>
@@ -316,11 +351,11 @@ function ProfileEditor({ section, draft, setDraft, data }: {
         </Section>
 
         <Card className="flex items-center justify-between gap-4 p-5">
-          <div><div className="font-medium">Record calls</div><div className="text-sm text-muted">Save recordings and play them from call history. Tell people the call is recorded where the law requires it.</div></div>
+          <div className="min-w-0"><div className="font-medium">Record calls</div><div className="text-sm text-muted">Save recordings and play them from call history. Tell people the call is recorded where the law requires it.</div></div>
           <Switch checked={draft.record_calls} onChange={(v) => set('record_calls', v)} label="Record calls" />
         </Card>
         <Card className="flex items-center justify-between gap-4 p-5">
-          <div><div className="font-medium">Voicemail detection</div><div className="text-sm text-muted">Hang up automatically when an answering machine picks up. Can misfire on Indian caller tunes, so keep it off unless you see voicemail calls.</div></div>
+          <div className="min-w-0"><div className="font-medium">Voicemail detection</div><div className="text-sm text-muted">Hang up automatically when an answering machine picks up. Can misfire on Indian caller tunes, so keep it off unless you see voicemail calls.</div></div>
           <Switch checked={draft.detect_voicemail} onChange={(v) => set('detect_voicemail', v)} label="Voicemail detection" />
         </Card>
       </Stagger>
@@ -334,7 +369,18 @@ function ProfileEditor({ section, draft, setDraft, data }: {
 interface SpeechRecognitionLike { lang: string; interimResults: boolean; onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void; onend: () => void; onerror: (e: { error: string }) => void; start: () => void; stop: () => void }
 type ChatTurn = Turn & { meta?: AgentTurnResult }
 
-function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfile; unsaved: boolean; onSave: () => void; saving: boolean }) {
+/** Turns a raw provider error dump into one line a person can act on. */
+function humanLlmError(detail: string) {
+  const d = detail.toLowerCase()
+  if (/no credits|insufficient_quota|exceed your available credits|\b402\b|payment/.test(d)) return 'the AI provider is out of credits. Top up the account, then retry.'
+  if (/prompt tokens limit|context length|too many tokens/.test(d)) return 'the conversation plus knowledge is too long for the free-tier model. Restart the rehearsal or trim the knowledge base.'
+  if (/\b429\b|rate limit|rate-limit|in-flight/.test(d)) return 'the AI provider is rate-limited right now. Wait a few seconds and retry.'
+  if (/\b401\b|\b403\b|api key|unauthori/.test(d)) return 'the AI provider rejected the API key. Check the keys in Settings.'
+  if (/timeout|timed out|network|failed to fetch|econn/.test(d)) return 'the AI provider did not answer in time. Retry in a moment.'
+  return 'the AI provider returned an error. Retry, or check the technical detail below.'
+}
+
+function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: AgentProfile; unsaved: boolean; invalid: string[]; onSave: () => void; saving: boolean }) {
   const { base } = useAgent()
   // Rehearsing a call should use the agent's own word for the person on the line.
   const caller = (profile.customer_noun || 'customer').trim()
@@ -346,13 +392,6 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
   const [leadId, setLeadId] = useState<number | ''>('')
   const [speak, setSpeak] = useState(true) // Voice is now primary
   const [listening, setListening] = useState(false)
-  const [time, setTime] = useState(new Date())
-
-  // Real-time clock update
-  useEffect(() => {
-    const timer = setInterval(() => setTime(new Date()), 1000)
-    return () => clearInterval(timer)
-  }, [])
 
   const [selected, setSelected] = useState<number | null>(null)
   const [ended, setEnded] = useState(false)
@@ -360,15 +399,17 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
   const mouthTimer = useRef<number>(0)
   // Voice loudness sampled from the playing audio, read by the avatar every frame to move the mouth in time.
   const level = useRef(0)
-  const analyser = useRef<{ ctx: AudioContext; raf: number } | null>(null)
+  const analyser = useRef<{ ctx: AudioContext; node?: AnalyserNode; source?: MediaElementAudioSourceNode; raf: number } | null>(null)
   const meter = (a: HTMLAudioElement) => {
     try {
       const ctx = analyser.current?.ctx ?? new AudioContext()
+      // Tear down the previous graph first: one source node per reply would otherwise pile up on the shared context.
+      if (analyser.current) { cancelAnimationFrame(analyser.current.raf); analyser.current.source?.disconnect(); analyser.current.node?.disconnect() }
       const node = ctx.createAnalyser(); node.fftSize = 512
-      ctx.createMediaElementSource(a).connect(node); node.connect(ctx.destination)
+      const source = ctx.createMediaElementSource(a)
+      source.connect(node); node.connect(ctx.destination)
       void ctx.resume()
       const buf = new Uint8Array(node.fftSize)
-      if (analyser.current) cancelAnimationFrame(analyser.current.raf)
       const tick = () => {
         node.getByteTimeDomainData(buf)
         let sum = 0
@@ -376,7 +417,7 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
         level.current = Math.sqrt(sum / buf.length)
         analyser.current!.raf = requestAnimationFrame(tick)
       }
-      analyser.current = { ctx, raf: requestAnimationFrame(tick) }
+      analyser.current = { ctx, node, source, raf: requestAnimationFrame(tick) }
     } catch { level.current = 0 }
   }
   const bottom = useRef<HTMLDivElement>(null)
@@ -384,61 +425,86 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
   const audio = useRef<HTMLAudioElement | null>(null)
   const historyRef = useRef(history)
   useEffect(() => { historyRef.current = history }, [history])
+  // Bumped by clear(): a reply that lands after Restart / a mode switch belongs to the old rehearsal and is dropped.
+  const session = useRef(0)
+  // Read by submit() so a late voice result cannot fire a second turn while one is in flight.
+  const pending = useRef(false)
+  // The last customer message the agent could not answer, kept in the transcript with a Retry.
+  const [failed, setFailed] = useState<{ message: string; detail: string } | null>(null)
+  const [showAll, setShowAll] = useState(false)
 
   const leads = useQuery({ queryKey: ['leads', 'playground'], queryFn: () => api<Page<Lead>>(`${base}/leads`, { params: { page_size: 100, sort: 'name', order: 'asc' } }) })
+  useEffect(() => { if (leads.isError) toast.error('Could not load leads for the prospect list', { description: leads.error.message }) }, [leads.isError, leads.error])
   const lead = leads.data?.items.find((l) => l.id === leadId)
 
   const greeting = useQuery({
     queryKey: ['agent', 'greeting', lang, leadId, direction, profile],
     queryFn: () => api<{ text: string }>(`${base}/greeting`, { params: { language: lang, lead_id: leadId || undefined, purpose: inbound ? 'inbound' : undefined } }),
   })
-  useEffect(() => { if (greeting.data && history.length === 0) setHistory([{ role: 'assistant', text: greeting.data.text }]) }, [greeting.data, history.length])
+  // Seed the opening line at index 0; if a customer turn somehow landed first, the greeting still goes in front of it.
+  useEffect(() => {
+    if (!greeting.data) return
+    setHistory((h) => (h[0]?.role === 'assistant' ? h : [{ role: 'assistant', text: greeting.data.text }, ...h]))
+  }, [greeting.data])
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }) }, [history])
-  useEffect(() => () => { audio.current?.pause(); recog.current?.stop(); window.clearTimeout(mouthTimer.current); if (analyser.current) { cancelAnimationFrame(analyser.current.raf); void analyser.current.ctx.close() } }, [])
+  useEffect(() => () => { audio.current?.pause(); recog.current?.stop(); window.clearTimeout(mouthTimer.current); if (analyser.current) { cancelAnimationFrame(analyser.current.raf); analyser.current.source?.disconnect(); analyser.current.node?.disconnect(); void analyser.current.ctx.close() } }, [])
 
-  const play = (url: string) => { 
-    audio.current?.pause(); 
+  const play = (url: string) => {
+    audio.current?.pause();
     window.clearTimeout(mouthTimer.current)
-    audio.current = new Audio(url); 
+    // The backend builds audio URLs from PUBLIC_BASE_URL (often an ngrok host). Play the same-origin path instead so the
+    // request goes through the dev proxy / this origin: a cross-origin element routed through an AnalyserNode is silent.
+    let src = url
+    try { const u = new URL(url, location.origin); src = u.origin === location.origin ? u.href : u.pathname + u.search } catch { /* keep as given */ }
+    audio.current = new Audio(src);
     audio.current.onplay = () => setIsSpeaking(true);
     audio.current.crossOrigin = 'anonymous'
     meter(audio.current)
     audio.current.onended = () => { setIsSpeaking(false); level.current = 0 };
     audio.current.onerror = () => setIsSpeaking(false);
     audio.current.onpause = () => setIsSpeaking(false);
-    void audio.current.play() 
+    // pause() from the next reply / Restart, or blocked autoplay, rejects play(): swallow it and reset the speaking state.
+    audio.current.play().catch(() => { setIsSpeaking(false); level.current = 0 })
   }
 
   const send = useMutation({
-    mutationFn: ({ message, prior }: { message: string; prior: ChatTurn[] }) => api<AgentTurnResult>(`${base}/playground`, {
-      method: 'POST', json: { message, speak, lead_id: leadId || undefined, purpose: inbound ? 'inbound' : undefined, history: prior.map(({ role, text }) => ({ role, text })) },
+    mutationFn: ({ message, prior }: { message: string; prior: ChatTurn[]; session: number }) => api<AgentTurnResult>(`${base}/playground`, {
+      method: 'POST', json: { message, lead_id: leadId || undefined, purpose: inbound ? 'inbound' : undefined, history: prior.map(({ role, text }) => ({ role, text })) },
     }),
-    onSuccess: (res) => {
+    onSettled: () => { pending.current = false },
+    onSuccess: (res, vars) => {
+      if (vars.session !== session.current) return // the rehearsal was restarted or switched while this reply was in flight
       setHistory((h) => { setSelected(h.length); return [...h, { role: 'assistant', text: res.reply, meta: res }] })
-      if (res.audio_url) play(res.audio_url)
+      if (speak && res.audio_url) play(res.audio_url)
       else {
-        // No voice (TTS outage): still mouth the reply for roughly as long as it would take to say it.
+        // Voice off, or no audio (TTS outage): still mouth the reply for roughly as long as it would take to say it.
+        audio.current?.pause()
         setIsSpeaking(true)
         window.clearTimeout(mouthTimer.current)
         mouthTimer.current = window.setTimeout(() => setIsSpeaking(false), Math.min(12000, 600 + res.reply.length * 55))
       }
-      if (res.audio_error) toast.warning('Voice unavailable', { description: res.audio_error })
+      if (speak && res.audio_error) toast.warning('Voice unavailable', { description: res.audio_error })
       if (res.end_call) setEnded(true)
     },
-    onError: (e) => {
-      toast.error('Agent error', { description: e.message })
-      setHistory((h) => h.slice(0, -1))
+    onError: (e, { message, session: s }) => {
+      if (s !== session.current) return
+      // Drop the unanswered bubble and keep a persistent, human explanation with a Retry instead of a raw provider dump.
+      setHistory((h) => (h.at(-1)?.role === 'customer' && h.at(-1)?.text === message ? h.slice(0, -1) : h))
+      setFailed({ message, detail: e.message })
+      toast.error('The agent could not reply', { description: humanLlmError(e.message) })
     },
   })
 
   // Reads history through a ref so voice input (which fires later) never sends a stale conversation.
   const submit = useCallback((message: string) => {
     const m = message.trim()
-    if (!m || send.isPending) return
+    if (!m || pending.current) return
+    pending.current = true
     const prior = historyRef.current
     setHistory([...prior, { role: 'customer', text: m }])
     setText('')
-    send.mutate({ message: m, prior })
+    setFailed(null)
+    send.mutate({ message: m, prior, session: session.current })
   }, [send])
 
   const toggleMic = () => {
@@ -451,8 +517,8 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
     r.interimResults = false
     r.onresult = (e) => submit(e.results[0]![0]!.transcript)
     r.onend = () => setListening(false)
-    r.onerror = (e: { error: string }) => { 
-      setListening(false); 
+    r.onerror = (e: { error: string }) => {
+      setListening(false);
       if (e.error === 'no-speech') {
         // Fail silently on timeout, they just didn't speak
       } else if (e.error === 'audio-capture') {
@@ -460,15 +526,29 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
       } else if (e.error === 'not-allowed') {
         toast.error('Microphone access denied by browser.')
       } else {
-        toast.error('Browser speech error: ' + e.error) 
+        toast.error('Browser speech error: ' + e.error)
       }
     }
     recog.current = r
-    r.start()
+    try { r.start() } catch (e) { toast.error('Could not start listening', { description: (e as Error).message }); return }
     setListening(true)
   }
 
-  const reset = () => { audio.current?.pause(); window.clearTimeout(mouthTimer.current); setIsSpeaking(false); setHistory([]); setSelected(null); setEnded(false); void greeting.refetch() }
+  const clear = () => {
+    session.current++; pending.current = false
+    audio.current?.pause(); recog.current?.stop(); window.clearTimeout(mouthTimer.current); setIsSpeaking(false); level.current = 0
+    setHistory([]); setSelected(null); setEnded(false); setFailed(null); setText('')
+  }
+  const waitingForGreeting = greeting.isPending && history.length === 0
+  const inputLocked = ended || waitingForGreeting
+  // Restart: refetch may hand back the same (structurally shared) greeting object, so the seeding effect would not re-run — seed directly.
+  const reset = async () => {
+    clear()
+    const s = session.current
+    const g = await greeting.refetch()
+    if (s !== session.current || !g.data) return
+    setHistory((h) => (h[0]?.role === 'assistant' ? h : [{ role: 'assistant', text: g.data!.text }, ...h]))
+  }
 
   const turns = history.filter((t) => t.meta)
   const inspected = (selected !== null ? history[selected]?.meta : undefined) ?? turns.at(-1)?.meta
@@ -476,12 +556,16 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
 
   return (
     <div className="grid gap-4 grid-cols-1">
-      <Card className="relative flex h-[calc(100vh-290px)] min-h-[540px] flex-col overflow-hidden">
-        
-        {/* 3D Spline Avatar Background */}
-        <div className="absolute inset-0 z-0 bg-surface-1" aria-hidden>
+      <Card className="relative flex h-[calc(100dvh-290px)] min-h-[640px] flex-col overflow-hidden sm:min-h-[540px]">
+
+        {/* 3D Avatar – anchored to bottom 60% of card so the face stays clear of chat bubbles */}
+        <div className="absolute inset-x-0 bottom-0 top-[38%] z-0" aria-hidden>
           <AgentAvatar zoomOut={true} isSpeaking={isSpeaking || send.isPending} isListening={listening} level={level} />
         </div>
+        {/* Dark background for the chat/text area at the top */}
+        <div className="absolute inset-x-0 top-0 h-[38%] z-0 bg-surface" aria-hidden />
+        {/* Subtle gradient fade between chat area and avatar */}
+        <div className="absolute inset-x-0 top-[34%] z-[1] h-20 bg-gradient-to-b from-surface/80 to-transparent pointer-events-none" aria-hidden />
 
         <div className="relative z-10 flex flex-wrap items-center gap-2 border-b border-border/50 bg-elevated/40 px-4 py-3 backdrop-blur-xl">
           <div className="mr-auto flex min-w-0 items-center gap-2.5">
@@ -492,48 +576,91 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
               <div className="truncate text-xs text-muted">{inbound ? 'Rehearsing an inbound call' : 'Rehearsing an outbound call'} · voice {titleCase(profile.voice_speaker)} · nothing is saved to the CRM</div>
             </div>
           </div>
-          <Tabs value={direction} onChange={(v) => { setDirection(v); setHistory([]); setSelected(null); setEnded(false) }}
+          <Tabs value={direction} onChange={(v) => { setDirection(v); clear() }}
             items={[{ value: 'outbound', label: 'Outbound' }, { value: 'inbound', label: 'Inbound' }]} />
-          <Select value={leadId} onChange={(e) => { setLeadId(e.target.value ? Number(e.target.value) : ''); reset() }} className="h-8 w-auto max-w-44 text-[13px]" aria-label="Prospect">
+          <Select value={leadId} onChange={(e) => { setLeadId(e.target.value ? Number(e.target.value) : ''); clear() }} className="h-10 w-auto max-w-40 text-[13px] sm:h-8 sm:max-w-44" aria-label="Prospect">
             <option value="">Sample {caller}</option>
+            {leads.isPending && <option value="" disabled>Loading leads…</option>}
             {leads.data?.items.map((l) => <option key={l.id} value={l.id}>{l.name || l.phone}</option>)}
           </Select>
-          <Select value={lang} onChange={(e) => { setLang(e.target.value); setHistory([]); setSelected(null); setEnded(false) }} className="h-8 w-auto text-[13px]" aria-label="Greeting language">
+          <Select value={lang} onChange={(e) => { setLang(e.target.value); clear() }} className="h-10 w-auto text-[13px] sm:h-8" aria-label="Greeting language">
             {Object.entries(LANGUAGES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </Select>
-          <label className="flex h-8 items-center gap-2 rounded-lg border border-border px-2 text-[13px] text-muted"><Volume2 className="size-3.5" />Voice<Switch checked={speak} onChange={setSpeak} label="Speak replies" /></label>
-          <Button size="sm" variant="ghost" onClick={reset}><RotateCcw />Restart</Button>
+          <label className="flex h-10 items-center gap-2 rounded-lg border border-border px-2 text-[13px] text-muted sm:h-8"><Volume2 className="size-3.5" />Voice<Switch checked={speak} onChange={setSpeak} label="Speak replies" /></label>
+          <Button size="sm" variant="ghost" onClick={() => void reset()}><RotateCcw />Restart</Button>
           {/* IST clock lives in the toolbar so it can wrap with the other controls instead of floating over them. */}
-          <div className="flex h-8 items-center gap-2 rounded-full border border-border bg-black/30 px-3 text-[13px] font-medium tabular-nums">
-            <div className="size-2 rounded-full bg-green-500 animate-pulse" />
-            {time.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' })} IST
-          </div>
+          <Clock />
         </div>
 
         {unsaved && (
           <div className="relative z-10 flex flex-wrap items-center gap-2 border-b border-warning/30 bg-warning-soft/80 px-4 py-2 text-[13px] text-warning backdrop-blur-md">
-            <AlertTriangle className="size-4" /><span className="mr-auto">The playground uses your saved agent. Save your edits to test them.</span>
-            <Button size="sm" variant="primary" loading={saving} onClick={onSave}><Save />Save</Button>
+            <AlertTriangle className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1 basis-48 break-words">
+              {invalid.length ? `Fix the unknown placeholder ${invalid.map((p) => `{${p}}`).join(', ')} in Persona & voice before saving.` : 'The playground uses your saved agent. Save your edits to test them.'}
+            </span>
+            <Button size="sm" variant="primary" disabled={invalid.length > 0} loading={saving} onClick={onSave}><Save />Save</Button>
           </div>
         )}
 
-        {/* Bottom Right UI Controls (Moved to avoid overlap) */}
-        <div className="absolute bottom-6 right-6 z-20 flex flex-col items-end pointer-events-auto gap-3">
-          
+        {/* Transcript: stays in the upper zone so it never overlaps the face */}
+        <div className={cn('relative z-10 mt-auto flex flex-col gap-2 overflow-y-auto px-4 pt-4 pb-20 sm:pb-16',
+          showAll ? 'pointer-events-auto max-h-[55%] bg-black/25 backdrop-blur-sm' : 'pointer-events-none max-h-[38%] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden')}>
+          {history.length > 4 && (
+            <button type="button" onClick={() => setShowAll((v) => !v)}
+              className="pointer-events-auto sticky top-0 z-10 mb-1 min-h-10 self-start rounded-full bg-black/45 px-3 py-1 text-xs font-medium text-white/85 backdrop-blur-md hover:bg-black/60">
+              {showAll ? 'Show last 4 turns' : `Show full transcript (${history.length} turns)`}
+            </button>
+          )}
+          {greeting.isError && history.length === 0 && (
+            <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-danger/40 bg-danger-soft/80 px-3 py-2 text-[13px] text-danger backdrop-blur-md">
+              <AlertTriangle className="size-4 shrink-0" /><span className="min-w-0 break-words">Could not load the opening line: {greeting.error.message}</span>
+              <Button size="sm" variant="ghost" onClick={() => void greeting.refetch()}><RotateCcw />Retry</Button>
+            </div>
+          )}
+          {greeting.isPending && history.length === 0 && (
+            <div className="self-start rounded-2xl bg-black/40 px-3 py-2 text-[13px] text-white/80 backdrop-blur-md">Preparing the opening line…</div>
+          )}
+          {(showAll ? history : history.slice(-4)).map((t, i, arr) => (
+            <div key={history.length - arr.length + i} className={cn('pointer-events-auto max-w-[92%] rounded-2xl px-3.5 py-2 text-[13px] leading-relaxed break-words shadow-lg backdrop-blur-md sm:max-w-[70%]',
+              t.role === 'assistant' ? 'self-start bg-black/45 text-white' : 'self-end bg-brand text-brand-fg')}>
+              {t.text}
+            </div>
+          ))}
+          {send.isPending && <div className="self-start rounded-2xl bg-black/40 px-3.5 py-2 text-[13px] text-white/70 backdrop-blur-md">{profile.agent_name || 'Agent'} is thinking…</div>}
+          {failed && !send.isPending && (
+            <div className="pointer-events-auto flex max-w-[92%] flex-col gap-1.5 self-start rounded-2xl border border-danger/40 bg-danger-soft/90 px-3 py-2 text-[13px] text-danger backdrop-blur-md sm:max-w-[70%]">
+              <div className="flex flex-wrap items-center gap-2">
+                <AlertTriangle className="size-4 shrink-0" />
+                <span className="min-w-0 flex-1 basis-40 break-words">{profile.agent_name || 'The agent'} could not reply — {humanLlmError(failed.detail)}</span>
+                <Button size="sm" variant="ghost" onClick={() => submit(failed.message)}><RotateCcw />Retry</Button>
+              </div>
+              <details className="text-xs opacity-80"><summary className="cursor-pointer">Technical detail</summary><p className="mt-1 break-words font-mono" title={failed.detail}>{failed.detail}</p></details>
+            </div>
+          )}
+          {ended && (
+            <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-warning/40 bg-warning-soft/90 px-3 py-2 text-[13px] text-warning backdrop-blur-md">
+              <AlertTriangle className="size-4 shrink-0" />The agent ended the call.<Button size="sm" variant="ghost" onClick={() => void reset()}><RotateCcw />Start again</Button>
+            </div>
+          )}
+          <div ref={bottom} />
+        </div>
+
+        {/* Bottom controls: full width on phones, docked bottom-right from sm up. */}
+        <div className="pointer-events-auto absolute inset-x-3 bottom-3 z-20 flex flex-col items-end gap-3 sm:inset-x-auto sm:right-6 sm:bottom-6">
           {listening && (
-            <div className="bg-red-500 text-white text-xs font-bold px-3 py-1 rounded-full animate-pulse shadow-lg mr-2">
+            <div className="mr-2 animate-pulse rounded-full bg-red-500 px-3 py-1 text-xs font-bold text-white shadow-lg">
               Listening...
             </div>
           )}
 
-          <div className="flex items-center gap-3">
-            <form onSubmit={(e) => { e.preventDefault(); submit(text) }} className="flex w-64 items-center rounded-full bg-white/10 p-1.5 backdrop-blur-md border border-white/20 transition-all focus-within:w-80 focus-within:bg-white/20">
-              <Input value={text} onChange={(e) => setText(e.target.value)} disabled={ended} maxLength={1000} placeholder={listening ? 'Listening...' : 'Type reply...'} className="h-9 flex-1 bg-transparent border-none text-[13px] text-white shadow-none focus-visible:ring-0 placeholder:text-gray-300" />
-              <Button type="submit" variant="primary" size="sm" className="rounded-full px-3" disabled={!text.trim() || ended} loading={send.isPending}><SendHorizontal className="size-3.5" /></Button>
+          <div className="flex w-full items-center gap-3 sm:w-auto">
+            <form onSubmit={(e) => { e.preventDefault(); submit(text) }} className="flex min-w-0 flex-1 items-center rounded-full border border-white/20 bg-white/10 p-1.5 backdrop-blur-md transition-all focus-within:bg-white/20 sm:w-64 sm:flex-none sm:focus-within:w-80">
+              <Input value={text} onChange={(e) => setText(e.target.value)} disabled={inputLocked} maxLength={1000} placeholder={listening ? 'Listening...' : ended ? 'Call ended' : waitingForGreeting ? 'Preparing the opening line…' : 'Type reply...'} aria-label="Your reply" className="h-10 min-w-0 flex-1 border-none bg-transparent sm:h-9 text-[13px] text-white shadow-none focus-visible:ring-0 placeholder:text-gray-300" />
+              <Button type="submit" variant="primary" size="sm" className="rounded-full px-3" disabled={!text.trim() || inputLocked || send.isPending} loading={send.isPending} aria-label="Send"><SendHorizontal className="size-3.5" /></Button>
             </form>
 
-            <button type="button" onClick={toggleMic} disabled={ended} aria-label={listening ? 'Stop listening' : 'Speak'}
-              className={cn("flex size-14 shrink-0 items-center justify-center rounded-full text-white shadow-2xl transition-all active:scale-95", listening ? 'bg-red-500 animate-pulse shadow-red-500/50' : 'bg-gray-800 shadow-black/50 hover:bg-gray-700')}>
+            <button type="button" onClick={toggleMic} disabled={inputLocked || send.isPending} aria-label={listening ? 'Stop listening' : 'Speak'}
+              className={cn('flex size-12 shrink-0 items-center justify-center rounded-full text-white shadow-2xl transition-all active:scale-95 disabled:opacity-50 sm:size-14', listening ? 'bg-red-500 animate-pulse shadow-red-500/50' : 'bg-gray-800 shadow-black/50 hover:bg-gray-700')}>
               {listening ? <MicOff className="size-5" /> : <Mic className="size-5" />}
             </button>
           </div>
@@ -560,7 +687,7 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
         {lead && (
           <Card className="p-5 text-sm">
             <div className="text-xs font-medium text-muted uppercase">Testing as</div>
-            <div className="mt-1 font-medium">{lead.name}</div>
+            <div className="mt-1 font-medium">{lead.name || lead.phone}</div>
             <div className="text-muted">{[lead.company, lead.city].filter(Boolean).join(' · ') || lead.phone}</div>
             {lead.summary && <p className="mt-2 line-clamp-3 text-fg-2">{lead.summary}</p>}
           </Card>
@@ -570,13 +697,28 @@ function Playground({ profile, unsaved, onSave, saving }: { profile: AgentProfil
   )
 }
 
+/** IST wall clock. Its own component so the tick re-renders this pill only, not the 3D avatar. */
+function Clock() {
+  const [time, setTime] = useState(() => new Date())
+  useEffect(() => {
+    const timer = window.setInterval(() => setTime(new Date()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  return (
+    <div className="hidden h-8 items-center gap-2 rounded-full border border-border bg-black/30 px-3 text-[13px] font-medium tabular-nums sm:flex">
+      <div className="size-2 animate-pulse rounded-full bg-green-500" />
+      {time.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' })} IST
+    </div>
+  )
+}
+
 function Inspector({ turn }: { turn: AgentTurnResult }) {
   const { path } = useAgent()
-  const crm = Object.entries(turn.crm_update).filter(([, v]) => v)
+  const crm = Object.entries(turn.crm_update ?? {}).filter(([, v]) => v)
   return (
     <div className="space-y-5 p-5 text-sm">
       <dl className="grid grid-cols-2 gap-2">
-        {([['Intent', titleCase(turn.intent)], ['Temperature', <QualificationBadge key="q" value={turn.qualification} />], ['Sentiment', turn.sentiment ?? '—'], ['Language', turn.language ?? '—']] as [string, ReactNode][]).map(([k, v]) => (
+        {([['Intent', titleCase(turn.intent || 'unknown')], ['Temperature', <QualificationBadge key="q" value={turn.qualification} />], ['Sentiment', turn.sentiment ?? '—'], ['Language', turn.language ?? '—']] as [string, ReactNode][]).map(([k, v]) => (
           <div key={k} className="rounded-lg bg-surface-2 p-2.5"><dt className="text-xs text-muted">{k}</dt><dd className="mt-0.5 font-medium capitalize">{v}</dd></div>
         ))}
       </dl>
@@ -591,14 +733,14 @@ function Inspector({ turn }: { turn: AgentTurnResult }) {
         <div className="mb-1.5 text-xs font-medium text-muted uppercase">CRM updates</div>
         {crm.length ? (
           <dl className="divide-y divide-border rounded-lg border border-border">
-            {crm.map(([k, v]) => <div key={k} className="flex gap-3 px-3 py-2"><dt className="w-24 shrink-0 text-muted capitalize">{k.replace(/_/g, ' ')}</dt><dd className="min-w-0 break-words">{v}</dd></div>)}
+            {crm.map(([k, v]) => <div key={k} className="flex flex-wrap gap-x-3 gap-y-0.5 px-3 py-2 sm:flex-nowrap"><dt className="w-full shrink-0 text-muted capitalize sm:w-24">{k.replace(/_/g, ' ')}</dt><dd className="min-w-0 break-words">{String(v)}</dd></div>)}
           </dl>
         ) : <p className="text-muted">Nothing new to record.</p>}
       </div>
 
       <div>
         <div className="mb-1.5 text-xs font-medium text-muted uppercase">Knowledge used</div>
-        {turn.knowledge.length ? turn.knowledge.map((k, i) => (
+        {turn.knowledge?.length ? turn.knowledge.map((k, i) => (
           <div key={i} className="mb-1.5 flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs"><BookOpen className="size-3.5 shrink-0 text-muted" /><span className="truncate font-medium">{k.title}</span></div>
         )) : <p className="text-muted">No documents matched. <Link to={path('/knowledge')} className="text-brand">Add knowledge</Link> so the agent can answer specifics.</p>}
       </div>

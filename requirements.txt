@@ -34,3 +34,5 @@ torchaudio==2.5.1
 transformers>=4.46,<4.50
 scipy
 cryptography
+edge-tts>=7.0
+miniaudio>=1.6
