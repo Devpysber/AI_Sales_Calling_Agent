@@ -352,7 +352,8 @@ def _without_tools(messages: list[dict]) -> list[dict]:
     return stripped
 
 
-def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4, tools: list[dict] | None = None):
+def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4, tools: list[dict] | None = None,
+           deadline: float | None = None):
     """
     Streaming completion for live calls, in LLM_PROVIDERS order. Falls back to the next provider only
     if the current one fails before producing any text (a half-spoken reply is never restarted).
@@ -365,10 +366,16 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
     errors = []
     dead: set[str] = set()  # providers that answered 401/402: skip their remaining models
     compact = None
+    # One budget for the whole turn, shared with the no-tools retry below.
+    deadline = deadline or (time.monotonic() + settings.llm_stream_budget_seconds)
     for name, model in _stream_attempts(tools):
         provider = "openrouter" if name == "openrouter-fallback" else name
         if provider in dead and name != "openrouter-fallback":
             continue
+        remaining = deadline - time.monotonic()
+        if remaining < 1.0:
+            errors.append(f"{name}/{model}: skipped, turn budget of {settings.llm_stream_budget_seconds}s spent")
+            break
         if name == "sarvam":
             url, headers = "https://api.sarvam.ai/v1/chat/completions", {"api-subscription-key": settings.sarvam_api_key}
             # reasoning_effort null = no hidden thinking: first sentence in ~1s instead of ~3s
@@ -391,7 +398,7 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
             body.update(messages=attempt_messages, max_tokens=max_tokens, temperature=temperature)
             produced = False
             try:
-                for delta in _stream_sse(url, headers, body, settings.llm_timeout_seconds):
+                for delta in _stream_sse(url, headers, body, min(settings.llm_timeout_seconds, remaining)):
                     produced = True
                     yield delta
                 return
@@ -414,7 +421,7 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
     if tools:
         # Team/admin calls otherwise depend on OpenRouter alone; answer in speech rather than hang up.
         log.warning("All tool-capable LLM streams failed (%s); retrying without tools", " | ".join(errors))
-        yield from stream(_without_tools(messages), max_tokens=max_tokens, temperature=temperature, tools=None)
+        yield from stream(_without_tools(messages), max_tokens=max_tokens, temperature=temperature, tools=None, deadline=deadline)
         return
     raise LLMError("All streaming LLM providers failed — " + " | ".join(errors))
 

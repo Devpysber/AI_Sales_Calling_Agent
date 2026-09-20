@@ -767,7 +767,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
           <CardHeader title={<span className="flex items-center gap-2"><Sparkles className="size-4 text-brand" />Turn inspector</span>}
             description={inspected ? 'What the agent understood on its latest reply' : undefined}
             action={avgMs !== null && <Badge tone={avgMs < 2500 ? 'success' : avgMs < 4500 ? 'warning' : 'danger'}>avg {(avgMs / 1000).toFixed(1)}s</Badge>} />
-          {inspected ? <Inspector turn={inspected} /> : (
+          {inspected ? <Inspector key={selected ?? history.length} turn={inspected} /> : (
             <div className="space-y-3 p-5 text-sm text-muted">
               <p>Reply as a {caller} to see what the agent understood on each turn:</p>
               <ul className="space-y-2">
@@ -846,14 +846,20 @@ function Inspector({ turn }: { turn: AgentTurnResult }) {
   const crm = Object.entries(turn.crm_update ?? {}).filter(([, v]) => v)
   return (
     <div className="space-y-5 p-5 text-sm">
-      <dl className="grid grid-cols-2 gap-2">
+      <Stagger className="grid grid-cols-2 gap-2" step={70}>
         {([['Intent', titleCase(turn.intent || 'unknown')], ['Temperature', <QualificationBadge key="q" value={turn.qualification} />], ['Sentiment', turn.sentiment ?? '—'], ['Language', turn.language ?? '—']] as [string, ReactNode][]).map(([k, v]) => (
-          <div key={k} className="rounded-lg bg-surface-2 p-2.5"><dt className="text-xs text-muted">{k}</dt><dd className="mt-0.5 font-medium capitalize">{v}</dd></div>
+          <div key={k} className="glint rounded-lg border border-border/60 bg-surface-2 p-2.5 transition hover:border-border-strong"><dt className="text-xs text-muted">{k}</dt><dd className="mt-0.5 font-medium capitalize">{v}</dd></div>
         ))}
-      </dl>
+      </Stagger>
 
-      <div>
+      <div className="reveal reveal-in reveal-up" style={{ animationDelay: '280ms' }}>
         <div className="mb-1.5 flex justify-between text-xs text-muted"><span>Response time</span><span className="tabular-nums">{(turn.total_ms / 1000).toFixed(2)}s total</span></div>
+        {/* 0-6s scale: green under 2.5s (feels instant on a call), amber to 4.5s, red beyond. */}
+        <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
+          <div className={cn('grow-x h-full rounded-full', turn.total_ms < 2500 ? 'bg-success' : turn.total_ms < 4500 ? 'bg-warning' : 'bg-danger')}
+            style={{ width: `${Math.min(100, (turn.total_ms / 6000) * 100)}%`, animationDelay: '320ms' }} />
+        </div>
+        {turn.llm_ms != null && <div className="mt-1 text-[11px] text-muted tabular-nums">model {(turn.llm_ms / 1000).toFixed(2)}s · voice {Math.max(0, (turn.total_ms - turn.llm_ms) / 1000).toFixed(2)}s</div>}
       </div>
 
       {turn.end_call && <div className="flex items-center gap-2 rounded-lg bg-warning-soft px-3 py-2 text-xs font-medium text-warning"><AlertTriangle className="size-3.5" />Agent decided to end the call</div>}
@@ -861,17 +867,17 @@ function Inspector({ turn }: { turn: AgentTurnResult }) {
       <div>
         <div className="mb-1.5 text-xs font-medium text-muted uppercase">CRM updates</div>
         {crm.length ? (
-          <dl className="divide-y divide-border rounded-lg border border-border">
+          <Stagger className="divide-y divide-border rounded-lg border border-border" from="left" delay={360} step={60}>
             {crm.map(([k, v]) => <div key={k} className="flex flex-wrap gap-x-3 gap-y-0.5 px-3 py-2 sm:flex-nowrap"><dt className="w-full shrink-0 text-muted capitalize sm:w-24">{k.replace(/_/g, ' ')}</dt><dd className="min-w-0 break-words">{String(v)}</dd></div>)}
-          </dl>
+          </Stagger>
         ) : <p className="text-muted">Nothing new to record.</p>}
       </div>
 
       <div>
         <div className="mb-1.5 text-xs font-medium text-muted uppercase">Knowledge used</div>
-        {turn.knowledge?.length ? turn.knowledge.map((k, i) => (
-          <div key={i} className="mb-1.5 flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs"><BookOpen className="size-3.5 shrink-0 text-muted" /><span className="truncate font-medium">{k.title}</span></div>
-        )) : <p className="text-muted">No documents matched. <Link to={path('/knowledge')} className="text-brand">Add knowledge</Link> so the agent can answer specifics.</p>}
+        {turn.knowledge?.length ? <Stagger className="space-y-1.5" from="left" delay={420} step={60}>{turn.knowledge.map((k, i) => (
+          <div key={i} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs transition hover:border-border-strong"><BookOpen className="size-3.5 shrink-0 text-brand" /><span className="truncate font-medium">{k.title}</span></div>
+        ))}</Stagger> : <p className="text-muted">No documents matched. <Link to={path('/knowledge')} className="text-brand">Add knowledge</Link> so the agent can answer specifics.</p>}
       </div>
     </div>
   )

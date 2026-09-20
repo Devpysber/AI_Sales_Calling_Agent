@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     # Post-call summaries are not latency-sensitive: try free/cheap models first, paid Sarvam as fallback.
     summary_llm_providers: str = Field("openrouter,sarvam", alias="SUMMARY_LLM_PROVIDERS")
     llm_timeout_seconds: float = Field(4.5, alias="LLM_TIMEOUT_SECONDS")
+    # Wall clock for one live turn across every provider and model in LLM_PROVIDERS. Without it a dead
+    # provider set walks the whole chain (13.5s per model, then again without tools) past the 45s reply
+    # deadline, and the caller hears nothing at all. Inside this budget the turn falls back to a spoken line.
+    llm_stream_budget_seconds: float = Field(15.0, alias="LLM_STREAM_BUDGET_SECONDS")
 
     # ---------------- Sarvam AI ----------------
     sarvam_api_key: str = Field("", alias="SARVAM_API_KEY")
