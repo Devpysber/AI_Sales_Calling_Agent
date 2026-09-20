@@ -611,12 +611,12 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
           <div className="absolute inset-x-0 bottom-0 h-48 bg-gradient-to-t from-black/80 to-transparent pointer-events-none z-[1]" />
 
           {/* ── Floating Overlay: Chat on left, Input on right ── */}
-          <div className="absolute inset-x-6 bottom-6 z-20 flex items-end justify-between gap-6 pointer-events-none">
+          <div className="absolute inset-x-3 bottom-3 z-20 flex flex-col items-stretch gap-3 pointer-events-none sm:inset-x-6 sm:bottom-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
             
             {/* Chat bubbles */}
             <div
               className={cn(
-                'flex flex-col gap-2 max-w-[60%] min-w-[320px]',
+                'flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:max-w-[60%] sm:min-w-[320px]',
                 showAll
                   ? 'pointer-events-auto max-h-[60vh] overflow-y-auto bg-black/40 backdrop-blur-md p-5 rounded-3xl'
                   : 'pointer-events-none max-h-[42vh] justify-end overflow-hidden [scrollbar-width:none]',
@@ -676,7 +676,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
             </div>
 
             {/* Input area */}
-            <div className="pointer-events-auto flex items-center gap-3 shrink-0 self-end relative">
+            <div className="pointer-events-auto relative flex w-full shrink-0 items-center gap-3 sm:w-auto sm:self-end">
               {listening && (
                 <div className="absolute -top-10 right-4 flex items-center gap-2 bg-black/40 px-3 py-1 rounded-full backdrop-blur-md border border-white/10">
                   <div className="size-2 animate-pulse rounded-full bg-red-500" />
@@ -684,7 +684,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                 </div>
               )}
               <form onSubmit={(e) => { e.preventDefault(); submit(text) }}
-                className="flex w-[320px] sm:w-[380px] items-center rounded-full border border-white/10 bg-black/50 px-5 py-2.5 transition-all focus-within:bg-black/70 focus-within:border-white/20 backdrop-blur-xl shadow-2xl">
+                className="flex w-full sm:w-[380px] items-center rounded-full border border-white/10 bg-black/50 px-5 py-2.5 transition-all focus-within:bg-black/70 focus-within:border-white/20 backdrop-blur-xl shadow-2xl">
                 <Input
                   value={text} onChange={(e) => setText(e.target.value)}
                   disabled={inputLocked} maxLength={1000}
