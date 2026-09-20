@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlertTriangle, BookOpen, Bot, Check, CircleDashed, Lightbulb, Mic, MicOff, Play, RotateCcw, Save, SendHorizontal,
+  AlertTriangle, BookOpen, Bot, Check, CircleDashed, Lightbulb, MessageSquareText, Mic, MicOff, Play, RotateCcw, Save, SendHorizontal,
   ShieldAlert, Sparkles, Square, Target, UserRound, Volume2,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
@@ -432,6 +432,8 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
   // The last customer message the agent could not answer, kept in the transcript with a Retry.
   const [failed, setFailed] = useState<{ message: string; detail: string } | null>(null)
   const [showAll, setShowAll] = useState(false)
+  // Phones: the transcript covers the avatar, so it stays hidden until asked for. Always shown from sm up.
+  const [chatOpen, setChatOpen] = useState(false)
 
   const leads = useQuery({ queryKey: ['leads', 'playground'], queryFn: () => api<Page<Lead>>(`${base}/leads`, { params: { page_size: 100, sort: 'name', order: 'asc' } }) })
   useEffect(() => { if (leads.isError) toast.error('Could not load leads for the prospect list', { description: leads.error.message }) }, [leads.isError, leads.error])
@@ -616,7 +618,8 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
             {/* Chat bubbles */}
             <div
               className={cn(
-                'flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:max-w-[60%] sm:min-w-[320px]',
+                'w-full min-w-0 flex-col gap-2 sm:flex sm:w-auto sm:max-w-[60%] sm:min-w-[320px]',
+                chatOpen ? 'flex' : 'hidden',
                 showAll
                   ? 'pointer-events-auto max-h-[50vh] overflow-y-auto bg-black/40 backdrop-blur-md p-3 rounded-2xl sm:max-h-[60vh] sm:p-5 sm:rounded-3xl'
                   : 'pointer-events-none max-h-[34vh] justify-end overflow-hidden [scrollbar-width:none] sm:max-h-[42vh]',
@@ -677,6 +680,11 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
 
             {/* Input area */}
             <div className="pointer-events-auto relative flex w-full shrink-0 items-center gap-3 sm:w-auto sm:self-end">
+              <Button type="button" size="sm" variant="ghost" onClick={() => setChatOpen((v) => !v)}
+                className="h-11 shrink-0 rounded-full border border-white/10 bg-black/50 px-3 text-white/80 hover:bg-black/70 sm:hidden"
+                aria-pressed={chatOpen} aria-label={chatOpen ? 'Hide conversation' : `Show conversation (${history.length} turns)`}>
+                <MessageSquareText className="size-4" />{history.length > 0 && <span className="text-[11px] font-semibold tabular-nums">{history.length}</span>}
+              </Button>
               {listening && (
                 <div className="absolute -top-10 right-4 flex items-center gap-2 bg-black/40 px-3 py-1 rounded-full backdrop-blur-md border border-white/10">
                   <div className="size-2 animate-pulse rounded-full bg-red-500" />

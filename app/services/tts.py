@@ -224,8 +224,7 @@ def prepare_audio_id(text: str, language: str, speaker: str) -> str:
     key = hashlib.sha256(f"{settings.tts_engine}|{settings.sarvam_tts_model}|{settings.sarvam_tts_sample_rate}|{speaker}|{language}|{text}"
                          .encode()).hexdigest()[:40]
     if store.get_bytes(f"audio:{key}") is None:
-        import json
-        store.set(f"tts_job:{key}", json.dumps({"text": text, "language": language, "speaker": speaker}), ttl=CACHE_TTL)
+        store.set_json(f"tts_job:{key}", {"text": text, "language": language, "speaker": speaker}, ttl=CACHE_TTL)
     return key
 
 
@@ -234,10 +233,8 @@ def load_audio(audio_id: str) -> bytes | None:
     if audio is not None:
         return audio
         
-    job = store.get(f"tts_job:{audio_id}")
-    if job:
-        import json
-        params = json.loads(job)
+    params = store.get_json(f"tts_job:{audio_id}")
+    if params:
         audio = synthesize(params["text"], params["language"], params["speaker"])
         store.set_bytes(f"audio:{audio_id}", audio, ttl=CACHE_TTL)
         return audio
@@ -246,7 +243,8 @@ def load_audio(audio_id: str) -> bytes | None:
 
 
 def audio_url(audio_id: str) -> str:
-    return f"{settings.base_url}/api/media/audio/{audio_id}.wav"
+    base = settings.public_base_url.rstrip("/") if settings.public_base_url else ""
+    return f"{base}/api/media/audio/{audio_id}.wav"
 
 
 
