@@ -670,26 +670,26 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
           {/* ── Floating Overlay: Chat on left, Input on right ── */}
           <div className="absolute inset-x-3 bottom-3 z-20 flex flex-col items-stretch gap-3 pointer-events-none sm:inset-x-6 sm:bottom-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
             
-            {/* Chat bubbles */}
+            {/* Chat column: toggle above, bubbles below. The toggle lives outside the clipped/scrolling
+                box so it is always reachable, on phones too, whichever mode the transcript is in. */}
+            <div className={cn('w-full min-w-0 flex-col gap-2 sm:flex sm:w-auto sm:max-w-[60%] sm:min-w-[320px]', chatOpen ? 'flex' : 'hidden')}>
+            {history.length > VISIBLE_TURNS && (
+              <div className="pointer-events-auto self-start">
+                <button type="button" onClick={() => setShowAll((v) => !v)}
+                  className="min-h-8 rounded-full border border-white/10 bg-black/60 px-4 py-1.5 text-[11px] font-semibold text-white/85 transition hover:bg-white/15">
+                  {showAll ? `Show last ${VISIBLE_TURNS} turns` : `Show full transcript (${history.length} turns)`}
+                </button>
+              </div>
+            )}
             <div
               className={cn(
-                'w-full min-w-0 flex-col gap-2 sm:flex sm:w-auto sm:max-w-[60%] sm:min-w-[320px]',
-                chatOpen ? 'flex' : 'hidden',
+                'flex w-full min-w-0 flex-col gap-2',
                 showAll
                   // Solid panel: a backdrop blur here smeared the avatar into a grey slab behind the text.
-                  ? 'pointer-events-auto max-h-[50vh] overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0c12]/92 px-3 pb-3 sm:max-h-[60vh] sm:px-5 sm:pb-5 sm:rounded-3xl'
+                  ? 'pointer-events-auto max-h-[50vh] overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0c12]/92 p-3 sm:max-h-[60vh] sm:p-5 sm:rounded-3xl'
                   : 'pointer-events-none max-h-[38vh] justify-end overflow-hidden [scrollbar-width:none] sm:max-h-[42vh] pt-2 [mask-image:linear-gradient(to_bottom,transparent,black_6%)]',
               )}
             >
-              {history.length > VISIBLE_TURNS && (
-                // Full view: a sticky header bar the turns scroll under. Collapsed: a pill above the last turns.
-                <div className={cn('z-10 self-stretch', showAll ? 'sticky top-0 -mx-3 mb-2 border-b border-white/5 bg-[#0b0c12]/95 px-3 py-2 sm:-mx-5 sm:px-5' : 'mt-6 mb-1')}>
-                  <button type="button" onClick={() => setShowAll((v) => !v)}
-                    className="pointer-events-auto min-h-8 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-[11px] font-semibold text-white/85 transition hover:bg-white/15">
-                    {showAll ? `Show last ${VISIBLE_TURNS} turns` : `Show full transcript (${history.length} turns)`}
-                  </button>
-                </div>
-              )}
               {greeting.isError && history.length === 0 && (
                 <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-danger/40 bg-danger-soft/90 px-4 py-2.5 text-[13px] text-danger backdrop-blur-md shadow-xl">
                   <AlertTriangle className="size-4 shrink-0" /><span className="min-w-0 break-words">Could not load the opening line: {greeting.error.message}</span>
@@ -757,6 +757,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                 </div>
               )}
               <div ref={bottom} />
+            </div>
             </div>
 
             {/* Input area */}
