@@ -107,6 +107,23 @@ def _fit_to_cap(messages: list[dict], error_text: str, passes: int = 0) -> list[
 _ACCOUNT_HINTS = ("no credits", "insufficient_quota", "exceed your available credits", "invalid api key", "unauthorized")
 
 
+OPENROUTER_DEAD_KEY = "openrouter_dead_until"
+OPENROUTER_DEAD_SECONDS = 600
+
+
+def _openrouter_dead() -> bool:
+    """OpenRouter answered 401/402 recently: no credits / bad key. Not worth a request per turn."""
+    from app.core import store
+    until = store.get_json(OPENROUTER_DEAD_KEY)
+    return bool(until) and float(until) > time.time()
+
+
+def _mark_openrouter_dead(reason: str) -> None:
+    from app.core import store
+    store.set_json(OPENROUTER_DEAD_KEY, time.time() + OPENROUTER_DEAD_SECONDS, ttl=OPENROUTER_DEAD_SECONDS)
+    log.warning("OpenRouter unusable for %ss (%s); live turns go to Sarvam without tools until then", OPENROUTER_DEAD_SECONDS, reason[:120])
+
+
 def _is_account_error(text: str) -> bool:
     """A 401/402-class failure: the whole provider account is out, not just this model."""
     lowered = (text or "").lower()
@@ -331,12 +348,15 @@ def _stream_attempts(tools: list[dict] | None) -> list[tuple[str, str]]:
     one model used to end the call outright, even with working models configured behind it.
     """
     attempts: list[tuple[str, str]] = []
+    # Ids the Integrations health check found retired: a stale .env must not cost a wasted request per reply.
+    from app.core import store
+    retired = set(store.get_json("openrouter_unknown_models", []) or [])
     for name in [p.strip() for p in settings.llm_providers.split(",") if p.strip()]:
         if name == "sarvam" and settings.sarvam_api_key and not tools:
             # Sarvam streaming does not emit standard tool_calls deltas.
             attempts.append(("sarvam", settings.sarvam_llm_model))
         elif name == "openrouter" and settings.openrouter_api_key:
-            attempts += [("openrouter", m.strip()) for m in settings.openrouter_models.split(",") if m.strip()]
+            attempts += [("openrouter", m.strip()) for m in settings.openrouter_models.split(",") if m.strip() and m.strip() not in retired]
     if settings.openrouter_api_key:
         primary = {m for n, m in attempts}
         attempts += [("openrouter-fallback", m) for m in _fallback_models() if m not in primary]
@@ -372,6 +392,11 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
     """
     errors = []
     dead: set[str] = set()  # providers that answered 401/402: skip their remaining models
+    if tools and _openrouter_dead() and settings.sarvam_api_key:
+        # Tools need OpenRouter; with the account out of credits every turn walked the whole chain (retired
+        # id, 402, free-tier timeout) and answered 7s late. Speak from Sarvam straight away instead.
+        yield from stream(_without_tools(messages), max_tokens=max_tokens, temperature=temperature, tools=None, deadline=deadline)
+        return
     compact = None
     # One budget for the whole turn, shared with the no-tools retry below.
     deadline = deadline or (time.monotonic() + settings.llm_stream_budget_seconds)
@@ -428,6 +453,8 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
                 log.warning("LLM stream %s/%s failed: %s", name, model, e)
                 if _is_account_error(str(e)):
                     dead.add(provider)
+                    if provider == "openrouter":
+                        _mark_openrouter_dead(str(e))
                 break
     if tools:
         # Team/admin calls otherwise depend on OpenRouter alone; answer in speech rather than hang up.

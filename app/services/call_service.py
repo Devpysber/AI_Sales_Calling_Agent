@@ -430,6 +430,8 @@ class CallService:
         if session:
             call_session.update(session_id, ended=True)
 
+        # Live calls log the caller as "customer", the voicemail path as "user".
+        customer_turns = sum(1 for t in history if t["role"] in ("customer", "user"))
         if lead_id:
             lead = self.crm.get(lead_id) or {}
             updates = {"call_status": status}
@@ -448,14 +450,17 @@ class CallService:
                 updates["retry_count"] = 0
                 if lead.get("status") == "New":
                     updates["status"] = "Contacted"
+                if customer_turns and lead.get("callback_at") and trigger != "internal":
+                    # The conversation happened (a manual "Call now" ahead of the slot counts): the pending
+                    # scheduled call must not ring them again. A new time the customer asks for during the
+                    # call is written by the summary step afterwards. An unanswered or wordless attempt
+                    # keeps the slot, so it is retried like a real caller would.
+                    updates["callback_at"] = ""
             self.crm.update(lead_id, updates, actor="system", touch=True)
 
         events.record("call.ended", f"Call {status.lower()}", f"{duration}s · {cause or ''}".strip(" ·"),
                       agent_id=agent_id, lead_id=lead_id, call_id=call_id, data={"status": status, "duration": duration})
 
-        # Live calls log the caller as "customer", the voicemail path as "user": counting only one of them
-        # used to schedule the summary twice on some calls (double LLM spend, duplicate team alerts).
-        customer_turns = sum(1 for t in history if t["role"] in ("customer", "user"))
         # Colleague test calls get no summary: a role-played customer must not trigger team mails or callbacks.
         if (status == "Completed" or status == "Failed") and customer_turns and trigger != "internal":
             self._submit_summary(call_id, lead_id, history)
@@ -872,9 +877,15 @@ class CallService:
             return
         crm = result["crm_update"]
         updates = {k: crm[k] for k in ("requirements", "objections", "follow_up_date", "email") if crm.get(k)}
+        if crm.get("requirement") and not updates.get("requirements"):
+            updates["requirements"] = str(crm["requirement"])[:500]
         meeting_at = _valid_meeting(crm.get("meeting_at"))
         if meeting_at:
             updates["meeting_at"] = meeting_at
+        callback_at = _valid_meeting(crm.get("callback_at"))  # same shape and sanity rules as a meeting time
+        if callback_at and not meeting_at:
+            updates["callback_at"] = callback_at
+            updates["call_status"] = "Pending"  # the callback job dials it
         if result["qualification"]:
             updates["qualification"] = result["qualification"]
         if result["intent"] == "do_not_call":

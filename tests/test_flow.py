@@ -1,6 +1,8 @@
 import re
 import time
 
+from tests.conftest import MEETING_AT
+
 
 def _session_id(cid):
     from app.core.database import get_db
@@ -131,7 +133,7 @@ def test_full_call_flow(client, base):
             break
         time.sleep(0.05)
     lead = client.get(f"{base}/leads/{lead['id']}").json()
-    assert lead["status"] == "Meeting Booked" and lead["meeting_at"] == "2026-09-20 15:00"
+    assert lead["status"] == "Meeting Booked" and lead["meeting_at"] == MEETING_AT
     assert {"call.started", "call.answered", "call.ended", "meeting.booked"} <= types
 
 

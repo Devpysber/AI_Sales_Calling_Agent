@@ -82,11 +82,13 @@ def _openrouter():
         result = {"ok": not unknown, "key": _mask(settings.openrouter_api_key), "free_tier": data.get("is_free_tier"),
                   "usage": data.get("usage"), "limit_remaining": data.get("limit_remaining"),
                   "models": models, "unknown_models": unknown}
+        from app.core import store
+        store.set_json("openrouter_unknown_models", unknown, ttl=6 * 3600)
         if unknown:
-            # A retired model id fails every live turn before the next model is tried: that was
-            # the "not a valid model ID" behind dropped calls, and nothing on this page showed it.
-            result["detail"] = (f"OpenRouter no longer has {', '.join(unknown)}. Replace it in OPENROUTER_MODELS "
-                                "— every live reply wastes a request on it first.")
+            # A retired model id used to fail every live turn before the next model was tried (the
+            # "not a valid model ID" behind dropped calls). Live turns now skip ids recorded here.
+            result["detail"] = (f"OpenRouter no longer has {', '.join(unknown)}. Live calls skip it; remove it from "
+                                "OPENROUTER_MODELS to clear this.")
         return result
     except Exception as e:
         return {"ok": False, "detail": str(e)}
