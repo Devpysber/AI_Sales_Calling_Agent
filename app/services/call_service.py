@@ -147,6 +147,29 @@ def merge_call_context(session_lead: dict, fresh: dict | None) -> dict:
     return lead
 
 
+def spoken_language(history: list[dict]) -> str | None:
+    """Language the caller mostly spoke on this call, from the script of their transcribed lines; None when unclear."""
+    scripts = {"hi-IN": 0, "gu-IN": 0, "ta-IN": 0, "te-IN": 0, "bn-IN": 0, "kn-IN": 0, "mr-IN": 0, "en-IN": 0}
+    ranges = {"hi-IN": (0x0900, 0x097F), "bn-IN": (0x0980, 0x09FF), "gu-IN": (0x0A80, 0x0AFF), "ta-IN": (0x0B80, 0x0BFF),
+              "te-IN": (0x0C00, 0x0C7F), "kn-IN": (0x0C80, 0x0CFF)}
+    for turn in history:
+        if turn.get("role") not in ("customer", "user"):
+            continue
+        for ch in str(turn.get("text") or ""):
+            if ch.isascii() and ch.isalpha():
+                scripts["en-IN"] += 1
+            else:
+                for code, (lo, hi) in ranges.items():
+                    if lo <= ord(ch) <= hi:
+                        scripts[code] += 1
+                        break
+    total = sum(scripts.values())
+    if total < 20:
+        return None
+    code, count = max(scripts.items(), key=lambda kv: kv[1])
+    return code if count / total >= 0.6 else None
+
+
 def _valid_meeting(value) -> str | None:
     """Normalise an LLM-extracted meeting time; drop anything unparsable, in the past, or more than a year out."""
     try:
@@ -695,7 +718,12 @@ class CallService:
             if merged != (current.get("notes") or ""):
                 updates["notes"] = merged
             callback_at = _valid_callback(s.get("callback_at"))
-            if not callback_at and (s.get("outcome") == "callback_requested" or str(s.get("callback_at") or "").strip()):
+            if meeting_at:
+                # A meeting or visit is booked: the meeting IS the next contact. A callback on top rang the
+                # customer twice ("discovery call at 5 PM" plus a callback an hour later).
+                callback_at = None
+                s["team_action"] = ""
+            if not callback_at and not meeting_at and (s.get("outcome") == "callback_requested" or str(s.get("callback_at") or "").strip()):
                 # A callback was promised but the model's time is unparsable or out of range: book the next slot
                 # inside calling hours rather than silently dropping the promise, and flag it for a person to fix.
                 try:
@@ -716,6 +744,11 @@ class CallService:
             if callback_at:
                 updates["callback_at"] = callback_at
                 updates.setdefault("follow_up_date", callback_at[:10])
+            spoken_lang = spoken_language(history)
+            if spoken_lang and spoken_lang != (self.crm.get(lead_id) or {}).get("language"):
+                # The script the caller actually used beats a seeded or guessed value: the next call's greeting
+                # and speech recognition run in it (an English record on a Hindi caller garbled call two).
+                updates["language"] = spoken_lang
             if qualification:
                 updates["qualification"] = qualification
             if s.get("status"):

@@ -1671,6 +1671,11 @@ class CallStream:
                 spoken.append(reply)
                 await self.say_fixed(reply)
             self.note_spoken(reply)
+            if cleaner.end_call and reply.rstrip().endswith("?") and not (text and is_caller_closing(text)):
+                # The model put its end marker on a question ("anything else I can help with?"): hanging up
+                # there cuts the caller off mid-conversation. Let them answer; the next turn can close.
+                log.info("End marker on a question ignored, session=%s", self.session_id[:8])
+                cleaner.end_call = False
             farewell = is_farewell(reply)
             if not cleaner.end_call and text and farewell and is_caller_closing(text):
                 # Both sides said goodbye but the model left out the end marker: hang up anyway, so the
