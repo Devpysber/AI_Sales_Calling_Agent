@@ -605,7 +605,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
   return (
     <div className="grid gap-4 grid-cols-1">
       {/* ===== Main playground card ===== */}
-      <Card className="relative flex h-[calc(100dvh-180px)] min-h-[520px] flex-col overflow-hidden sm:h-[calc(100dvh-280px)] sm:min-h-[680px]">
+      <Card className="dark relative flex h-[calc(100dvh-180px)] min-h-[520px] flex-col overflow-hidden border-white/10 bg-[#080810] sm:h-[calc(100dvh-280px)] sm:min-h-[680px]">
 
         {/* ── Toolbar ──────────────────────────────────────────── */}
         <div className="relative z-20 flex flex-wrap items-center gap-2 border-b border-white/10 bg-black/60 px-3 py-2 backdrop-blur-xl shrink-0 sm:px-4 sm:py-3">

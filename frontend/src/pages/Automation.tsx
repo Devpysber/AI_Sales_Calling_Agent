@@ -32,8 +32,8 @@ const LIMITS: Record<NumKey, [label: string, min: number, max: number]> = {
   max_concurrent_calls: ['Max simultaneous calls', 1, 100],
   meeting_reminder_hour: ['Reminder hour', 0, 23],
   daily_report_hour: ['Report hour', 0, 23],
-  speed_to_lead_min_seconds: ['Speed to lead "at least"', 0, 3600],
-  speed_to_lead_max_seconds: ['Speed to lead "at most"', 0, 3600],
+  speed_to_lead_min_seconds: ['Speed to lead "at least"', 0, 14400],
+  speed_to_lead_max_seconds: ['Speed to lead "at most"', 0, 14400],
   nurture_after_days: ['Call again after (days)', 1, 60],
   nurture_max_attempts: ['Max follow-ups per lead', 1, 10],
 }
@@ -168,8 +168,8 @@ export default function Automation() {
         <JobCard icon={<Zap />} title="Speed to lead" description="Calls a website enquiry shortly after the form is sent, while interest is highest."
           enabled={form.speed_to_lead_enabled} onToggle={(v) => toggleNow('speed_to_lead_enabled', v)}
           busy={save.isPending} footer={<span className="min-w-0 break-words text-xs text-muted">A random delay in this range keeps it natural. Outside calling hours the lead waits for auto-dial.</span>}>
-          <Field label="Call after at least (seconds)"><Input type="number" min={0} max={3600} value={form.speed_to_lead_min_seconds} onChange={(e) => set('speed_to_lead_min_seconds', num(e.target.value, form.speed_to_lead_min_seconds))} /></Field>
-          <Field label="and at most (seconds)"><Input type="number" min={form.speed_to_lead_min_seconds === '' ? 0 : form.speed_to_lead_min_seconds} max={3600} value={form.speed_to_lead_max_seconds} onChange={(e) => set('speed_to_lead_max_seconds', num(e.target.value, form.speed_to_lead_max_seconds))} /></Field>
+          <Field label="Call after at least (seconds, 3600 = 1 hour)"><Input type="number" min={0} max={14400} value={form.speed_to_lead_min_seconds} onChange={(e) => set('speed_to_lead_min_seconds', num(e.target.value, form.speed_to_lead_min_seconds))} /></Field>
+          <Field label="and at most (seconds, 7200 = 2 hours)"><Input type="number" min={form.speed_to_lead_min_seconds === '' ? 0 : form.speed_to_lead_min_seconds} max={14400} value={form.speed_to_lead_max_seconds} onChange={(e) => set('speed_to_lead_max_seconds', num(e.target.value, form.speed_to_lead_max_seconds))} /></Field>
         </JobCard>
 
         <JobCard icon={<HeartHandshake />} title="Follow up warm leads" description="Calls Interested and Follow Up leads nobody has spoken to recently, continuing from the last conversation."

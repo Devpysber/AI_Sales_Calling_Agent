@@ -47,8 +47,8 @@ AUTOMATION_DEFAULTS = {
     "daily_report_email": "",
     # Website leads: call a new enquiry within seconds of the form being submitted
     "speed_to_lead_enabled": False,
-    "speed_to_lead_min_seconds": 60,   # random delay before the call, so it does not feel robotic
-    "speed_to_lead_max_seconds": 120,
+    "speed_to_lead_min_seconds": 3600,   # a random 1-2 hours after the form: prompt, not pouncing
+    "speed_to_lead_max_seconds": 7200,
     # Nurture: call Interested / Follow Up leads again when nobody has spoken to them for a while
     "nurture_enabled": False,
     "nurture_after_days": 3,
