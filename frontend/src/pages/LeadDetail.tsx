@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Ban, Bot, Building2, CalendarClock, Check, ChevronRight, Clock, Copy, Gauge, Lightbulb, ListPlus, Mail, MapPin,
-  MessageSquareQuote, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOutgoing, Play, RefreshCw, ShieldAlert, Sparkles, Target, Trash2, User,
+  Globe, MessageSquareQuote, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOutgoing, Play, RefreshCw, ShieldAlert, Sparkles, Target, Trash2, User,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
@@ -458,6 +458,22 @@ export default function LeadDetail() {
               </div>
             </div>
           </Card>
+
+          {(l.source ?? '').startsWith('website') && (
+            <Card className="border-brand/30">
+              <CardHeader title={<span className="flex items-center gap-2"><Globe className="size-4 text-brand" />Website enquiry</span>}
+                description={`Came in from ${(l.source ?? '').replace(/^website:?/, '') || 'the website'} · the agent opens the call with this`} />
+              <div className="px-4 pb-4 sm:px-5 sm:pb-5">
+                {(l.notes || '').split('\n').filter((line) => line.trim()).map((line, i) => {
+                  const m = /^([^:]{1,40}):\s*(.+)$/.exec(line)
+                  return m
+                    ? <div key={i} className="flex flex-wrap gap-x-3 gap-y-0.5 border-b border-border/60 py-1.5 text-sm last:border-0"><dt className="w-32 shrink-0 text-muted">{m[1]}</dt><dd className="min-w-0 break-words">{m[2]}</dd></div>
+                    : <p key={i} className="py-1.5 text-sm break-words">{line}</p>
+                })}
+                {!l.notes && <p className="text-sm text-muted">The form carried no message.</p>}
+              </div>
+            </Card>
+          )}
 
           <Card>
             <CardHeader title="Notes for the agent" description="The AI reads these before every call"

@@ -286,7 +286,7 @@ function WebsiteIntake() {
   }
   if (!data) return <Skeleton className="h-64 xl:col-span-2" />
   const snippets = {
-    html: `<form action="${data.url}" method="POST">\n  <input name="name" placeholder="Your name" required>\n  <input name="phone" placeholder="Phone" required>\n  <input name="email" placeholder="Email">\n  <textarea name="message" placeholder="How can we help?"></textarea>\n  <input name="website" style="display:none" tabindex="-1" autocomplete="off">\n  <button>Request a call</button>\n</form>`,
+    html: `<form accept-charset="UTF-8" action="${data.url}" method="POST">\n  <input name="name" placeholder="Your name" required>\n  <input name="phone" placeholder="Phone" required>\n  <input name="email" placeholder="Email">\n  <textarea name="message" placeholder="How can we help?"></textarea>\n  <input name="website" style="display:none" tabindex="-1" autocomplete="off">\n  <button>Request a call</button>\n</form>`,
     js: `await fetch("${data.url}", {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify({ name, phone, email, message, source: "landing-page" }),\n})`,
     curl: `curl -X POST "${data.url}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"name":"Rahul","phone":"9876543210","message":"Interested"}'`,
   }

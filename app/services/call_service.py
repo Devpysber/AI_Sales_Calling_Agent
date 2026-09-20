@@ -169,6 +169,20 @@ def within_calling_hours(cfg: dict, now: datetime | None = None) -> bool:
     return now.weekday() in days and start <= now.hour < end
 
 
+def next_calling_window(cfg: dict, now: datetime | None = None) -> datetime:
+    """The next moment automated calls may go out (IST): now if inside the window, else the next opening."""
+    now = now or datetime.now(IST)
+    if within_calling_hours(cfg, now):
+        return now
+    days = cfg.get("calling_days") or [0, 1, 2, 3, 4, 5]
+    start = int(cfg.get("calling_hours_start", 9))
+    for d in range(0, 8):
+        day = (now + timedelta(days=d)).replace(hour=start, minute=0, second=0, microsecond=0)
+        if day.weekday() in days and day > now:
+            return day
+    return now
+
+
 def _utcnow():
     return datetime.utcnow()
 

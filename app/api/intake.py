@@ -141,12 +141,12 @@ async def capture(agent_id: int, request: Request, token: str = ""):
 
 def ingest(agent_id: int, data: dict, site: str = "", extra: dict | None = None) -> tuple[dict, bool, bool]:
     """Create or update the lead, then schedule the call when speed to lead is on and calling is allowed."""
-    from app.services.call_service import IST, within_calling_hours
+    from app.services.call_service import IST, next_calling_window
     from app.services.crm_service import CRMService
 
     crm = CRMService(agent_id)
     source = data.get("source") or (f"website:{site}" if site else "website")
-    lines = [f"Website enquiry{f' ({site})' if site else ''}: {data['message']}"] if data.get("message") else []
+    lines = [f"Website enquiry{f' ({site})' if site else ''}: {data['message'].replace(chr(0xFFFD), '')}"] if data.get("message") else []
     # Whatever else the form collected (budget, model, preferred time, ...) travels with the lead and is
     # read by the agent as context on the call, so each website can ask its own questions.
     lines += [f"{k.replace('_', ' ').replace('-', ' ').capitalize()}: {v}" for k, v in (extra or {}).items()][:20]
@@ -168,13 +168,14 @@ def ingest(agent_id: int, data: dict, site: str = "", extra: dict | None = None)
 
     cfg = agents.get_automation(agent_id)
     calling = False
-    if cfg.get("speed_to_lead_enabled") and not lead["do_not_call"] and lead.get("phone_valid") is not False and within_calling_hours(cfg):
-        # Schedule the call a random 1-2 hours out (configurable); the callback job dials it.
+    if cfg.get("speed_to_lead_enabled") and not lead["do_not_call"] and lead.get("phone_valid") is not False:
+        # A random 1-2 hours out (configurable), counted from the next opening of the calling window when
+        # the form arrives outside it, so the lead page always shows when the call will happen.
         low = max(0, int(cfg.get("speed_to_lead_min_seconds", 3600)))
         high = max(low, int(cfg.get("speed_to_lead_max_seconds", 7200)))
-        due = datetime.now(IST) + timedelta(seconds=random.randint(low, high))
+        due = next_calling_window(cfg) + timedelta(seconds=random.randint(low, high))
         crm.update(lead["id"], {"callback_at": due.strftime("%Y-%m-%d %H:%M"), "call_status": "Pending"}, actor="system")
-        events.record("callback.scheduled", f"Website lead: call scheduled for {due:%H:%M}", agent_id=agent_id, lead_id=lead["id"],
+        events.record("callback.scheduled", f"Website lead: call scheduled for {due:%d %b %H:%M}", agent_id=agent_id, lead_id=lead["id"],
                       actor="website")
         calling = True
     elif not lead.get("call_status"):
