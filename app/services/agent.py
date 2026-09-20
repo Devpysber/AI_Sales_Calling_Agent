@@ -26,7 +26,8 @@ COMPACT_AFTER_TURNS = 20        # a call this long gets its older turns folded i
 COMPACT_EVERY_TURNS = 6         # and re-folded this often after that
 KNOWLEDGE_CHARS = 600           # per retrieved passage in the prompt
 MIN_HISTORY_TURNS = 6           # the prompt budget never trims the window below this many turns
-LIVE_MAX_TOKENS = 160           # a live turn: 30 Devanagari words can cost 100+ tokens, the cap is a safety net
+LIVE_MAX_TOKENS = 120           # a live turn: ~2 spoken sentences. TTS is billed per character and was 73% of the cost per minute;
+                                # 160 let three-sentence replies through. A farewell with its <END> mark is far shorter than this.
 TOOL_MAX_TOKENS = 400           # a tool-call round: send_email arguments (subject + body) must not be cut mid-JSON
 MAX_TOOL_ROUNDS = 3             # tool_call -> result -> tool_call loops before the model is made to speak
 FAREWELL = re.compile(r"(bye|take care|good ?night|see you|have a (?:good|great|nice)|thank(?:s| you)|"
@@ -440,6 +441,7 @@ Primary call to action: {persona['call_to_action']}
 
 # How to speak (this is voice, not chat)
 - 1-2 short sentences per turn, natural spoken language, no lists, markdown, emojis or URLs.
+- Hard length cap: about 25 words (two short spoken sentences). Every extra word is money and the caller's patience. Answer, then one question, stop.
 - Ask exactly one question at a time; never chain a second with "मतलब", "और" or "या फिर", and never mix two attributes in one choice list (fuel vs transmission). Never repeat the greeting. "Is now a good time?" is asked once, in the greeting only: if they answer with a challenge ("kaun ho aap") answer the challenge and never ask it again. Introduce yourself with the one company name at the top of this prompt and never mention a second company name later in the call.
 - Never say a sentence you already said in this call. If you must ask something again, rephrase it shorter and differently, and never ask the same thing a third time — move on or close.
 - If the caller asks you to repeat ("kya bola", "dobara boliye", "sorry?", "come again"), say the same thing again, slower and in fewer words — this is the only time you may repeat a sentence. Never change a number, date, time or spelling when repeating it.
