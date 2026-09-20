@@ -103,7 +103,12 @@ UNFINISHED_GRACE_MS = 700
 STREAM_PROMPTS = {
     "still_there": {"en": "Hello? Can you hear me?", "hi": "हैलो? आवाज़ आ रही है?"},
     "hold_ack": {"en": "Sure, I'm still on the line.", "hi": "जी, मैं line पर हूँ।"},
+    "filler": {"en": "One moment.", "hi": "जी, एक second।"},
 }
+# A reply whose first audio has not started this long after the caller stopped gets a short cached
+# acknowledgement first. On a slow network (providers 5-10s away) the line was dead silent until the
+# answer came, and callers took that for a dropped call and hung up.
+FILLER_AFTER_SECONDS = 2.5
 # Seconds before the persona's max_call_minutes budget at which the agent is told to wrap up, so the
 # goodbye is spoken before Plivo's hard time_limit (budget + PlivoService.HARD_LIMIT_GRACE_SECONDS) cuts the line.
 WRAP_UP_LEAD_SECONDS = 45
@@ -1481,7 +1486,20 @@ class CallStream:
                     last_audio_at = max(last_audio_at, time.monotonic())  # the stall clock starts at the flush
 
             feeder = asyncio.create_task(feed())
+            filler_sent = False
             while True:
+                if (first_audio_ms is None and not filler_sent and self.mode == "ai"
+                        and time.monotonic() - speech_ended_at >= FILLER_AFTER_SECONDS):
+                    filler_sent = True
+                    line = STREAM_PROMPTS["filler"][self.lang_key()]
+                    try:
+                        pcm = await asyncio.to_thread(tts.cached_pcm, line, self.session.get("language") or "en-IN",
+                                                      self.persona.get("voice_speaker"), self.usage)
+                        self.note_spoken(line)  # its echo must not come back as a caller turn
+                        await self.play_pcm(pcm)
+                        log.info("Slow reply on session %s: played filler", self.session_id[:8])
+                    except Exception as e:  # noqa: BLE001 - the filler is a nicety, never a reason to fail the turn
+                        log.warning("Filler audio failed on session %s: %s", self.session_id[:8], e)
                 if feeder.done():
                     if feeder.exception():
                         raise feeder.exception()
