@@ -1,0 +1,37 @@
+{
+  "model": "opus",
+  "effortLevel": "medium",
+  "bashOutputMaxChars": 12000,
+  "autoCompactEnabled": true,
+  "precomputeCompactionEnabled": true,
+  "permissions": {
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git branch *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(pytest *)",
+      "Bash(python -m pytest *)",
+      "Bash(npm run build *)",
+      "Bash(npm run lint *)",
+      "Bash(npm test *)",
+      "Bash(npx tsc *)"
+    ],
+    "deny": [
+      "Read(./AI_Voice_Agent - Copy/**)",
+      "Read(./venv/**)",
+      "Read(./frontend/node_modules/**)",
+      "Read(./data/**)",
+      "Read(./.env)"
+    ]
+  }
+}
