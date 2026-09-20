@@ -779,6 +779,29 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
         yield from process_stream(messages, with_tools=False)
 
 
+def _parse_turn(text: str) -> dict:
+    """The model's JSON turn, tolerating the ways sarvam-105b bends the format."""
+    try:
+        data = llm.parse_json(text)
+    except Exception:
+        raw = text.strip()
+        # A reply cut mid-JSON still has its spoken text: salvage it rather than read '{"reply": ...' aloud.
+        m = re.search(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)', raw)
+        if m:
+            log.warning("Truncated JSON LLM reply, salvaged the reply field")
+            data = {"reply": m.group(1).replace('\\"', '"').replace("\\n", " ")}
+        elif raw.startswith("{") or raw.startswith("```") or raw.startswith("<"):
+            log.warning("Non-JSON LLM reply with no usable text")
+            data = {"reply": ""}
+        else:
+            log.warning("Non-JSON LLM reply, using raw text")
+            data = {"reply": raw.strip('"')}
+    # A tool-call markup names the tool outside the arg tags; end_call there means the same as the JSON flag.
+    if re.search(r"<tool_call>\s*end_call", text):
+        data["end_call"] = True
+    return data
+
+
 # Spoken when the model returns no reply text; keyed by what it was doing and the call language.
 EMPTY_REPLY = {
     "repeat": {"en": "Sorry, could you say that again?", "hi": "माफ़ कीजिए, क्या आप दोबारा बता सकते हैं?"},
@@ -794,24 +817,20 @@ def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, 
     started = time.perf_counter()
     messages, knowledge = build_messages(agent_id, history, customer_text, lead, use_embeddings, summary=summary)
     result = llm.complete(messages, json_mode=True, max_tokens=400, temperature=0.4)
-    try:
-        data = llm.parse_json(result.text)
-    except Exception:
-        raw = result.text.strip()
-        # A reply cut mid-JSON still has its spoken text: salvage it rather than read '{"reply": ...' aloud.
-        m = re.search(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)', raw)
-        if m:
-            log.warning("Truncated JSON LLM reply, salvaged the reply field")
-            data = {"reply": m.group(1).replace('\\"', '"').replace("\\n", " ")}
-        elif raw.startswith("{") or raw.startswith("```"):
-            log.warning("Non-JSON LLM reply with no usable text: asking the caller to continue")
-            data = {"reply": ""}
-        else:
-            log.warning("Non-JSON LLM reply, using raw text")
-            data = {"reply": raw.strip('"')}
-
-    # Same gate as the streaming path: software words never reach a caller, whichever mode answered.
+    data = _parse_turn(result.text)
     reply = plain_speech(str(data.get("reply") or "").strip())
+    if not reply:
+        # sarvam-105b sometimes answers a tool-call markup (<tool_call>end_call ...) with no speech at all,
+        # e.g. right after the caller gives a callback time. One more round with the model, told to speak,
+        # beats any canned line: it confirms the time it just heard, in the caller's language.
+        nudge = {"role": "system", "content": "Your last output contained no spoken reply. Answer now with the JSON object "
+                 "described above, including a short natural 'reply' the customer will hear" + (" that confirms and closes the call." if data.get("end_call") else ".")}
+        retry = llm.complete(messages + [nudge], json_mode=True, max_tokens=300, temperature=0.4)
+        more = _parse_turn(retry.text)
+        reply = plain_speech(str(more.get("reply") or "").strip())
+        if reply:
+            data = {**data, **{k: v for k, v in more.items() if v not in (None, "", {}, [])}, "end_call": bool(data.get("end_call") or more.get("end_call"))}
+            result = retry
     if not reply:
         # The model sent no spoken text (usually an end_call with an empty reply). Speak in the call's
         # language, and say goodbye when it is ending the call rather than asking the caller to repeat.
