@@ -6,7 +6,7 @@ import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from app.api.deps import workspace
+from app.api.deps import require_admin, workspace
 from app.core.auth import actor
 from app.services import agents, events
 from app.services.call_service import CallError, CallService, within_calling_hours
@@ -34,7 +34,7 @@ def list_calls(lead_id: int | None = None, status: str | None = None, direction:
                agent_id: int = Depends(workspace)):
     return CallService(agent_id).list_calls(lead_id, status, direction, search, page, page_size)
 
-@router.delete("")
+@router.delete("", dependencies=[Depends(require_admin)])
 def delete_all_calls(agent_id: int = Depends(workspace)):
     return CallService(agent_id).delete_history()
 

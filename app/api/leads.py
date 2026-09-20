@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from app.api.deps import workspace
+from app.api.deps import require_admin, workspace
 from app.core.auth import actor
 from app.services import agents, events
 from app.services.call_service import CallError, CallService
@@ -198,7 +198,7 @@ async def import_leads(request: Request, file: UploadFile = File(...), mapping: 
         raise HTTPException(400, str(e))
 
 
-@router.post("/bulk/delete")
+@router.post("/bulk/delete", dependencies=[Depends(require_admin)])
 def bulk_delete(body: Ids, request: Request, agent_id: int = Depends(workspace)):
     return {"deleted": CRMService(agent_id).delete(body.ids, actor=actor(request))}
 

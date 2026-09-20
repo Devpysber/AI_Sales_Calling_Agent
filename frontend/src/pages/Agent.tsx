@@ -31,7 +31,10 @@ export default function Agent() {
   const { agent, base } = useAgent()
   const qc = useQueryClient()
   const [params, setParams] = useSearchParams()
-  const tab = (['playground', 'persona', 'playbook'].includes(params.get('tab') ?? '') ? params.get('tab') : 'playground') as Section
+  const meQ = useQuery({ queryKey: ['me'], queryFn: () => api<{ user: string | null }>('/api/auth/me'), staleTime: 60_000 })
+  const isAdmin = meQ.data ? meQ.data.user !== 'team' : false
+  const requested = params.get('tab') ?? ''
+  const tab = (['playground', 'persona', 'playbook'].includes(requested) && (isAdmin || requested === 'playground') ? requested : 'playground') as Section
   const setTab = (t: Section) => setParams((p) => { p.set('tab', t); return p }, { replace: true })
 
   const { data, isError, error, refetch, isFetching } = useQuery({ queryKey: ['agent'], queryFn: () => api<ProfileResponse>(`${base}/profile`) })
@@ -90,7 +93,7 @@ export default function Agent() {
     <div>
       <PageHeader eyebrow={<>{agent?.name} · Build</>} title="Persona & playground"
         description="Shape how this agent introduces itself, what it asks and how it handles pushback, then rehearse a call in the browser with its own voice and knowledge before it dials anyone."
-        actions={<Tabs value={tab} onChange={setTab} items={[
+        actions={isAdmin && <Tabs value={tab} onChange={setTab} items={[
           { value: 'playground', label: 'Playground' },
           { value: 'persona', label: <span className="flex items-center gap-1.5"><span className="sm:hidden">Persona</span><span className="hidden sm:inline">Persona & voice</span>{dirty && <span className="size-1.5 rounded-full bg-warning" />}</span> },
           { value: 'playbook', label: <><span className="sm:hidden">Playbook</span><span className="hidden sm:inline">Call playbook</span></> },

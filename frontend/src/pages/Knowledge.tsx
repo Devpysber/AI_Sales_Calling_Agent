@@ -101,6 +101,9 @@ export default function Knowledge() {
     }
   }
 
+  // Editing the knowledge base is configuration: admin only (the API enforces it; this keeps 403s off the screen).
+  const meQ = useQuery({ queryKey: ['me'], queryFn: () => api<{ user: string | null }>('/api/auth/me'), staleTime: 60_000 })
+  const isAdmin = meQ.data ? meQ.data.user !== 'team' : false
   const cov = list.data?.coverage
   const analyzing = cov?.status === 'analyzing' || anyProcessing(docs)
   // AI-filled topics; before the first analysis finishes, fall back to matching document names
@@ -137,7 +140,7 @@ export default function Knowledge() {
   return (
     <>
       <PageHeader eyebrow={<><BookOpen className="size-3.5" />{agent?.name} · Private knowledge</>} title="Knowledge base" description="The only facts this agent may state on calls: services, pricing, FAQs and proof. Other agents can't see these documents, and anything missing here the agent won't make up."
-        actions={<><Button onClick={() => setNote({ title: '', text: '' })}><Type />Write note</Button><Button variant="primary" onClick={() => input.current?.click()}><Upload />Upload files</Button></>} />
+        actions={isAdmin && <><Button onClick={() => setNote({ title: '', text: '' })}><Type />Write note</Button><Button variant="primary" onClick={() => input.current?.click()}><Upload />Upload files</Button></>} />
       <input ref={input} type="file" multiple accept={ACCEPT.join(',')} hidden onChange={(e) => { void uploadFiles(e.target.files); e.target.value = '' }} />
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -217,7 +220,7 @@ export default function Knowledge() {
                       {d.status === 'processing' && <Badge tone="info"><Loader2 className="size-3 animate-spin" /><span className="hidden sm:inline">Processing</span></Badge>}
                       {d.status === 'ready' && <Badge tone={d.embedded ? 'success' : 'neutral'} className="max-sm:hidden"><CheckCircle2 className="size-3" />{d.embedded ? 'Semantic' : 'Keyword'}</Badge>}
                       {d.status === 'failed' && <Badge tone="danger"><CircleAlert className="size-3" /><span className="hidden sm:inline">Failed</span></Badge>}
-                      <Button size="icon" variant="ghost" aria-label={`Remove ${d.title}`} loading={remove.isPending && remove.variables === d.id} onClick={() => void askRemove(d)}><Trash2 /></Button>
+                      {isAdmin && <Button size="icon" variant="ghost" aria-label={`Remove ${d.title}`} loading={remove.isPending && remove.variables === d.id} onClick={() => void askRemove(d)}><Trash2 /></Button>}
                     </li>
                   ))}
                 </ul>

@@ -126,7 +126,7 @@ def get_agent(agent_id: int = Depends(workspace)):
     return {**agents.get(agent_id), "profile": agents.get_profile(agent_id)}
 
 
-@router.patch("/{agent_id}")
+@router.patch("/{agent_id}", dependencies=[Depends(require_admin)])
 def update_agent(body: AgentPatch, request: Request, agent_id: int = Depends(workspace)):
     try:
         return agents.update(agent_id, body.model_dump(exclude_unset=True), actor=actor(request))
@@ -191,7 +191,7 @@ def get_profile(request: Request, agent_id: int = Depends(workspace)):
             "voices": tts.SPEAKERS, "languages": tts.LANGUAGES}
 
 
-@router.put("/{agent_id}/profile")
+@router.put("/{agent_id}/profile", dependencies=[Depends(require_admin)])
 def update_profile(values: dict, request: Request, agent_id: int = Depends(workspace)):
     if "agent_password" in values and getattr(request.state, "user", "") not in ("admin", "api"):
         raise HTTPException(403, "Administrator access required.")
@@ -267,7 +267,7 @@ def automation(agent_id: int = Depends(workspace)):
     return {"settings": cfg, "jobs": scheduler.job_status(agent_id), "within_calling_hours": within_calling_hours(cfg)}
 
 
-@router.put("/{agent_id}/automation")
+@router.put("/{agent_id}/automation", dependencies=[Depends(require_admin)])
 def update_automation(values: dict, request: Request, agent_id: int = Depends(workspace)):
     try:
         return agents.update_automation(agent_id, values, actor=actor(request))
@@ -275,7 +275,7 @@ def update_automation(values: dict, request: Request, agent_id: int = Depends(wo
         raise HTTPException(400, str(e))
 
 
-@router.post("/{agent_id}/automation/run/{job}")
+@router.post("/{agent_id}/automation/run/{job}", dependencies=[Depends(require_admin)])
 async def run_job(job: str, request: Request, agent_id: int = Depends(workspace)):
     if job not in scheduler.JOBS:
         raise HTTPException(404, "Unknown job")

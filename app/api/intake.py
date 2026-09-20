@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 
-from app.api.deps import workspace
+from app.api.deps import require_admin, workspace
 from app.core import store
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -102,7 +102,7 @@ def intake_info(agent_id: int = Depends(workspace)):
     return _info(agent_id)
 
 
-@router.post("/rotate")
+@router.post("/rotate", dependencies=[Depends(require_admin)])
 def rotate(agent_id: int = Depends(workspace)):
     """New token: forms using the old URL stop working."""
     SettingsService().set_state(_token_key(agent_id), secrets.token_urlsafe(24))
