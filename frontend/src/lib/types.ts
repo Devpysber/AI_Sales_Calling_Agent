@@ -188,6 +188,7 @@ export interface AnalyticsUsage {
   metered_calls: number; tts_chars: number; stt_seconds: number; llm_requests: number; call_minutes: number
   cost: { telephony: number; tts: number; stt: number; llm: number }; total_cost: number
   cost_per_connected_call: number | null; rates_configured: boolean; currency: string
+  per_minute?: { tts_chars: number; tts_cost: number; total_cost: number } | null
 }
 
 export interface AnalyticsReport {

@@ -68,6 +68,9 @@ def usage(rows) -> dict:
         "call_minutes": round(connected_minutes, 1),
         "cost": {k: round(v, 2) for k, v in cost.items()}, "total_cost": round(total, 2),
         "cost_per_connected_call": round(total / answered, 2) if answered else None,
+        # The numbers to negotiate and tune with: per connected minute.
+        "per_minute": ({"tts_chars": round(tts / connected_minutes), "tts_cost": round(cost["tts"] / connected_minutes, 2),
+                        "total_cost": round(total / connected_minutes, 2)} if connected_minutes >= 1 else None),
         "rates_configured": any((cost_per_call, cost_per_tts, cost_per_stt, cost_per_llm)),
         "currency": currency,
     }
