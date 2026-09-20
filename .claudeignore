@@ -1,0 +1,42 @@
+# deps / build
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+dist/
+build/
+.next/
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# lockfiles / logs / media
+package-lock.json
+*.log
+logs/
+*.mp4
+*.wav
+*.mp3
+
+# data / db / uploads
+data/
+*.db
+*.db-*
+backups/
+output/
+audio/
+
+# large static assets
+frontend/public/models/
+
+# stray copies / scratch
+AI_Voice_Agent - Copy/
+.claude/worktrees/
+frontend/dump.cjs
+frontend/dump2.cjs
+temp.txt
+script.py
+fix_unicode.py
+apply.py
