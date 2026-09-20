@@ -190,6 +190,8 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
     let teethIndex: number | null = null
     let head: THREE.Object3D | undefined
     let headRestX = 0                 // the rig's own head pitch; the render loop offsets from it, never from zero
+    let cavity: THREE.Mesh | null = null
+    let teethTop = 0, teethBaseY = 0  // to shrink the teeth slab from its top edge
     let blinkAction: THREE.AnimationAction | null = null
 
     // Dispose every geometry/material/texture under a subtree. Used both on teardown and when the GLB
@@ -243,25 +245,26 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       if (teeth?.isMesh) teethIndex = addJawMorph(teeth, 12.55, 0.35, 0.5)
       head = model.getObjectByName(nodeName('spine.006'))
       headRestX = head?.rotation.x ?? 0
-      // The parted teeth used to reveal skin-coloured face interior, so the jaw drop read as the teeth
-      // closing rather than the mouth opening. A dark box behind the teeth, riding on the head bone, gives
-      // the opening a real cavity to show.
-      if (teeth?.isMesh && head) {
-        teeth.geometry.computeBoundingBox()
-        const bb = teeth.geometry.boundingBox!
-        const size = bb.getSize(new THREE.Vector3())
-        const centre = bb.getCenter(new THREE.Vector3())
+      // The teeth are one white slab filling the mouth hole, so dropping the jaw only made the grin
+      // taller. Two things make an opening read: the slab shrinks from its top edge as the jaw drops
+      // (upper teeth stay, lower teeth clear the hole), and a dark cavity sits just behind it so the
+      // cleared hole shows black instead of face interior. Both live in world space: the head bone
+      // carries the armature scale, so parenting there put the box at the neck.
+      if (teeth?.isMesh) {
         model.updateMatrixWorld(true)
-        teeth.localToWorld(centre)
-        head.worldToLocal(centre)
-        const cavity = new THREE.Mesh(
-          new THREE.BoxGeometry(size.x * 0.95, size.y * 1.6, Math.max(0.15, size.z * 0.8)),
-          new THREE.MeshBasicMaterial({ color: 0x140708 }),
+        teeth.geometry.computeBoundingBox()
+        teethTop = teeth.geometry.boundingBox!.max.y
+        teethBaseY = teeth.position.y
+        const world = new THREE.Box3().setFromObject(teeth)
+        const size = world.getSize(new THREE.Vector3())
+        const centre = world.getCenter(new THREE.Vector3())
+        cavity = new THREE.Mesh(
+          new THREE.BoxGeometry(size.x * 0.9, size.y * 1.5, Math.max(0.1, size.z * 0.6)),
+          new THREE.MeshBasicMaterial({ color: 0x120607 }),
         )
         cavity.position.copy(centre)
-        cavity.position.z -= size.z * 0.7
-        cavity.renderOrder = -1
-        head.add(cavity)
+        cavity.position.z -= size.z * 0.9
+        group.add(cavity)
       }
       lowerArm(model, 'L')
       lowerArm(model, 'R')
@@ -325,7 +328,7 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
         const sway = reduced ? 0 : Math.sin(t * 0.7) * 0.02
         // Chin up slightly so the eyes meet the camera instead of reading as a downward glance; portrait
         // frames show more torso below the face, which made the same pose look like staring at the floor.
-        const lift = camera.aspect < 1 ? -0.16 : -0.08
+        const lift = camera.aspect < 1 ? -0.09 : -0.03
         const nod = headRestX + lift + (isSpeaking && !reduced ? Math.sin(t * 2.3) * 0.025 : 0)
         const ry = (isListening ? 0.15 : 0) + sway
         const rz = isListening ? 0.08 : 0
@@ -346,6 +349,13 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       mouth = THREE.MathUtils.lerp(mouth, target, target > mouth ? 0.5 : 0.25)
       if (face && jawIndex !== null && face.morphTargetInfluences) face.morphTargetInfluences[jawIndex] = mouth
       if (teeth && teethIndex !== null && teeth.morphTargetInfluences) teeth.morphTargetInfluences[teethIndex] = mouth
+      if (teeth) {
+        // Upper teeth stay put; the slab loses up to 65% of its height from the bottom as the mouth opens.
+        const sy = 1 - mouth * 0.65
+        teeth.scale.y = sy
+        teeth.position.y = teethBaseY + teethTop * (1 - sy)
+      }
+      if (cavity) cavity.visible = mouth > 0.04
 
       camera.lookAt(0, EYE_LINE, 0)
       renderer.render(scene, camera)
