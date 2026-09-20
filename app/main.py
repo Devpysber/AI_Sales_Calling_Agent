@@ -72,8 +72,11 @@ async def lifespan(app: FastAPI):
     log.info("%s %s started (%s)", settings.app_name, settings.app_version, settings.environment)
     
     # Warm up TTS in background so startup isn't blocked, but it's ready quickly
-    from app.services import tts
+    from app.services import tts, llm
     asyncio.create_task(asyncio.to_thread(tts.warmup))
+    # Same for embeddings: the first OpenRouter round trip is ~1.7s (TLS + pool) against ~0.5s warm, and a
+    # live turn only waits 0.3s for one, so a cold first call would run its opening turns without knowledge.
+    asyncio.create_task(asyncio.to_thread(llm.embed, ["warm-up"], 10))
 
     yield
     if task:

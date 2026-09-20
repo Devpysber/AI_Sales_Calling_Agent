@@ -322,6 +322,10 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 
 /* A card whose agent is on a call right now: a slow green glow, not a flashing border. */
 .is-live-card { animation: status-glow 2.4s ease-in-out infinite; border-color: color-mix(in srgb, var(--success) 45%, var(--border)); }
+/* A live card that also entered through .reveal-in (Stagger lists on Calls and Home): the two rules share
+   specificity and fight over the animation shorthand, which left the fade-in looping every 2.4s so the
+   card blinked. Two classes here outrank .reveal-up.reveal-in in source order; the glow wins, no fade. */
+.is-live-card.reveal-in { animation: status-glow 2.4s ease-in-out infinite; opacity: 1; }
 
 /* A thin light that sweeps across a panel waiting for something: "idle, but watching". */
 .scan-line { position: relative; overflow: hidden; }

@@ -10,20 +10,22 @@ import { useReducedMotion } from '@/lib/motion'
 const nodeName = (n: string) => THREE.PropertyBinding.sanitizeNodeName(n)
 const SHIRT = 'BODY.SHIRT'
 const CAP_CROWN = 'CAP.001'
-// Desk, monitor glow, keyboard, floor and the off-screen limbs: everything that is not the bust. The purple
-// band behind the head was the emissive `screenlight` plane leaking in from the desk scene.
-const PROPS = new Set(['Cube.002', 'screenlight', 'Keyboard', 'Plane', 'ground', 'Plane.002', 'Plane.003', 'Plane.004', 'Hand', 'Pant', 'Shoe', 'Sole'])
+// The purple band behind the head was the emissive `screenlight` monitor-glow plane from the desk scene.
+const SCREENLIGHT = 'screenlight'
 
 // Rainbow shading: each vertex stores a hue (0..1) in the red channel of a colour attribute, and the
 // fragment shader turns hue + a slowly advancing offset into a saturated colour. Rebuilding the
 // attribute per frame would be wasteful; a single uniform tick is free.
-const HUE_SHADER = `
-  vec3 hsv2rgb(vec3 c) {
-    vec3 p = abs(fract(c.xxx + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
-    return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
-  }
-  diffuseColor.rgb *= hsv2rgb(vec3(fract(vColor.r + uHue), 0.8, 1.0));
+// GLSL functions must be declared at file scope, so the helper goes next to the uniform right after
+// <common>; only the one-line multiply replaces <color_fragment> inside main().
+const HUE_DECL = `
+uniform float uHue;
+vec3 hsv2rgb(vec3 c) {
+  vec3 p = abs(fract(c.xxx + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+  return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+}
 `
+const HUE_APPLY = 'diffuseColor.rgb *= hsv2rgb(vec3(fract(vColor.r + uHue), 0.8, 1.0));'
 function rainbow(mesh: THREE.Mesh, hueAt: (x: number, y: number, z: number) => number, hue: { value: number }) {
   const geo = mesh.geometry
   const pos = geo.attributes.position as THREE.BufferAttribute
@@ -42,8 +44,8 @@ function rainbow(mesh: THREE.Mesh, hueAt: (x: number, y: number, z: number) => n
     std.onBeforeCompile = (shader) => {
       shader.uniforms.uHue = hue
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform float uHue;')
-        .replace('#include <color_fragment>', HUE_SHADER)
+        .replace('#include <common>', '#include <common>' + HUE_DECL)
+        .replace('#include <color_fragment>', HUE_APPLY)
     }
     std.needsUpdate = true
     return std
@@ -221,7 +223,7 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
         // The camera framing is tight enough now that we don't need to aggressively hide 'cube's,
         // which was accidentally hiding the character's shirt.
         // We just hide planes (floor) and explicitly hide any pants/shoes if they somehow enter the frame.
-        if ((original && PROPS.has(original)) || name.startsWith('keys') || name.includes('plane') || name.includes('ground')) {
+        if (original === SCREENLIGHT || name.includes('plane') || name.includes('ground') || name.includes('pant') || name.includes('shoe') || name.includes('sole')) {
           child.visible = false
         }
         // Shirt: rainbow bands running down the torso. Cap crown: rainbow panels around the head.
