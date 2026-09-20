@@ -126,6 +126,16 @@ def team_recipients(role: str | None = None) -> list[str]:
     return seen
 
 
+def notify_admin(subject: str, body: str, lead_id: int | None = None, agent_id: int | None = None) -> bool:
+    """
+    One message to the account owner only. For operational faults (a provider outage, a dropped call's
+    technical cause): the team gets the caller back through the CRM callback, not an error report.
+    """
+    from app.core.auth import login_email
+    address = (login_email() or "").strip().lower()
+    return bool(address) and email_sent(send_email(address, subject, body, lead_id=lead_id, agent_id=agent_id, actor="ai"))
+
+
 def notify_team(subject: str, body: str, lead_id: int | None = None, agent_id: int | None = None,
                 role: str | None = None) -> list[str]:
     """Send one message to every team recipient. Returns the addresses that accepted it."""

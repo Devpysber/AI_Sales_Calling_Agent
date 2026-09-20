@@ -1276,12 +1276,15 @@ class CallStream:
                 soon = (datetime.now(IST) + timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M")
                 CallService(self.agent_id).crm.update(lead_id, {"callback_at": soon}, actor="system",
                                                       event_type="lead.updated", title="Callback after a dropped call")
+        # The admin alone hears what broke; the team sees the caller through the booked callback, never
+        # an error report, and the caller heard only the hand-over / callback line.
         with contextlib.suppress(Exception):
-            from app.services.notification_service import notify_team
-            notify_team(f"Call dropped: {who} needs a call back",
-                        f"The call with {who} ({lead.get('phone') or 'unknown number'}) ended early because the agent "
-                        f"could not continue.\n\nPlease call them back.\n\nWhat went wrong: {error[:300]}",
-                        lead_id=lead_id, agent_id=self.agent_id)
+            from app.services.notification_service import notify_admin
+            notify_admin(f"Agent fault on a call with {who}",
+                         f"The call with {who} ({lead.get('phone') or 'unknown number'}) could not continue and was "
+                         f"handed over / booked for a callback in 10 minutes.\n\nWhat went wrong: {error[:300]}\n\n"
+                         f"Agent #{self.agent_id}, session {self.session_id[:8]}.",
+                         lead_id=lead_id, agent_id=self.agent_id)
 
     async def interrupt(self, force: bool = False, text: str | None = None) -> bool:
         """

@@ -678,7 +678,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                 showAll
                   // Solid panel: a backdrop blur here smeared the avatar into a grey slab behind the text.
                   ? 'pointer-events-auto max-h-[50vh] overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0c12]/92 px-3 pb-3 sm:max-h-[60vh] sm:px-5 sm:pb-5 sm:rounded-3xl'
-                  : 'pointer-events-none max-h-[34vh] justify-end overflow-hidden [scrollbar-width:none] sm:max-h-[42vh] [mask-image:linear-gradient(to_bottom,transparent,black_22%)]',
+                  : 'pointer-events-none max-h-[38vh] justify-end overflow-hidden [scrollbar-width:none] sm:max-h-[42vh] pt-2 [mask-image:linear-gradient(to_bottom,transparent,black_6%)]',
               )}
             >
               {history.length > VISIBLE_TURNS && (
