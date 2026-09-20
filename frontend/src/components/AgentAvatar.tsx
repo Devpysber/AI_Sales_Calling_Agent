@@ -9,6 +9,47 @@ import { useReducedMotion } from '@/lib/motion'
 // collide with the eyebrow/ear mesh names, so they can come out as "Plane_1" depending on load order.
 const nodeName = (n: string) => THREE.PropertyBinding.sanitizeNodeName(n)
 const SHIRT = 'BODY.SHIRT'
+const CAP_CROWN = 'CAP.001'
+// Desk, monitor glow, keyboard, floor and the off-screen limbs: everything that is not the bust. The purple
+// band behind the head was the emissive `screenlight` plane leaking in from the desk scene.
+const PROPS = new Set(['Cube.002', 'screenlight', 'Keyboard', 'Plane', 'ground', 'Plane.002', 'Plane.003', 'Plane.004', 'Hand', 'Pant', 'Shoe', 'Sole'])
+
+// Rainbow shading: each vertex stores a hue (0..1) in the red channel of a colour attribute, and the
+// fragment shader turns hue + a slowly advancing offset into a saturated colour. Rebuilding the
+// attribute per frame would be wasteful; a single uniform tick is free.
+const HUE_SHADER = `
+  vec3 hsv2rgb(vec3 c) {
+    vec3 p = abs(fract(c.xxx + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+    return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+  }
+  diffuseColor.rgb *= hsv2rgb(vec3(fract(vColor.r + uHue), 0.8, 1.0));
+`
+function rainbow(mesh: THREE.Mesh, hueAt: (x: number, y: number, z: number) => number, hue: { value: number }) {
+  const geo = mesh.geometry
+  const pos = geo.attributes.position as THREE.BufferAttribute
+  const col = new Float32Array(pos.count * 3)
+  for (let i = 0; i < pos.count; i++) col[i * 3] = hueAt(pos.getX(i), pos.getY(i), pos.getZ(i))
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3))
+  const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+  const out = mats.map((m) => {
+    // Materials are shared with other props (the cap crown uses the shoe material); clone before editing.
+    const std = (m as THREE.MeshStandardMaterial).clone()
+    std.color.setRGB(1, 1, 1)
+    std.emissive.setRGB(0, 0, 0)
+    std.roughness = 0.75
+    std.metalness = 0
+    std.vertexColors = true
+    std.onBeforeCompile = (shader) => {
+      shader.uniforms.uHue = hue
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float uHue;')
+        .replace('#include <color_fragment>', HUE_SHADER)
+    }
+    std.needsUpdate = true
+    return std
+  })
+  mesh.material = Array.isArray(mesh.material) ? out : out[0]
+}
 
 // The face has eye morphs but no mouth shape, so build one: everything below `line` (chin, lower lip,
 // lower teeth) drops by up to `amount`, eased so the cheeks stay put. Relative morph on a skinned mesh.
@@ -167,6 +208,7 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
     renderer.domElement.style.transition = state.current.reduced ? 'none' : 'opacity 600ms ease-out'
 
     let running = true
+    const hue = { value: 0 }
     const loader = new GLTFLoader()
     loader.load('/models/character.glb', (gltf) => {
       // The effect can be torn down (route change, StrictMode double-mount) before the GLB arrives.
@@ -179,23 +221,15 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
         // The camera framing is tight enough now that we don't need to aggressively hide 'cube's,
         // which was accidentally hiding the character's shirt.
         // We just hide planes (floor) and explicitly hide any pants/shoes if they somehow enter the frame.
-        if (name.includes('plane') || name.includes('ground') || name.includes('pant') || name.includes('shoe') || name.includes('sole')) {
+        if ((original && PROPS.has(original)) || name.startsWith('keys') || name.includes('plane') || name.includes('ground')) {
           child.visible = false
         }
-        // The shirt's materials are near-black (base colour 0.01) and the panel behind it is dark, so it
-        // rendered as nothing and the head looked cut off at the neck. Lift it to a charcoal that reads.
+        // Shirt: rainbow bands running down the torso. Cap crown: rainbow panels around the head.
         if (original === SHIRT) {
-          child.traverse((m: any) => {
-            if (!m.isMesh) return
-            const mats: THREE.Material[] = Array.isArray(m.material) ? m.material : [m.material]
-            for (const mat of mats) {
-              const std = mat as THREE.MeshStandardMaterial
-              if (std.color) std.color.setRGB(0.13, 0.14, 0.17)
-              if (std.emissive) std.emissive.setRGB(0, 0, 0)
-              std.roughness = 0.9
-              std.metalness = 0
-            }
-          })
+          child.traverse((m: any) => { if (m.isMesh) rainbow(m, (_x, y) => y * 0.09, hue) })
+        }
+        if (original === CAP_CROWN) {
+          child.traverse((m: any) => { if (m.isMesh) rainbow(m, (x, _y, z) => Math.atan2(x, z) / (Math.PI * 2), hue) })
         }
       })
 
@@ -255,6 +289,8 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
 
       // Zoomed out shows the shoulders as well; ease the camera so toggling it does not cut.
       // Under reduced motion snap instead of easing so nothing glides.
+      // Slow colour drift on the rainbow surfaces; frozen under reduced motion.
+      if (!reduced) hue.value = (hue.value + dt * 0.04) % 1
       const camZ = zoomOut ? 8.5 : 6.5
       camera.position.z = reduced ? camZ : THREE.MathUtils.lerp(camera.position.z, camZ, 0.08)
 
