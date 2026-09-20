@@ -178,6 +178,22 @@ def ingest(agent_id: int, data: dict, site: str = "", extra: dict | None = None)
         events.record("callback.scheduled", f"Website lead: call scheduled for {due:%d %b %H:%M}", agent_id=agent_id, lead_id=lead["id"],
                       actor="website")
         calling = True
+        if lead.get("email") and cfg.get("ai_auto_emails", True):
+            # The moment the enquiry lands: acknowledge it and say when the call will come.
+            from app.services.notification_service import email_sent, send_email
+            persona = agents.get_profile(agent_id)
+            company = persona.get("company_name") or (agents.get(agent_id) or {}).get("name") or "our team"
+            body = "\n".join(filter(None, [
+                f"Thanks {lead.get('name') or ''}, we have your enquiry".replace("  ", " "),
+                "",
+                f"We will call you around {due:%I:%M %p} on {due:%d %b} to help with it. If another time suits you better, reply to this email.",
+                "",
+                f"Your message: {data['message']}" if data.get("message") else None,
+                "" if data.get("message") else None,
+                persona.get("agent_name") or company,
+                company,
+            ]))
+            email_sent(send_email(lead["email"], f"{company}: we received your enquiry", body, lead_id=lead["id"], agent_id=agent_id, actor="ai"))
     elif not lead.get("call_status"):
         crm.update(lead["id"], {"call_status": "Pending"}, actor="system")
     return lead, created, calling
