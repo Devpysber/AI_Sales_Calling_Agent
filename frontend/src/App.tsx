@@ -6,23 +6,40 @@ import { Spinner } from '@/components/ui'
 import { api } from '@/lib/api'
 import Login from '@/pages/Login'
 
-const Home = lazy(() => import('@/pages/Home'))
-const Dashboard = lazy(() => import('@/pages/Dashboard'))
-const Leads = lazy(() => import('@/pages/Leads'))
-const LeadDetail = lazy(() => import('@/pages/LeadDetail'))
-const Pipeline = lazy(() => import('@/pages/Pipeline'))
-const Analytics = lazy(() => import('@/pages/Analytics'))
-const Import = lazy(() => import('@/pages/Import'))
-const Calls = lazy(() => import('@/pages/Calls'))
-const ActivityPage = lazy(() => import('@/pages/Activity'))
-const Agent = lazy(() => import('@/pages/Agent'))
-const Knowledge = lazy(() => import('@/pages/Knowledge'))
-const Automation = lazy(() => import('@/pages/Automation'))
-const AgentSettings = lazy(() => import('@/pages/AgentSettings'))
-const SettingsPage = lazy(() => import('@/pages/Settings'))
-const ProfilePage = lazy(() => import('@/pages/Profile'))
-const Inbound = lazy(() => import('@/pages/Inbound'))
-const Emails = lazy(() => import('@/pages/Emails'))
+/**
+ * A route chunk that fails to load is almost always a stale tab: its index.html points at asset hashes
+ * a newer deploy replaced. Reload once to pick up the new manifest; a second failure surfaces normally.
+ */
+function page<T>(load: () => Promise<T>): () => Promise<T> {
+  return () => load().then((m) => {
+    try { sessionStorage.removeItem('chunk-reload:' + location.pathname) } catch { /* private mode */ }
+    return m
+  }).catch((err: unknown) => {
+    const key = 'chunk-reload:' + location.pathname
+    let retried = false
+    try { retried = sessionStorage.getItem(key) === '1'; if (!retried) sessionStorage.setItem(key, '1') } catch { /* private mode */ }
+    if (!retried) { location.reload(); return new Promise<T>(() => {}) }
+    throw err
+  })
+}
+
+const Home = lazy(page(() => import('@/pages/Home')))
+const Dashboard = lazy(page(() => import('@/pages/Dashboard')))
+const Leads = lazy(page(() => import('@/pages/Leads')))
+const LeadDetail = lazy(page(() => import('@/pages/LeadDetail')))
+const Pipeline = lazy(page(() => import('@/pages/Pipeline')))
+const Analytics = lazy(page(() => import('@/pages/Analytics')))
+const Import = lazy(page(() => import('@/pages/Import')))
+const Calls = lazy(page(() => import('@/pages/Calls')))
+const ActivityPage = lazy(page(() => import('@/pages/Activity')))
+const Agent = lazy(page(() => import('@/pages/Agent')))
+const Knowledge = lazy(page(() => import('@/pages/Knowledge')))
+const Automation = lazy(page(() => import('@/pages/Automation')))
+const AgentSettings = lazy(page(() => import('@/pages/AgentSettings')))
+const SettingsPage = lazy(page(() => import('@/pages/Settings')))
+const ProfilePage = lazy(page(() => import('@/pages/Profile')))
+const Inbound = lazy(page(() => import('@/pages/Inbound')))
+const Emails = lazy(page(() => import('@/pages/Emails')))
 
 const Loading = () => <div className="grid h-64 place-items-center"><Spinner className="size-6" /></div>
 
