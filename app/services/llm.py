@@ -151,6 +151,11 @@ def providers_ready(force: bool = False) -> tuple[bool, str]:
     return ok, detail
 
 
+def tools_via_openrouter() -> bool:
+    """Native tool-calling is only available through OpenRouter, and only while the account is usable."""
+    return bool(settings.openrouter_api_key) and not _openrouter_dead()
+
+
 def _is_account_error(text: str) -> bool:
     """A 401/402-class failure: the whole provider account is out, not just this model."""
     lowered = (text or "").lower()

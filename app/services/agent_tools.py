@@ -64,10 +64,13 @@ def check_credits_tool() -> str:
     """Query the user's account balance/credit status."""
     return "Account credit balance is unknown: no billing integration is connected, so do not quote a balance."
 
-def update_lead_status_tool(lead_id: int, new_status: str, agent_id: int) -> str:
-    """Update a lead's status in the CRM."""
+def update_lead_status_tool(lead_id, new_status: str, agent_id: int, lead: str | None = None) -> str:
+    """Update a lead's status in the CRM; the lead may be named by id, name or phone."""
     from app.services.call_service import JOURNEY, EXIT_STAGES
     crm = CRMService(agent_id)
+    lead_id, note = resolve_lead(agent_id, lead_id, lead)
+    if not lead_id:
+        return note
     value = str(new_status or "").strip()
     if value in QUALIFICATIONS:
         field = "qualification"
@@ -112,10 +115,39 @@ def list_all_agents_tool() -> str:
         result += f"- Agent {agent.get('id')}: {agent.get('name')} (Owner: {agent.get('created_by')})\n"
     return result
 
-def schedule_callback_tool(lead_id: int, date_time: str, agent_id: int) -> str:
-    """Schedule a callback for a lead."""
+def resolve_lead(agent_id: int, lead_id=None, lead: str | None = None) -> tuple[int | None, str]:
+    """A lead by id, else by name or phone (the caller says "Sonu Sharma", never an id). (id, note)"""
+    crm = CRMService(agent_id)
+    if lead_id:
+        try:
+            found = crm.get(int(lead_id))
+            if found:
+                return found["id"], ""
+        except (TypeError, ValueError):
+            pass
+    query = str(lead or "").strip()
+    if not query:
+        return None, "No lead named. Ask who it is for (name or phone)."
+    digits = "".join(c for c in query if c.isdigit())
+    if len(digits) >= 10:
+        found = crm.find_by_phone(query)
+        if found:
+            return found["id"], ""
+    items = crm.list_leads(search=query, page=1, page_size=5).get("items", [])
+    if len(items) == 1:
+        return items[0]["id"], ""
+    if not items:
+        return None, f"No lead matches '{query}'. Ask for the exact name or phone number."
+    return None, "Several leads match: " + "; ".join(f"lead_id {i['id']} {i.get('name')} ({i.get('phone')})" for i in items) + ". Ask which one."
+
+
+def schedule_callback_tool(lead_id, date_time: str, agent_id: int, lead: str | None = None) -> str:
+    """Schedule a callback for a lead named by id, name or phone."""
     from app.services.call_service import _valid_callback
     crm = CRMService(agent_id)
+    lead_id, note = resolve_lead(agent_id, lead_id, lead)
+    if not lead_id:
+        return note
     when = _valid_callback(_to_ist_text(date_time))
     if not when:
         return f"Invalid callback time '{date_time}': use 'YYYY-MM-DD HH:MM' in IST, not in the past and within 30 days."
@@ -239,10 +271,11 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "lead_id": {"type": "integer", "description": "The ID of the lead to update."},
+                    "lead": {"type": "string", "description": "The lead's name or phone number as the caller said it."},
+                    "lead_id": {"type": "integer", "description": "The lead id, if a previous tool result gave it."},
                     "new_status": {"type": "string", "description": "Pipeline stage ('New', 'Contacted', 'Interested', 'Follow Up', 'Meeting Booked', 'Closed Won', 'Not Interested', 'Do Not Call', 'Closed Lost') or qualification ('Hot', 'Warm', 'Cold')."}
                 },
-                "required": ["lead_id", "new_status"]
+                "required": ["new_status"]
             }
         }
     },
@@ -261,14 +294,15 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "schedule_callback",
-            "description": "Schedule a callback for a lead at a specific date and time.",
+            "description": "THE tool for 'X ko kal 11 baje call karna' / 'schedule a callback for X': books the agent to ring that lead at that time. Name the lead by name or phone; no id needed. Do not send an SMS or email for this.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "lead_id": {"type": "integer", "description": "The ID of the lead."},
-                    "date_time": {"type": "string", "description": "The date and time for the callback as 'YYYY-MM-DD HH:MM' in IST (e.g., '2026-10-15 14:30')."}
+                    "lead": {"type": "string", "description": "The lead's name or phone number as the caller said it."},
+                    "lead_id": {"type": "integer", "description": "The lead id, if a previous tool result gave it."},
+                    "date_time": {"type": "string", "description": "The date and time for the callback as 'YYYY-MM-DD HH:MM' in IST (e.g., '2026-10-15 14:30'); convert 'kal 11 baje' using today's date."}
                 },
-                "required": ["lead_id", "date_time"]
+                "required": ["date_time"]
             }
         }
     },
@@ -397,11 +431,11 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
     elif name == "check_credits":
         return check_credits_tool()
     elif name == "update_lead_status":
-        return update_lead_status_tool(args.get("lead_id"), args.get("new_status"), agent_id)
+        return update_lead_status_tool(args.get("lead_id"), args.get("new_status"), agent_id, lead=args.get("lead") or args.get("name"))
     elif name == "check_agent_schedule":
         return check_agent_schedule_tool(agent_id)
     elif name == "schedule_callback":
-        return schedule_callback_tool(args.get("lead_id"), args.get("date_time"), agent_id)
+        return schedule_callback_tool(args.get("lead_id"), args.get("date_time"), agent_id, lead=args.get("lead") or args.get("name"))
     elif name == "send_sms":
         return send_sms_tool(args.get("to"), args.get("message"))
     elif name == "book_calendar_event":

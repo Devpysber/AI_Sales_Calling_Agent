@@ -114,10 +114,16 @@ def is_team_number(number: str | None, agent_id: int | None = None) -> bool:
 
 
 def is_admin_number(number: str | None) -> bool:
-    """True when this number belongs to an Admin (role 'Admin')."""
+    """True when this number belongs to the account owner (Admin profile phone) or a member with role 'Admin'."""
     wanted = _digits(number or "")
     if not wanted:
         return False
+    try:
+        from app.core.auth import _profile
+        if _digits(str(_profile().get("phone") or "")) == wanted:
+            return True
+    except Exception:  # noqa: BLE001 - profile store unavailable: fall through to the member list
+        pass
     for m in members():
         if (m.get("role") or "Sales").lower() == "admin":
             if _digits(m.get("phone", "")) == wanted:

@@ -9,6 +9,7 @@ End of call: transcript -> LLM summary -> qualification, outcome,
 sentiment, meeting / follow-up extraction.
 """
 
+import json
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -766,6 +767,13 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
                 spoken.append(delta)
                 yield delta
 
+    if tools and not llm.tools_via_openrouter():
+        # No native tool calling available (OpenRouter out of credits or not configured): the same tools,
+        # driven through a JSON turn on whatever provider answers (Sarvam), so a colleague's "send them the
+        # brochure" / "schedule a callback" still happens instead of an agent that can only chat.
+        yield from _json_tool_turn(messages, tools, agent_id, purpose)
+        return
+
     for _round in range(MAX_TOOL_ROUNDS):
         yield from process_stream(messages)
         if not tool_call_buffer:
@@ -791,6 +799,50 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
         tool_call_buffer = []
         messages.append({"role": "user", "content": "Answer the caller in speech now, using what you have so far."})
         yield from process_stream(messages, with_tools=False)
+
+
+def _json_tool_turn(messages: list[dict], tools: list[dict], agent_id: int, purpose: str):
+    """
+    Tool use for providers without native function calling. Each round asks for one JSON object with the
+    spoken reply and, optionally, one tool to run; the result is fed back and the model is asked again.
+    """
+    from app.services.agent_tools import execute_tool
+    catalogue = "\n".join(f'- {t["function"]["name"]}: {t["function"]["description"]} Arguments: {json.dumps(t["function"].get("parameters", {}).get("properties", {}))}'
+                          for t in tools)
+    instruction = (
+        "\n\n# Tools (answer as JSON only)\n"
+        "You can run one tool per turn. Respond with ONLY this JSON object, nothing else:\n"
+        '{"reply": "what you say now, in the caller\'s language (empty string if a tool must run first)", '
+        '"tool": {"name": "<tool name>", "arguments": {...}} or null}\n'
+        "Available tools:\n" + catalogue + "\n"
+        "When the tool result comes back you will be asked again: then give the spoken reply and set tool to null. "
+        "Never invent a result; if a tool is needed, run it."
+    )
+    work = [dict(messages[0]), *messages[1:]]
+    work[0]["content"] = work[0]["content"] + instruction
+    seen = None
+    for _round in range(MAX_TOOL_ROUNDS + 1):
+        result = llm.complete(work, json_mode=True, max_tokens=TOOL_MAX_TOKENS, temperature=0.3)
+        data = _parse_turn(result.text)
+        tool = data.get("tool") if isinstance(data.get("tool"), dict) else None
+        reply = str(data.get("reply") or "").strip()
+        if not tool:
+            yield reply or "Ji, bataiye."
+            return
+        name = str(tool.get("name") or "")
+        args = tool.get("arguments") if isinstance(tool.get("arguments"), dict) else {}
+        if seen == (name, json.dumps(args, sort_keys=True)):
+            # Same tool, same arguments as last round: the result is already above. Push it to act on it.
+            work.append({"role": "user", "content": "You already ran that and its result is above. Either run the NEXT tool needed "
+                                                    "(e.g. schedule_callback / update_lead_status with the lead_id from the result) or reply now with tool null."})
+            continue
+        seen = (name, json.dumps(args, sort_keys=True))
+        outcome = execute_tool(name, json.dumps(args, ensure_ascii=False), agent_id, purpose)
+        log.info("JSON tool round %s: %s -> %s", _round + 1, name, outcome[:80])
+        work.append({"role": "assistant", "content": json.dumps({"reply": reply, "tool": {"name": name, "arguments": args}}, ensure_ascii=False)})
+        work.append({"role": "user", "content": f"[Result of {name}: {outcome[:1500]}]\nNow tell the caller, in one or two spoken sentences, and set tool to null."})
+    log.warning("JSON tool loop hit %s rounds for purpose %s", MAX_TOOL_ROUNDS, purpose)
+    yield "Ji, maine note kar liya hai, aage ka kaam ho jayega."
 
 
 def _flag(v) -> bool:
@@ -820,6 +872,12 @@ def _parse_turn(text: str) -> dict:
     # A tool-call markup names the tool outside the arg tags; end_call there means the same as the JSON flag.
     if re.search(r"<tool_call>\s*end_call", text):
         data["end_call"] = True
+    # sarvam-105b answers tool requests in its own markup whatever the schema says: lift the tool name and
+    # the <arg_key> pairs (already parsed into `data`) into the {"tool": {...}} shape the JSON tool loop runs.
+    m = re.search(r"<tool_call>\s*([A-Za-z_][\w]*)", text)
+    if m and m.group(1) != "end_call" and not isinstance(data.get("tool"), dict):
+        args = {k: v for k, v in data.items() if k not in ("reply", "tool", "end_call", "language", "intent", "qualification", "crm_update")}
+        data = {"reply": str(data.get("reply") or ""), "tool": {"name": m.group(1), "arguments": args}, "end_call": data.get("end_call", False)}
     data["end_call"] = _flag(data.get("end_call"))
     return data
 
