@@ -408,6 +408,8 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
   const [selected, setSelected] = useState<number | null>(null)
   const [ended, setEnded] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
+  // 0..1 through the current reply's audio: the latest bubble lights its words up as they are spoken.
+  const [spokenFrac, setSpokenFrac] = useState(0)
   const mouthTimer = useRef<number>(0)
   // Voice loudness sampled from the playing audio, read by the avatar every frame to move the mouth in time.
   const level = useRef(0)
@@ -427,6 +429,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
         let sum = 0
         for (const v of buf) { const d = (v - 128) / 128; sum += d * d }
         level.current = Math.sqrt(sum / buf.length)
+        if (a.duration > 0 && !a.paused) setSpokenFrac(Math.min(1, a.currentTime / a.duration))
         analyser.current!.raf = requestAnimationFrame(tick)
       }
       analyser.current = { ctx, node, source, raf: requestAnimationFrame(tick) }
@@ -474,10 +477,11 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
     // 'play' fires as soon as play() is called, seconds before a deferred TTS file has downloaded, so the
     // mouth used to move in silence. 'playing' means audio is actually coming out; 'waiting' means it stalled.
     audio.current.onplaying = () => setIsSpeaking(true);
+    setSpokenFrac(0)
     audio.current.onwaiting = () => setIsSpeaking(false);
     audio.current.crossOrigin = 'anonymous'
     meter(audio.current)
-    audio.current.onended = () => { setIsSpeaking(false); level.current = 0 };
+    audio.current.onended = () => { setIsSpeaking(false); level.current = 0; setSpokenFrac(1) };
     audio.current.onerror = () => setIsSpeaking(false);
     audio.current.onpause = () => setIsSpeaking(false);
     // pause() from the next reply / Restart, or blocked autoplay, rejects play(): swallow it and reset the speaking state.
@@ -684,14 +688,15 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                     )}
                   </div>
                   <div className={cn(
-                    'relative rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed break-words shadow-[0_8px_30px_-8px_rgba(0,0,0,.7)]',
+                    'relative rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed break-words',
                     t.role === 'assistant'
-                      ? 'rounded-tl-md border border-white/12 bg-gradient-to-br from-[#2a2d38] to-[#1a1c24] text-white'
-                      : 'rounded-tr-md bg-gradient-to-br from-white to-white/85 font-medium text-black',
-                    // One outline only: border + inset ring + a 1px shadow stacked into a doubled bottom edge.
-                    i === arr.length - 1 && t.role === 'assistant' && 'border-brand/40 shadow-[0_12px_40px_-10px_color-mix(in_srgb,var(--brand)_60%,transparent)]',
+                      ? 'rounded-tl-md border border-white/10 bg-[#20222b] text-white'
+                      : 'rounded-tr-md bg-white font-medium text-black',
+                    i === arr.length - 1 && t.role === 'assistant' && 'border-brand/50',
                   )}>
-                    {t.text}
+                    {i === arr.length - 1 && t.role === 'assistant' && isSpeaking
+                      ? <SpokenText text={t.text} frac={spokenFrac} />
+                      : t.text}
                   </div>
                 </div>
               ))}
@@ -830,6 +835,22 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
         )}
       </div>
     </div>
+  )
+}
+
+/** The reply as it is being spoken: words already said are bright, the rest wait dimmed. */
+function SpokenText({ text, frac }: { text: string; frac: number }) {
+  const words = text.split(/(\s+)/)
+  const said = Math.round(words.filter((w) => w.trim()).length * frac)
+  let n = 0
+  return (
+    <>
+      {words.map((w, i) => {
+        if (!w.trim()) return w
+        n += 1
+        return <span key={i} className={cn('transition-opacity duration-150', n <= said ? 'opacity-100' : 'opacity-35')}>{w}</span>
+      })}
+    </>
   )
 }
 
