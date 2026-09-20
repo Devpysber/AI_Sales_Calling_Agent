@@ -8,7 +8,6 @@ import { useReducedMotion } from '@/lib/motion'
 // it is sanitized ("Face.002" -> "Face002") and de-duplicated, and the prop nodes "Plane"/"Plane.002"
 // collide with the eyebrow/ear mesh names, so they can come out as "Plane_1" depending on load order.
 const nodeName = (n: string) => THREE.PropertyBinding.sanitizeNodeName(n)
-const HIDDEN = new Set(['Cube.002', 'screenlight', 'Keyboard', 'Plane', 'ground', 'Plane.002', 'Plane.003', 'Plane.004', 'Hand', 'Pant', 'Shoe', 'Sole'])
 const SHIRT = 'BODY.SHIRT'
 
 // The face has eye morphs but no mouth shape, so build one: everything below `line` (chin, lower lip,
@@ -97,6 +96,12 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       const rect = el.getBoundingClientRect()
       const w = Math.max(1, Math.floor(rect.width)), h = Math.max(1, Math.floor(rect.height))
       camera.aspect = w / h
+      // Three's fov is vertical. In a portrait viewport (phones) a fixed 38-degree vertical fov shrinks the
+      // horizontal fov and crops the face at the sides; below aspect 1 hold the horizontal fov constant
+      // instead so the whole head stays in frame on any device.
+      const BASE_FOV = 38
+      const hTan = Math.tan(THREE.MathUtils.degToRad(BASE_FOV / 2))
+      camera.fov = camera.aspect >= 1 ? BASE_FOV : 2 * THREE.MathUtils.radToDeg(Math.atan(hTan / camera.aspect))
       camera.updateProjectionMatrix()
       // Re-read the DPR every resize: browser zoom or moving the window to a differently scaled monitor
       // changes it, and a stale ratio renders the canvas blurry (zoomed in) or oversampled (zoomed out).
@@ -170,7 +175,13 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       const model = gltf.scene
       model.traverse((child: any) => {
         const original: string | undefined = child.userData?.name
-        if (original && HIDDEN.has(original)) child.visible = false
+        const name = (original || child.name || '').toLowerCase()
+        // The camera framing is tight enough now that we don't need to aggressively hide 'cube's,
+        // which was accidentally hiding the character's shirt.
+        // We just hide planes (floor) and explicitly hide any pants/shoes if they somehow enter the frame.
+        if (name.includes('plane') || name.includes('ground') || name.includes('pant') || name.includes('shoe') || name.includes('sole')) {
+          child.visible = false
+        }
         // The shirt's materials are near-black (base colour 0.01) and the panel behind it is dark, so it
         // rendered as nothing and the head looked cut off at the neck. Lift it to a charcoal that reads.
         if (original === SHIRT) {

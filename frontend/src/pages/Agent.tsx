@@ -557,11 +557,11 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
   return (
     <div className="grid gap-4 grid-cols-1">
       {/* ===== Main playground card ===== */}
-      <Card className="relative flex flex-col overflow-hidden" style={{ height: 'calc(100dvh - 280px)', minHeight: 680 }}>
+      <Card className="relative flex h-[calc(100dvh-180px)] min-h-[520px] flex-col overflow-hidden sm:h-[calc(100dvh-280px)] sm:min-h-[680px]">
 
         {/* ── Toolbar ──────────────────────────────────────────── */}
-        <div className="relative z-20 flex flex-wrap items-center gap-2 border-b border-white/10 bg-black/60 px-4 py-3 backdrop-blur-xl shrink-0">
-          <div className="mr-auto flex min-w-0 items-center gap-2.5">
+        <div className="relative z-20 flex flex-wrap items-center gap-2 border-b border-white/10 bg-black/60 px-3 py-2 backdrop-blur-xl shrink-0 sm:px-4 sm:py-3">
+          <div className="mr-auto flex w-full min-w-0 items-center gap-2.5 sm:w-auto">
             <VoiceOrb state={send.isPending ? 'speaking' : ended ? 'idle' : 'listening'} size={36} />
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-white">{profile.agent_name} · {profile.company_name}</div>
@@ -600,7 +600,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
           <div className="absolute inset-0 bg-[#080810]">
             <AgentAvatar
               zoomOut={false}
-              isSpeaking={isSpeaking || send.isPending}
+              isSpeaking={isSpeaking}
               isListening={listening}
               level={level}
               className="absolute inset-0"
@@ -618,8 +618,8 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
               className={cn(
                 'flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:max-w-[60%] sm:min-w-[320px]',
                 showAll
-                  ? 'pointer-events-auto max-h-[60vh] overflow-y-auto bg-black/40 backdrop-blur-md p-5 rounded-3xl'
-                  : 'pointer-events-none max-h-[42vh] justify-end overflow-hidden [scrollbar-width:none]',
+                  ? 'pointer-events-auto max-h-[50vh] overflow-y-auto bg-black/40 backdrop-blur-md p-3 rounded-2xl sm:max-h-[60vh] sm:p-5 sm:rounded-3xl'
+                  : 'pointer-events-none max-h-[34vh] justify-end overflow-hidden [scrollbar-width:none] sm:max-h-[42vh]',
               )}
             >
               {history.length > 4 && (
