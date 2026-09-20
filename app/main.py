@@ -85,7 +85,15 @@ async def lifespan(app: FastAPI):
         for agent_id in agent_service.ids():
             if (knowledge_profile.get(agent_id) or {}).get("status") == "analyzing":
                 knowledge_profile.rebuild_async(agent_id)
+    def migrate_speed_to_lead():
+        # The 1-2 minute default was replaced by 1-2 hours; agents still on the exact old default follow.
+        from app.services import agents as agent_service
+        for agent_id in agent_service.ids():
+            cfg = agent_service.get_automation(agent_id)
+            if cfg.get("speed_to_lead_min_seconds") == 60 and cfg.get("speed_to_lead_max_seconds") == 120:
+                agent_service.update_automation(agent_id, {"speed_to_lead_min_seconds": 3600, "speed_to_lead_max_seconds": 7200}, actor="system")
     try:
+        await asyncio.to_thread(migrate_speed_to_lead)
         await asyncio.to_thread(recover_knowledge_state)
     except Exception as e:  # noqa: BLE001 - housekeeping must never block startup
         log.warning("Knowledge state recovery skipped: %s", e)
