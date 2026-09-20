@@ -379,6 +379,17 @@ def get_automation(agent_id: int) -> dict:
 
 
 def update_automation(agent_id: int, values: dict, actor: str = "admin") -> dict:
+    # An inverted window (start >= end) or no calling days silently disables every automation; the
+    # Inbound page saves each select on change, so this is the only place that can catch it.
+    merged = {**get_automation(agent_id), **values}
+    start, end = int(merged.get("calling_hours_start", 9)), int(merged.get("calling_hours_end", 21))
+    if not (0 <= start <= 23 and 1 <= end <= 24):
+        raise ValueError("Calling hours must be between 0 and 24.")
+    if start >= end:
+        raise ValueError("The opening hour must be earlier than the closing hour.")
+    days = merged.get("calling_days")
+    if isinstance(days, list) and (not days or any(int(d) not in range(7) for d in days)):
+        raise ValueError("Pick at least one calling day.")
     return _update_group(agent_id, "automation", values, "Automation settings", actor)
 
 
@@ -498,7 +509,7 @@ def overview(days: int = 14, unlocked_ids: list[int] | None = None) -> dict:
     names = {a["id"]: a["name"] for a in agents_list}
     for call in live_calls:
         call["agent_name"] = names.get(call["agent_id"])
-    activity = [{**e, "agent_name": names.get(e["agent_id"])} for e in events.list_events(None, limit=15) if e["agent_id"] in names]
+    activity = [{**e, "agent_name": names.get(e["agent_id"])} for e in events.list_events(None, limit=15, agent_ids=list(names))]
     totals = [{"date": d, "calls": sum(series[a][d]["calls"] for a in series), "connected": sum(series[a][d]["connected"] for a in series)}
               for d in dates]
     return {"agents": agents_list, "series": totals, "live_calls": live_calls, "activity": activity, "days": days}

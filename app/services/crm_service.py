@@ -131,6 +131,9 @@ class CRMService:
         active = ("Queued", "Ringing", "In Progress")
         if view == "website":
             return query.where(Lead.source.like("website%"))
+        if view == "waiting":
+            return query.where(Lead.do_not_call.is_(False),
+                               or_(Lead.call_status == "Pending", (Lead.status == "New") & Lead.call_status.is_(None)))
         if view == "never_called":
             return query.where(Lead.last_contacted_at.is_(None), Lead.do_not_call.is_(False))
         if view == "hot_uncalled":
@@ -335,6 +338,12 @@ class CRMService:
 
     @staticmethod
     def _apply(lead: Lead, data: dict, actor: str = "admin") -> dict:
+        # The "Do Not Call" stage and the do_not_call flag must agree: every dial gate checks the flag,
+        # so a lead moved to the stage from the pipeline or edit form was still being auto-dialled.
+        if data.get("status") == "Do Not Call":
+            data = {**data, "do_not_call": True}
+        elif data.get("do_not_call") is True and "status" not in data:
+            data = {**data, "status": "Do Not Call"}
         changes = {}
         for key, value in data.items():
             if key not in EDITABLE:

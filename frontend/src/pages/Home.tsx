@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import {
   AlertTriangle, ArrowUpRight, AudioWaveform, ChartBar, BookOpen, CalendarCheck, CalendarClock, Cpu, Flame, LayoutGrid, List, ListOrdered, Mail, MessageSquareText, Pause, Phone,
-  PhoneCall, PhoneIncoming, Play, Plus, Radio, Search, Settings, Sparkles, TrendingUp, Upload, Users,
+  Lock, PhoneCall, PhoneIncoming, Play, Plus, Radio, Search, Settings, Sparkles, TrendingUp, Upload, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useMemo, useState, type CSSProperties } from 'react'
@@ -326,6 +326,13 @@ export default function Home() {
         <EmptyState icon={<AlertTriangle />} title="Could not load your agents" description={(error as Error)?.message || 'The server did not respond.'}
           action={<Button variant="primary" onClick={() => refetch()} disabled={isFetching}>Try again</Button>} />
       </Card>
+    )
+  }
+
+  if (!agents.length && role === 'team') {
+    return (
+      <Card><EmptyState icon={<Lock />} title="No agent unlocked yet"
+        description="Pick an agent in the sidebar and enter its password to open it." /></Card>
     )
   }
 

@@ -44,8 +44,19 @@ def list_agents(request: Request):
     payload = getattr(request.state, "token_payload", {})
     if user == "team":
         unlocked = payload.get("unlocked", [])
+        reduced = []
         for a in all_a:
-            a["locked"] = a["id"] not in unlocked
+            if a["id"] in unlocked:
+                reduced.append({**a, "locked": False})
+                continue
+            # Locked workspace: name and colour for the switcher, nothing about its numbers or persona.
+            reduced.append({
+                "id": a["id"], "name": a["name"], "color": a.get("color"), "status": a.get("status"), "locked": True,
+                "stats": {k: (None if k == "last_call_at" else 0) for k in (a.get("stats") or {"leads": 0, "hot": 0, "meetings": 0, "calls_today": 0, "connected_today": 0, "live": 0, "documents": 0, "last_call_at": None})},
+                "persona": {k: "" for k in (a.get("persona") or {"agent_name": "", "company_name": "", "voice_speaker": "", "default_language": ""})},
+                "setup": {k: False for k in (a.get("setup") or {})},
+            })
+        all_a = reduced
     return {"agents": all_a, "voices": tts.SPEAKERS, "languages": tts.LANGUAGES}
 
 
@@ -164,9 +175,11 @@ def delete_agent(request: Request, agent_id: int = Depends(workspace)):
 # ---------------- profile & playground ----------------
 
 @router.get("/{agent_id}/profile")
-def get_profile(agent_id: int = Depends(workspace)):
+def get_profile(request: Request, agent_id: int = Depends(workspace)):
     from app.services import team_service
-    profile = agents.get_profile(agent_id)
+    profile = dict(agents.get_profile(agent_id))
+    if getattr(request.state, "user", "") not in ("admin", "api"):
+        profile.pop("agent_password", None)  # the vault password gates team members; they never see it
     # Who the transfer number actually reaches. The names live in Sales Team Accounts, so a routing
     # page reading the profile alone could only ever show a bare number, or an empty row.
     contacts = []
@@ -180,6 +193,8 @@ def get_profile(agent_id: int = Depends(workspace)):
 
 @router.put("/{agent_id}/profile")
 def update_profile(values: dict, request: Request, agent_id: int = Depends(workspace)):
+    if "agent_password" in values and getattr(request.state, "user", "") not in ("admin", "api"):
+        raise HTTPException(403, "Administrator access required.")
     try:
         return agents.update_profile(agent_id, values, actor=actor(request))
     except (ValueError, TypeError) as e:

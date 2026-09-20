@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { lazy, Suspense, useEffect } from 'react'
+import { Component, lazy, Suspense, useEffect, type ReactNode } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import AppShell from '@/components/AppShell'
 import { Spinner } from '@/components/ui'
@@ -19,8 +19,37 @@ function page<T>(load: () => Promise<T>): () => Promise<T> {
     let retried = false
     try { retried = sessionStorage.getItem(key) === '1'; if (!retried) sessionStorage.setItem(key, '1') } catch { /* private mode */ }
     if (!retried) { location.reload(); return new Promise<T>(() => {}) }
-    throw err
+    // Second failure: one broken page with a Reload button, not a blank app.
+    console.error('Route chunk failed twice', err)
+    return { default: ChunkFailed } as unknown as T
   })
+}
+
+function ChunkFailed() {
+  return (
+    <div className="mx-auto max-w-md px-4 py-16 text-center">
+      <p className="text-lg font-semibold">This page failed to load</p>
+      <p className="mt-2 text-sm text-muted">The app was updated while this tab was open.</p>
+      <button type="button" onClick={() => location.reload()} className="mt-5 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-brand-fg">Reload</button>
+    </div>
+  )
+}
+
+/** A render error in one page must not blank the whole app; navigating away (key change) resets it. */
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null }
+  static getDerivedStateFromError(error: Error) { return { error } }
+  componentDidCatch(error: Error) { console.error('Page crashed', error) }
+  render() {
+    if (!this.state.error) return this.props.children
+    return (
+      <div className="mx-auto max-w-md px-4 py-16 text-center">
+        <p className="text-lg font-semibold">Something went wrong</p>
+        <p className="mt-2 break-words text-sm text-muted">{this.state.error.message}</p>
+        <button type="button" onClick={() => location.reload()} className="mt-5 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-brand-fg">Reload</button>
+      </div>
+    )
+  }
 }
 
 const Home = lazy(page(() => import('@/pages/Home')))
@@ -81,6 +110,7 @@ export default function App() {
   const canCreateAgent = me.user !== 'team' || me.can_create_agent === true
   const shell = <AppShell user={me.display_name || me.user} role={me.user} canCreateAgent={canCreateAgent} />
   return (
+    <ErrorBoundary key={location.pathname}>
     <Suspense fallback={<Loading />}>
       <Routes>
         <Route path="/login" element={<Navigate to="/" replace />} />
@@ -109,5 +139,6 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>
+    </ErrorBoundary>
   )
 }

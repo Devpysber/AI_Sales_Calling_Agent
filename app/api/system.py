@@ -161,13 +161,13 @@ async def inbound_status():
     return await asyncio.to_thread(_plivo_action, "inbound_status")
 
 
-@router.post("/system/inbound/connect")
+@router.post("/system/inbound/connect", dependencies=[Depends(require_admin)])
 async def inbound_connect():
     """Route inbound calls on PLIVO_PHONE_NUMBER to this app (previous application is remembered)."""
     return await asyncio.to_thread(_plivo_action, "connect_inbound")
 
 
-@router.post("/system/inbound/restore")
+@router.post("/system/inbound/restore", dependencies=[Depends(require_admin)])
 async def inbound_restore():
     return await asyncio.to_thread(_plivo_action, "restore_inbound")
 
@@ -179,17 +179,21 @@ async def alerts(request: Request, refresh: bool = False):
     payload = getattr(request.state, "token_payload", {})
     unlocked = payload.get("unlocked", []) if user == "team" else None
     from app.services import alerts as alert_service
-    return await asyncio.to_thread(alert_service.summary, refresh, unlocked)
+    scope = f"team:{payload.get('team_id')}" if user == "team" else "admin"
+    return await asyncio.to_thread(alert_service.summary, refresh, unlocked, scope)
 
 
 @router.post("/system/alerts/snooze")
-async def snooze_alert(body: dict):
-    """Hide one reminder (or a low-credit popup, key 'popup:<Provider>') for a number of hours."""
+async def snooze_alert(body: dict, request: Request):
+    """Hide one reminder (or a low-credit popup, key 'popup:<Provider>') for a number of hours, for this user only."""
     from app.services import alerts as alert_service
     key = str(body.get("key") or "")
     if not key:
         raise HTTPException(400, "key is required")
-    await asyncio.to_thread(alert_service.snooze, key, float(body.get("hours") or 4))
+    user = getattr(request.state, "user", "admin")
+    payload = getattr(request.state, "token_payload", {})
+    scope = f"team:{payload.get('team_id')}" if user == "team" else "admin"
+    await asyncio.to_thread(alert_service.snooze, key, float(body.get("hours") or 4), scope)
     return {"ok": True}
 # ---------------- team members ----------------
 
@@ -313,7 +317,10 @@ async def get_team_members():
 @router.post("/system/team-members", dependencies=[Depends(require_admin)])
 async def add_team_member(body: TeamMemberUpdate):
     members = SettingsService().get_state("team_members") or []
-    if any(m.get("email") == body.email for m in members):
+    email = (body.email or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "Email is required.")
+    if any((m.get("email") or "").strip().lower() == email for m in members):
         raise HTTPException(400, "A team member with this email already exists.")
         
     salt = uuid.uuid4().hex
@@ -391,5 +398,6 @@ async def update_team_member_password(member_id: str, body: TeamMemberPasswordUp
     pwd = body.password
     h = hashlib.pbkdf2_hmac("sha256", pwd.encode(), salt.encode(), 240_000).hex()
     member["password_hash"] = f"{salt}${h}"
+    member["password_changed_at"] = int(time.time())
     SettingsService().set_state("team_members", members)
     return {"ok": True}

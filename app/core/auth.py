@@ -96,6 +96,11 @@ def current_user(request: Request) -> str | None:
         return "api"
     payload = read_token(request.cookies.get(COOKIE))
     if payload:
+        if payload.get("u") == "team":
+            # A member removed from Sales Team Accounts must not keep working until the cookie expires.
+            from app.services import team_service
+            if not team_service.by_id(payload.get("team_id")):
+                return None
         request.state.token_payload = payload
         return payload["u"]
     return None
@@ -254,10 +259,10 @@ def get_profile(request: Request):
             "company": "",
             "timezone": "Asia/Kolkata",
             "password_source": "dashboard",
-            "password_changed_at": member.get("created_at"),
+            "password_changed_at": member.get("password_changed_at") or member.get("created_at"),
             "last_login_at": None,
             "last_login_ip": None,
-            "session_hours": 72,
+            "session_hours": TTL // 3600,
             "api_token_enabled": False
         }
     return _public_profile(_profile())
@@ -313,6 +318,7 @@ def change_password(body: PasswordChange, request: Request):
         salt = __import__('uuid').uuid4().hex
         new_h = hashlib.pbkdf2_hmac("sha256", new.encode(), salt.encode(), 240_000).hex()
         member["password_hash"] = f"{salt}${new_h}"
+        member["password_changed_at"] = int(time.time())
         SettingsService().set_state("team_members", members)
         return {"ok": True}
 

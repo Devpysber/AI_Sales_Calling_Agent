@@ -627,7 +627,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
           </div>
           <Tabs value={direction} onChange={(v) => { setDirection(v); clear() }}
             items={[{ value: 'outbound', label: 'Outbound' }, { value: 'inbound', label: 'Inbound' }]} />
-          <Select value={leadId} onChange={(e) => { setLeadId(e.target.value ? Number(e.target.value) : ''); clear() }} className="h-9 w-auto max-w-40 text-[13px]" aria-label="Prospect">
+          <Select value={leadId} onChange={(e) => { setLeadId(e.target.value ? Number(e.target.value) : ''); clear() }} className="h-9 w-auto max-w-56 text-[13px]" aria-label="Prospect">
             <option value="">Sample {caller}</option>
             {leads.isPending && <option value="" disabled>Loading leads…</option>}
             {leads.data?.items.map((l) => <option key={l.id} value={l.id}>{l.name || l.phone}</option>)}

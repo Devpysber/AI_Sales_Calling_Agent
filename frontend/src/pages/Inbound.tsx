@@ -308,11 +308,11 @@ export default function Inbound() {
                   <Clock className="size-3.5" />Open
                   {cfg && (
                     <div className="flex items-center gap-1 font-normal normal-case sm:ml-2">
-                      <select value={cfg.calling_hours_start} disabled={saveHours.isPending} aria-label="Opening hour" onChange={(e) => saveHours.mutate({ calling_hours_start: +e.target.value, calling_hours_end: cfg.calling_hours_end })} className="min-h-10 rounded-md border border-border bg-bg px-2 py-1 text-xs text-fg disabled:opacity-50">
+                      <select value={cfg.calling_hours_start} disabled={saveHours.isPending} aria-label="Opening hour" onChange={(e) => { const start = +e.target.value; saveHours.mutate({ calling_hours_start: start, calling_hours_end: Math.max(cfg.calling_hours_end, start + 1) }) }} className="min-h-10 rounded-md border border-border bg-bg px-2 py-1 text-xs text-fg disabled:opacity-50">
                         {HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
                       </select>
                       <span>to</span>
-                      <select value={cfg.calling_hours_end} disabled={saveHours.isPending} aria-label="Closing hour" onChange={(e) => saveHours.mutate({ calling_hours_start: cfg.calling_hours_start, calling_hours_end: +e.target.value })} className="min-h-10 rounded-md border border-border bg-bg px-2 py-1 text-xs text-fg disabled:opacity-50">
+                      <select value={cfg.calling_hours_end} disabled={saveHours.isPending} aria-label="Closing hour" onChange={(e) => { const end = +e.target.value; saveHours.mutate({ calling_hours_start: Math.min(cfg.calling_hours_start, end - 1), calling_hours_end: end }) }} className="min-h-10 rounded-md border border-border bg-bg px-2 py-1 text-xs text-fg disabled:opacity-50">
                         {HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
                       </select>
                     </div>

@@ -30,11 +30,16 @@ def record(type: str, title: str, detail: str | None = None, *, agent_id: int | 
 
 
 def list_events(agent_id: int | None, lead_id: int | None = None, call_id: int | None = None,
-                type_prefix: str | None = None, limit: int = 50, before_id: int | None = None) -> list[dict]:
+                type_prefix: str | None = None, limit: int = 50, before_id: int | None = None,
+                agent_ids: list[int] | None = None) -> list[dict]:
+    if agent_ids is not None and not agent_ids:
+        return []
     with get_db() as db:
         query = select(Event, Lead.name).outerjoin(Lead, Lead.id == Event.lead_id).order_by(Event.id.desc()).limit(limit)
         if agent_id is not None:
             query = query.where(Event.agent_id == agent_id)
+        elif agent_ids is not None:
+            query = query.where(Event.agent_id.in_(agent_ids))
         if lead_id:
             query = query.where(Event.lead_id == lead_id)
         if call_id:

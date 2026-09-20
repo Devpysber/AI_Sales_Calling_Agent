@@ -442,7 +442,8 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
   const { agentId } = useParams()
   const agentsQuery = useAgents()
   const agents = useMemo(() => agentsQuery.data?.agents ?? [], [agentsQuery.data])
-  const id = agentId ? Number(agentId) : null
+  const validId = agentId !== undefined && /^[1-9]\d*$/.test(agentId)
+  const id = validId ? Number(agentId) : null
   const agent = agents.find((a) => a.id === id)
 
   const menuButton = useRef<HTMLButtonElement>(null)
@@ -605,6 +606,7 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
     </div>
   )
 
+  if (agentId !== undefined && !validId) return <Navigate to="/" replace />
   if (!id) return frame(<Outlet />)
   if (!agent) {
     if (agentsQuery.isError) return frame(

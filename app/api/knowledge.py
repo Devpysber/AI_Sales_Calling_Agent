@@ -21,7 +21,9 @@ class Query(BaseModel):
 
 @router.get("")
 def list_documents(agent_id: int = Depends(workspace)):
-    return {"documents": rag.list_documents(agent_id), "stats": rag.stats(agent_id), "coverage": knowledge_profile.get(agent_id)}
+    documents = rag.list_documents(agent_id)
+    # The index counts distinct titles of ready chunks; the page lists documents. Report the list's count.
+    return {"documents": documents, "stats": {**rag.stats(agent_id), "documents": len(documents)}, "coverage": knowledge_profile.get(agent_id)}
 
 
 @router.post("/coverage")
