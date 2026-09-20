@@ -12,7 +12,7 @@ import { api } from '@/lib/api'
 import type { AgentProfile, AgentTurnResult, KnowledgeDoc, Lead, Page, Turn } from '@/lib/types'
 import { cn, LANGUAGES, titleCase } from '@/lib/utils'
 import { Stagger } from '@/lib/motion'
-import { VoiceOrb } from '@/components/VoiceViz'
+import { VoiceOrb, Waveform } from '@/components/VoiceViz'
 import { AgentAvatar } from '@/components/AgentAvatar'
 import { useAgent } from '@/lib/agent'
 
@@ -141,23 +141,32 @@ function AgentSummary({ profile, saved, voices, languages, docs, knowledgeError,
   ]
 
   return (
-    <Card className="mb-4 overflow-hidden reveal reveal-in reveal-up">
+    <Card className="glint beam mb-4 overflow-hidden reveal reveal-in reveal-up">
       <div className="flex flex-wrap items-center gap-x-8 gap-y-4 p-5">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-brand text-brand-fg shadow-sm"><Bot className="size-5" /></span>
+          <span className="relative grid size-11 shrink-0 place-items-center rounded-xl bg-brand text-brand-fg shadow-sm">
+            <span className="absolute inset-0 rounded-xl bg-brand opacity-40 blur-md" aria-hidden />
+            <Bot className="relative size-5" />
+          </span>
           <div className="min-w-0">
             <div className="truncate font-semibold">{profile.agent_name || 'Unnamed agent'}</div>
             <div className="truncate text-sm text-muted">{profile.company_name}{profile.company_tagline && ` · ${profile.company_tagline}`}</div>
           </div>
         </div>
-        <dl className="flex min-w-0 flex-1 basis-full flex-wrap gap-x-8 gap-y-3 sm:basis-auto">
+        <Stagger className="flex min-w-0 flex-1 basis-full flex-wrap gap-x-8 gap-y-3 sm:basis-auto" delay={120} step={60}>
           {facts.map(([k, v]) => (
             <div key={k} className="min-w-0"><dt className="text-xs text-muted">{k}</dt><dd className="truncate text-sm font-medium">{v}</dd></div>
           ))}
-        </dl>
+        </Stagger>
         <button type="button" onClick={() => setOpen(!open)} className="flex min-h-10 items-center gap-3 rounded-lg px-2 py-1 text-left hover:bg-surface-2" aria-expanded={open}>
           <Ring pct={pct} />
-          <div><div className="text-sm font-medium">{pct === 100 ? 'Ready to call' : 'Setup'}</div><div className="text-xs text-muted">{done}/{checks.length} complete</div></div>
+          <div>
+            <div className="flex items-center gap-1.5 text-sm font-medium">
+              {pct === 100 && <span className="relative flex size-2"><span className="absolute inline-flex size-full animate-live-ring rounded-full bg-success" /><span className="relative inline-flex size-2 rounded-full bg-success" /></span>}
+              {pct === 100 ? 'Ready to call' : 'Setup'}
+            </div>
+            <div className="text-xs text-muted">{done}/{checks.length} complete</div>
+          </div>
         </button>
       </div>
       {open && (
@@ -179,11 +188,14 @@ function AgentSummary({ profile, saved, voices, languages, docs, knowledgeError,
 
 function Ring({ pct }: { pct: number }) {
   const r = 16, c = 2 * Math.PI * r
+  // Starts empty and sweeps to the real value on the first paint, so the progress reads as progress.
+  const [shown, setShown] = useState(0)
+  useEffect(() => { const id = requestAnimationFrame(() => setShown(pct)); return () => cancelAnimationFrame(id) }, [pct])
   return (
     <svg viewBox="0 0 40 40" className="size-10 -rotate-90" aria-hidden>
       <circle cx="20" cy="20" r={r} fill="none" strokeWidth="4" className="stroke-surface-2" />
-      <circle cx="20" cy="20" r={r} fill="none" strokeWidth="4" strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)}
-        className={cn('transition-all', pct === 100 ? 'stroke-success' : 'stroke-brand')} />
+      <circle cx="20" cy="20" r={r} fill="none" strokeWidth="4" strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c * (1 - shown / 100)}
+        className={cn('transition-[stroke-dashoffset,stroke] duration-1000 ease-out', pct === 100 ? 'stroke-success' : 'stroke-brand')} />
     </svg>
   )
 }
@@ -567,7 +579,16 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
             <VoiceOrb state={send.isPending ? 'speaking' : ended ? 'idle' : 'listening'} size={36} />
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-white">{profile.agent_name} · {profile.company_name}</div>
-              <div className="truncate text-xs text-white/50">{inbound ? 'Rehearsing an inbound call' : 'Rehearsing an outbound call'} · voice {titleCase(profile.voice_speaker)} · nothing is saved to the CRM</div>
+              <div className="flex min-w-0 items-center gap-2 text-xs text-white/50">
+                <span className={cn('inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-px text-[10.5px] font-semibold uppercase tracking-wider transition-colors',
+                  send.isPending ? 'border-brand/40 bg-brand/15 text-brand-fg' : isSpeaking ? 'border-success/40 bg-success/15 text-success' : listening ? 'border-danger/40 bg-danger/15 text-danger' : ended ? 'border-white/10 bg-white/5 text-white/50' : 'border-white/10 bg-white/5 text-white/70')}>
+                  {send.isPending ? <><span className="size-1.5 animate-pulse rounded-full bg-brand" />Thinking</>
+                    : isSpeaking ? <><Waveform bars={5} className="h-2.5" />Speaking</>
+                    : listening ? <><span className="size-1.5 animate-pulse rounded-full bg-danger" />Listening</>
+                    : ended ? 'Ended' : <><span className="size-1.5 rounded-full bg-success" />Live</>}
+                </span>
+                <span className="truncate">{inbound ? 'Rehearsing an inbound call' : 'Rehearsing an outbound call'} · voice {titleCase(profile.voice_speaker)} · nothing is saved to the CRM</span>
+              </div>
             </div>
           </div>
           <Tabs value={direction} onChange={(v) => { setDirection(v); clear() }}
