@@ -682,9 +682,10 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                   <div className={cn(
                     'relative rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed break-words shadow-[0_8px_30px_-8px_rgba(0,0,0,.7)] backdrop-blur-xl',
                     t.role === 'assistant'
-                      ? 'rounded-tl-md border border-white/12 bg-gradient-to-br from-white/14 to-white/6 text-white ring-1 ring-inset ring-white/5'
+                      ? 'rounded-tl-md border border-white/12 bg-gradient-to-br from-white/14 to-white/6 text-white'
                       : 'rounded-tr-md bg-gradient-to-br from-white to-white/85 font-medium text-black',
-                    i === arr.length - 1 && t.role === 'assistant' && 'ring-brand/40 shadow-[0_0_0_1px_rgba(255,255,255,.08),0_12px_40px_-10px_color-mix(in_srgb,var(--brand)_60%,transparent)]',
+                    // One outline only: border + inset ring + a 1px shadow stacked into a doubled bottom edge.
+                    i === arr.length - 1 && t.role === 'assistant' && 'border-brand/40 shadow-[0_12px_40px_-10px_color-mix(in_srgb,var(--brand)_60%,transparent)]',
                   )}>
                     {t.text}
                   </div>
