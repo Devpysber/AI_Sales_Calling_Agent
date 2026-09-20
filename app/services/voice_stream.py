@@ -653,6 +653,7 @@ class CallStream:
         self.closed = False
         self.spoken_recent: list[str] = []   # what the agent actually played, to recognise its own echo
         self.pending_bargein = False         # speech detected while we speak, not yet confirmed to be human
+        self.backchannel: str | None = None  # a short "haan"/"ok" heard over our last words: answered once we are quiet
         self.agent_quiet_at = 0.0            # when the last audio finished playing at Plivo
         self.usage = {"tts_chars": 0, "stt_seconds": 0.0, "llm_requests": 0, **((self.session or {}).get("usage") or {})}
         self.speech_ended_at: float | None = None
@@ -831,6 +832,7 @@ class CallStream:
 
     async def clear_audio(self):
         self.agent_speaking = False
+        self.backchannel = None
         self.agent_quiet_at = time.monotonic()
         # The reply that was just cut off may have armed a hangup/transfer on its checkpoint. A late
         # playedStream for that mark must not end the call in the middle of the next answer.
@@ -892,6 +894,16 @@ class CallStream:
         except Exception as e:  # noqa: BLE001 - keep the AI on the line if Plivo refuses
             self.transferred = False
             log.error("Transfer failed for %s: %s", self.session_id[:8], e)
+
+    async def wait_for_end(self):
+        """
+        Stay alive until plivo_loop acts on an armed hangup/transfer checkpoint, or the caller hangs up.
+
+        A helper loop that returns tears run() down, and run()'s cleanup hangs up at once: the goodbye
+        or hand-off line it just queued would be cut off, and an armed transfer would never run.
+        """
+        while not self.closed:
+            await asyncio.sleep(0.5)
 
     async def hangup(self):
         if self.call_uuid:
@@ -1000,13 +1012,27 @@ class CallStream:
                         self.agent_speaking = False
                         self.agent_quiet_at = time.monotonic()
                         self.quiet_since = time.monotonic()
+                        self.pending_bargein = False
                         self.publish_state()
+                        if (self.backchannel and self.mode == "ai" and not self.heard
+                                and not (self.reply_task and not self.reply_task.done())):
+                            # "haan" said over our final word was the answer to the question we just asked.
+                            self.heard.append(self.backchannel)
+                            self.commit_task = asyncio.create_task(self.commit_turn())
+                        self.backchannel = None
                     if msg.get("name") and msg.get("name") == self.hangup_on_mark:
                         await self.hangup()
                         return
                     if msg.get("name") and msg.get("name") == self.transfer_on_mark:
+                        self.transfer_on_mark = None
                         await self.transfer_call()
-                        return
+                        if self.transferred:
+                            return
+                        # Plivo refused the transfer: the caller was just told "connecting you". Say so
+                        # and end on a spoken line rather than dropping them from run()'s cleanup.
+                        from app.api.plivo import PROMPTS
+                        await self.say_recorded(PROMPTS["error"][self.lang_key()], hangup=True)
+                        continue
                 elif event == "stop":
                     return
         except (WebSocketDisconnect, RuntimeError):
@@ -1033,6 +1059,7 @@ class CallStream:
                     log.error("Sarvam STT unavailable after %s attempts on session %s: %s",
                               self.stt_failures, self.session_id[:8], e)
                     await self.fail_turn(f"speech recognition unavailable: {e}")
+                    await self.wait_for_end()
                     return
                 delay = min(STT_RETRY_CAP, STT_RETRY_BASE * 2 ** (self.stt_failures - 1)) * random.uniform(0.7, 1.3)
                 log.warning("Sarvam STT stream dropped (%s), reconnecting in %.1fs", e, delay)
@@ -1064,6 +1091,7 @@ class CallStream:
                 from app.api.plivo import PROMPTS
                 log.info("Call time budget reached on session %s, saying goodbye", self.session_id[:8])
                 await self.say_recorded(PROMPTS["goodbye"][self.lang_key()], hangup=True)
+                await self.wait_for_end()
                 return
             # A barge-in that never produced a transcript (noise, a cough, a false VAD trigger) cancels
             # the reply, which puts the caller's words back in self.heard with nothing left to commit
@@ -1097,6 +1125,7 @@ class CallStream:
                 caller_spoke = self.customer_spoke()
                 if self.silent_prompts > (MAX_SILENT_PROMPTS if caller_spoke else 1):
                     await self.say_recorded(PROMPTS["goodbye"][self.lang_key()], hangup=True)
+                    await self.wait_for_end()
                     return
                 if caller_spoke:
                     # A person would check the line and repeat their question, not ask the caller to
@@ -1188,11 +1217,14 @@ class CallStream:
                 return
             if text and self.pending_bargein:
                 self.pending_bargein = False
-                if len(text.split()) <= 2 and BACKCHANNEL.match(text):
+                if self.agent_speaking and len(text.split()) <= 2 and BACKCHANNEL.match(text):
                     # "haan", "ji", "hmm", "ok": the caller is listening along, not taking the floor.
                     # Cutting the agent off and answering "haan" as a new turn is what made it stutter.
+                    # Kept aside: if it turns out to be the last thing said before we go quiet, it was
+                    # the answer to our question and playedStream commits it.
                     log.info("Backchannel on session %s: %s", self.session_id[:8], text)
                     self.publish({"type": "heard", "text": text})
+                    self.backchannel = text
                     return
                 if not await self.interrupt(text=text):
                     return  # the hand-off or goodbye being played is left to finish
@@ -1269,10 +1301,14 @@ class CallStream:
             await self.clear_audio()
             await self.hangup()
             return False
-        if self.reply_task and not self.reply_task.done():
+        cancelled = bool(self.reply_task and not self.reply_task.done())
+        if cancelled:
             self.reply_task.cancel()
-        if self.agent_speaking or force:
+        if self.agent_speaking:
             await self.clear_audio()
+        if cancelled or self.agent_speaking or force:
+            # A reply cancelled before its first audio has already pushed text (maybe a flush) into the
+            # socket; reusing it would speak the abandoned words ahead of the next answer.
             await self.tts.reset()
             log.info("Barge-in on session %s", self.session_id[:8])
         return True
@@ -1330,6 +1366,7 @@ class CallStream:
             # a streaming reply would instead surface as a socket error and trip the failure path.
             self.reply_task.cancel()
             await asyncio.wait([self.reply_task])
+            await self.tts.reset()
         text = " ".join(self.heard)
         if HOLD.search(text):
             self.hold_until = time.monotonic() + HOLD_SECONDS
@@ -1532,8 +1569,8 @@ class CallStream:
             if feeder:
                 feeder.cancel()
             from app.services.llm import LLMError
-            if isinstance(e, websockets.ConnectionClosed) or (isinstance(e, RuntimeError) and not isinstance(e, LLMError)
-                                                              and str(e).startswith("Sarvam TTS")):
+            if (isinstance(e, (websockets.ConnectionClosed, websockets.InvalidHandshake, OSError, TimeoutError))
+                    or (isinstance(e, RuntimeError) and not isinstance(e, LLMError) and str(e).startswith("Sarvam TTS"))):
                 # The voice socket hiccuped, not the model: the words exist, so finish saying them below
                 # with one-shot synthesis instead of booking a callback and dropping the caller.
                 tts_fault = e

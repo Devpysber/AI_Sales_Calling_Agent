@@ -223,7 +223,9 @@ async def playground(body: PlaygroundMessage, agent_id: int = Depends(workspace)
         raise HTTPException(502, str(e))
     # A voice outage (quota, network) must not hide the text reply: return it without audio and say why.
     try:
-        audio_id = await asyncio.to_thread(tts.prepare_audio_id, res["reply"], res.get("language") or "en-IN", agents.get_profile(agent_id)["voice_speaker"])
+        profile = agents.get_profile(agent_id)
+        language = res.get("language") or tts.detect_language(res["reply"], profile.get("default_language") or "en-IN")
+        audio_id = await asyncio.to_thread(tts.prepare_audio_id, res["reply"], language, profile["voice_speaker"])
         res["audio_url"] = tts.audio_url(audio_id) if audio_id else ""
     except TTSError as e:
         res["audio_url"] = ""
@@ -235,6 +237,8 @@ async def playground(body: PlaygroundMessage, agent_id: int = Depends(workspace)
 def greeting_preview(lead_id: int | None = None, language: str = "en-IN", purpose: str | None = None,
                      agent_id: int = Depends(workspace)):
     lead = (CRMService(agent_id).get(lead_id) if lead_id else None) or ({} if purpose == "inbound" else {"name": "Rahul"})
+    if purpose == "confirm_meeting" and not lead.get("meeting_at"):
+        purpose = "follow_up"  # same rule as dialling: nothing to confirm without a meeting time
     if purpose in ("inbound", "confirm_meeting", "follow_up"):
         lead = {**lead, "call_purpose": purpose}
     return {"text": agent.greeting(agent_id, lead, language)}

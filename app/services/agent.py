@@ -586,7 +586,9 @@ def history_window(history: list[dict], summary: str | None = None, compacted_up
     if compacted_upto is not None:
         start = max(int(compacted_upto), len(history) - MAX_HISTORY_TURNS - COMPACT_EVERY_TURNS)
     elif summary:
-        start -= COMPACT_EVERY_TURNS - 1  # the widest the hole can be between two compactions
+        # Without the exact compaction index, reach back a full cycle: at the boundary itself the window
+        # otherwise starts one turn after the summary's edge and that turn is in neither.
+        start -= COMPACT_EVERY_TURNS
     return history[max(start, 0):]
 
 
@@ -779,10 +781,17 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
         yield from process_stream(messages, with_tools=False)
 
 
+def _flag(v) -> bool:
+    """A JSON boolean the model may have quoted: "false"/"no" must not end a call."""
+    return v if isinstance(v, bool) else str(v).strip().lower() in ("true", "yes", "1")
+
+
 def _parse_turn(text: str) -> dict:
     """The model's JSON turn, tolerating the ways sarvam-105b bends the format."""
     try:
         data = llm.parse_json(text)
+        if not isinstance(data, dict):
+            raise ValueError("LLM JSON is not an object")
     except Exception:
         raw = text.strip()
         # A reply cut mid-JSON still has its spoken text: salvage it rather than read '{"reply": ...' aloud.
@@ -799,6 +808,7 @@ def _parse_turn(text: str) -> dict:
     # A tool-call markup names the tool outside the arg tags; end_call there means the same as the JSON flag.
     if re.search(r"<tool_call>\s*end_call", text):
         data["end_call"] = True
+    data["end_call"] = _flag(data.get("end_call"))
     return data
 
 
@@ -831,15 +841,19 @@ def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, 
         if reply:
             data = {**data, **{k: v for k, v in more.items() if v not in (None, "", {}, [])}, "end_call": bool(data.get("end_call") or more.get("end_call"))}
             result = retry
+    # "Hindi", "hi", "hi_IN": map whatever the model wrote onto a code TTS accepts, else None so callers
+    # fall back to detection / the session language instead of sending Sarvam an unknown code.
+    raw_lang = str(data.get("language") or "").strip().lower().replace("_", "-")
+    language = next((code for code, name in LANGUAGES.items() if raw_lang in (code.lower(), code[:2].lower(), name.lower())), None)
     if not reply:
         # The model sent no spoken text (usually an end_call with an empty reply). Speak in the call's
         # language, and say goodbye when it is ending the call rather than asking the caller to repeat.
-        lang = "hi" if str(data.get("language") or lead.get("language") or agents.get_profile(agent_id).get("default_language") or "").startswith("hi") else "en"
+        lang = "hi" if str(language or lead.get("language") or agents.get_profile(agent_id).get("default_language") or "").lower().startswith("hi") else "en"
         reply = EMPTY_REPLY["goodbye" if data.get("end_call") else "repeat"][lang]
     crm = data.get("crm_update") if isinstance(data.get("crm_update"), dict) else {}
     return {
         "reply": reply,
-        "language": data.get("language") or None,
+        "language": language,
         "intent": data.get("intent") if data.get("intent") in INTENTS else "other",
         "qualification": data.get("qualification") if data.get("qualification") in ("Hot", "Warm", "Cold") else None,
         "end_call": bool(data.get("end_call")),

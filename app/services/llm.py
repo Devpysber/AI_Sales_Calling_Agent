@@ -210,7 +210,8 @@ def _openrouter(messages: list[dict], json_mode: bool, max_tokens: int, temperat
         future.started = time.monotonic()
         pending.add(future)
 
-    launch()
+    if models:
+        launch()
     while pending or launched < len(models):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -313,6 +314,12 @@ def _stream_sse(url: str, headers: dict, body: dict, first_token_timeout: float)
             if tool_calls:
                 got = True
                 yield {"tool_calls": tool_calls}
+            # agent.process_stream appends the hang-up marker to a farewell cut by max_tokens; it can only
+            # do that if the finish reason is forwarded. Not counted as content: a stream that ends with
+            # only a finish frame still falls through to the next provider.
+            fr = choices[0].get("finish_reason") if choices else None
+            if fr:
+                yield {"finish_reason": fr}
         if not got:
             raise LLMError("empty stream")
 
@@ -395,6 +402,10 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
             log.warning("LLM primaries failed (%s); trying fallback %s", " | ".join(errors)[:160], model)
         attempt_messages, trims = (compact if name == "openrouter-fallback" else messages), 0
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining < 1.0:
+                errors.append(f"{name}/{model}: turn budget of {settings.llm_stream_budget_seconds}s spent")
+                break
             body.update(messages=attempt_messages, max_tokens=max_tokens, temperature=temperature)
             produced = False
             try:
