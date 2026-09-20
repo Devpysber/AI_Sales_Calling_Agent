@@ -33,8 +33,8 @@ AUTOMATION_DEFAULTS = {
     "max_calls_per_run": 5,
     "retry_enabled": False,
     "retry_interval_minutes": 15,
-    "retry_min_gap_minutes": 60,
-    "max_retries": 3,
+    "retry_min_gap_minutes": 180,   # an unanswered number is not rung again within three hours
+    "max_retries": 2,               # two more tries, then it waits for the customer or a scheduled call
     "calling_hours_start": 9,
     "calling_hours_end": 21,
     "calling_days": [0, 1, 2, 3, 4, 5],

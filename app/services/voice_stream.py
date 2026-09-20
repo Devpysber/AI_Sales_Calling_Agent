@@ -379,7 +379,9 @@ class SarvamTTS:
     async def _open(self):
         ws = await websockets.connect(self.url, additional_headers={"Api-Subscription-Key": settings.sarvam_api_key},
                                       open_timeout=5, ping_interval=20, max_queue=512)
+        # pace/loudness slightly under 1: the default delivery is brisk and announcer-like on a phone line.
         config = {"target_language_code": self.language, "speech_sample_rate": "8000", "output_audio_codec": "mulaw",
+                  "pace": 0.95, "loudness": 1.0,
                   "min_buffer_size": 30, "max_chunk_length": 150}
         if self.speaker:
             config["speaker"] = self.speaker
