@@ -189,13 +189,6 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
     let teeth: THREE.Mesh | undefined
     let head: THREE.Object3D | undefined
     let headRestX = 0                 // the rig's own head pitch; the render loop offsets from it, never from zero
-    // Procedural mouth (the GLB has a fixed toothy grin and no mouth shapes): lips cover the grin hole
-    // at rest, a dark cavity with an upper-teeth strip opens with the voice. Parented to the head bone
-    // with attach(), which keeps the world transform and copes with the armature scale.
-    let lipLine: THREE.Mesh | null = null
-    let cavity: THREE.Mesh | null = null
-    let teethStrip: THREE.Mesh | null = null
-    let mouthW = 1, mouthH = 1, mouthD = 1
     let blinkAction: THREE.AnimationAction | null = null
 
     // Dispose every geometry/material/texture under a subtree. Used both on teardown and when the GLB
@@ -243,51 +236,11 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       })
 
       face = model.getObjectByName(nodeName('Face.002')) as THREE.Mesh | null
-      if (face?.isMesh) jawIndex = addJawMorph(face, 12.55, 0.9, 0.3)
+      if (face?.isMesh) jawIndex = addJawMorph(face, 12.55, 0.9, 0.45)
       // Teeth are one block; dropping its lower half reads as the mouth opening between the rows.
       teeth = model.getObjectByName(nodeName('Teeth.001')) as THREE.Mesh | undefined
       head = model.getObjectByName(nodeName('spine.006'))
       headRestX = head?.rotation.x ?? 0
-      if (teeth?.isMesh && head && face?.isMesh) {
-        model.updateMatrixWorld(true)
-        const bb = new THREE.Box3().setFromObject(teeth)
-        const size = bb.getSize(new THREE.Vector3())
-        const centre = bb.getCenter(new THREE.Vector3())
-        mouthW = size.x; mouthH = size.y; mouthD = Math.max(size.z, 0.05)
-        teeth.visible = false
-
-        const faceMat = (Array.isArray(face.material) ? face.material[0] : face.material) as THREE.MeshStandardMaterial
-        const skin = new THREE.MeshStandardMaterial({ color: faceMat.color?.clone() ?? new THREE.Color(0xd9a98a), roughness: 0.85 })
-        const lipTone = skin.color.clone().multiplyScalar(0.72)
-
-        const mouthGroup = new THREE.Group()
-        mouthGroup.position.copy(centre)
-        mouthGroup.position.z = bb.max.z + mouthD * 0.35
-        // Lips: a flattened ellipsoid that fills the grin hole with skin, slightly proud of the face.
-        const cover = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 24), skin)
-        cover.scale.set(mouthW * 0.58, mouthH * 0.62, mouthD * 0.6)
-        cover.renderOrder = 5
-        // Closed-mouth line.
-        lipLine = new THREE.Mesh(new THREE.CapsuleGeometry(mouthH * 0.035, mouthW * 0.72, 4, 12), new THREE.MeshStandardMaterial({ color: lipTone, roughness: 0.9 }))
-        lipLine.rotation.z = Math.PI / 2
-        lipLine.position.z = mouthD * 0.62
-        lipLine.renderOrder = 6
-        // Cavity: dark ellipsoid whose height follows the voice; sits just in front of the lips.
-        cavity = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 24), new THREE.MeshBasicMaterial({ color: 0x150708 }))
-        cavity.position.z = mouthD * 0.5
-        cavity.renderOrder = 7
-        cavity.visible = false
-        // Upper teeth, glimpsed when the mouth is well open.
-        teethStrip = new THREE.Mesh(new THREE.BoxGeometry(mouthW * 0.5, mouthH * 0.16, mouthD * 0.2),
-          new THREE.MeshStandardMaterial({ color: 0xf4f1ea, roughness: 0.4 }))
-        teethStrip.position.z = mouthD * 0.62
-        teethStrip.renderOrder = 8
-        teethStrip.visible = false
-        mouthGroup.add(cover, lipLine, cavity, teethStrip)
-        model.add(mouthGroup)
-        model.updateMatrixWorld(true)
-        head.attach(mouthGroup)
-      }
       lowerArm(model, 'L')
       lowerArm(model, 'R')
 
@@ -370,18 +323,9 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
         : Math.max(0, 0.6 + 0.5 * Math.sin(t * 14) * Math.sin(t * 5.3 + 1) + 0.3 * Math.sin(t * 23))
       mouth = THREE.MathUtils.lerp(mouth, target, target > mouth ? 0.5 : 0.25)
       if (face && jawIndex !== null && face.morphTargetInfluences) face.morphTargetInfluences[jawIndex] = mouth
-      if (cavity && lipLine && teethStrip) {
-        const open = Math.min(1, mouth)
-        lipLine.visible = open < 0.06
-        cavity.visible = open >= 0.06
-        // Width narrows a touch as the jaw drops, like a real "ah"; the opening grows from the lip line down.
-        const h = mouthH * (0.08 + 0.62 * open)
-        cavity.scale.set(mouthW * (0.44 - 0.06 * open), h * 0.5, mouthD * 0.45)
-        cavity.position.y = -h * 0.28
-        teethStrip.visible = open > 0.3
-        teethStrip.position.y = cavity.position.y + h * 0.5 - mouthH * 0.09
-        teethStrip.scale.x = 0.7 + 0.3 * open
-      }
+      // Original grin at rest. While speaking the teeth drop out whenever the mouth is open, so the jaw
+      // drop reads as a dark open mouth; they return the instant it closes.
+      if (teeth) teeth.visible = mouth < 0.18
 
       camera.lookAt(0, EYE_LINE, 0)
       renderer.render(scene, camera)
