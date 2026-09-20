@@ -1267,7 +1267,8 @@ class CallStream:
                 self.heard.append(text)
                 # Retrieve for what we have heard so far while the caller finishes their sentence, so
                 # the embedding is cached by the time the reply is actually built.
-                rag.prefetch(self.agent_id, agent.retrieval_query(self.session["history"], " ".join(self.heard)))
+                if agent.needs_knowledge(" ".join(self.heard)):
+                    rag.prefetch(self.agent_id, agent.retrieval_query(self.session["history"], " ".join(self.heard)))
                 if self.commit_task and not self.commit_task.done():
                     self.commit_task.cancel()
                 self.commit_task = asyncio.create_task(self.commit_turn())

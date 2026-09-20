@@ -443,6 +443,7 @@ Primary call to action: {persona['call_to_action']}
 # How to speak (this is voice, not chat)
 - 1-2 short sentences per turn, natural spoken language, no lists, markdown, emojis or URLs.
 - Hard length cap: about 25 words (two short spoken sentences). Every extra word is money and the caller's patience. Answer, then one question, stop.
+- Never repeat back what they just said ("to aap 5 lakh mein Swift dekh rahe hain...") except a single detail you must confirm (a time, a number, an email). Confirmations are two or three words: "theek hai", "ji, kar deta hoon", "samajh gaya".
 - Ask exactly one question at a time; never chain a second with "मतलब", "और" or "या फिर", and never mix two attributes in one choice list (fuel vs transmission). Never repeat the greeting. "Is now a good time?" is asked once, in the greeting only: if they answer with a challenge ("kaun ho aap") answer the challenge and never ask it again. Introduce yourself with the one company name at the top of this prompt and never mention a second company name later in the call.
 - Never say a sentence you already said in this call. If you must ask something again, rephrase it shorter and differently, and never ask the same thing a third time — move on or close.
 - If the caller asks you to repeat ("kya bola", "dobara boliye", "sorry?", "come again"), say the same thing again, slower and in fewer words — this is the only time you may repeat a sentence. Never change a number, date, time or spelling when repeating it.
@@ -580,6 +581,19 @@ If the call is wrapping up, you said goodbye, they answered 'no' to needing anyt
 Thanks, "ok bye", "theek hai", silence after the goal is achieved: say one short farewell with {END_MARK}. Do not offer more help a second time."""
 
 
+# Turns that cannot need the knowledge base: acknowledgements, closings, scheduling talk. Keyword search still
+# runs for them; the paid embedding round trip does not.
+_NO_RAG = re.compile(r"^\W*(haan|han|ji|ok|okay|hmm+|accha|acha|theek hai|thik hai|bye|nahi|nahin|no|yes|sure|bolo|boliye|batao|"
+                     r"हाँ|हां|जी|ठीक है|नहीं|अच्छा|बोलिए|बताओ|बताइए|hello|hi)\W*$|"
+                     r"\b(call (kar|karo|karna|back)|baad mein|kal |shaam|subah|baje|minute|busy|meeting mein|rakh(ta|ti)? hoon|bye)\b", re.I)
+
+
+def needs_knowledge(customer_text: str) -> bool:
+    """Whether this turn is worth an embedding request: substantive text that is not scheduling or a closer."""
+    text = (customer_text or "").strip()
+    return len(text.split()) >= 3 and not _NO_RAG.search(text)
+
+
 def retrieval_query(history: list[dict], customer_text: str) -> str:
     """What to search the knowledge base with. Shared so a prefetch warms the exact query the turn uses."""
     last_agent = next((h["text"] for h in reversed(history) if h["role"] == "assistant"), "")
@@ -675,7 +689,7 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
     while the caller is still talking, so the vector is normally already cached and free. A cold or
     slow turn falls back to keyword search rather than making the caller wait.
     """
-    messages, _ = build_messages(agent_id, history, customer_text, lead, use_embeddings=True, top_k=3,
+    messages, _ = build_messages(agent_id, history, customer_text, lead, use_embeddings=needs_knowledge(customer_text), top_k=3,
                                  embed_timeout=LIVE_EMBED_TIMEOUT, summary=summary, compacted_upto=compacted_upto)
     system = messages[0]["content"].rsplit("# Output", 1)[0]
     # The JSON-mode rules talk about fields; phrased as fields, the model emits tool calls instead of speech.
@@ -845,6 +859,18 @@ def _json_tool_turn(messages: list[dict], tools: list[dict], agent_id: int, purp
     yield "Ji, maine note kar liya hai, aage ka kaam ho jayega."
 
 
+def _clean_crm(crm: dict) -> dict:
+    """Spoken forms the model copies verbatim: "rahul at gmail dot com" -> rahul@gmail.com; a bad email is dropped."""
+    if crm.get("email"):
+        from app.services.voice_stream import spoken_email
+        fixed = spoken_email(crm["email"])
+        if fixed:
+            crm["email"] = fixed
+        elif "@" not in crm["email"]:
+            crm.pop("email")
+    return crm
+
+
 def _flag(v) -> bool:
     """A JSON boolean the model may have quoted: "false"/"no" must not end a call."""
     return v if isinstance(v, bool) else str(v).strip().lower() in ("true", "yes", "1")
@@ -927,7 +953,7 @@ def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, 
         "intent": data.get("intent") if data.get("intent") in INTENTS else "other",
         "qualification": data.get("qualification") if data.get("qualification") in ("Hot", "Warm", "Cold") else None,
         "end_call": bool(data.get("end_call")),
-        "crm_update": {k: str(v).strip() for k, v in crm.items() if v not in (None, "", [], {})},
+        "crm_update": _clean_crm({k: str(v).strip() for k, v in crm.items() if v not in (None, "", [], {})}),
         "knowledge": [{"title": k["title"], "score": k["score"], "text": k["text"][:300]} for k in knowledge],
         "provider": f"{result.provider}:{result.model}",
         "llm_ms": result.latency_ms,
