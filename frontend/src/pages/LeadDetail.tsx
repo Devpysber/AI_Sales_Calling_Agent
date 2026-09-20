@@ -537,7 +537,9 @@ function FollowUpScheduler({ lead, saving, onSave }: { lead: Lead; saving: boole
       {lead.callback_at
         ? <div className="flex flex-wrap items-center gap-2 rounded-xl bg-brand-soft px-3 py-2 text-sm text-brand"><CalendarClock className="size-4 shrink-0" /><span className="min-w-0 flex-1 font-semibold break-words">Agent calls at {lead.callback_at} IST</span>
             <button type="button" disabled={saving} className="min-h-10 px-1 text-xs font-semibold hover:underline disabled:opacity-60 sm:min-h-8" onClick={() => onSave({ callback_at: '' })}>Clear</button></div>
-        : <p className="text-xs text-muted">{lead.follow_up_date ? `Follow up due ${lead.follow_up_date}. Pick a time to have the agent call automatically.` : 'Nothing scheduled.'}</p>}
+        : <p className="text-xs text-muted">{lead.call_status === 'Pending'
+            ? <span className="inline-flex items-center gap-1.5 text-success"><span className="size-1.5 animate-pulse rounded-full bg-success" />Queued for auto-dial: the agent rings on its next run inside calling hours. Pick a time below for an exact slot.</span>
+            : lead.follow_up_date ? `Follow up due ${lead.follow_up_date}. Pick a time to have the agent call automatically.` : 'Nothing scheduled.'}</p>}
       <div className="flex flex-wrap gap-1.5">
         {[['In 1 hour', 60], ['Tomorrow 11 AM', -1], ['In 3 days', 3 * 24 * 60]].map(([label, m]) => (
           <button key={label as string} type="button" onClick={() => {
