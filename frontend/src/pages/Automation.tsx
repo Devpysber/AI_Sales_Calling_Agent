@@ -315,7 +315,7 @@ function WebsiteIntake() {
             <Button size="sm" variant="ghost" className="sm:ml-auto" onClick={() => copy(snippets[tab])}><Copy />Copy snippet</Button>
           </div>
           <pre className="mt-2 max-h-56 min-w-0 overflow-auto rounded-xl bg-ink p-3 font-mono text-[12px] leading-relaxed break-all whitespace-pre-wrap text-ink-fg">{snippets[tab]}</pre>
-          <p className="mt-2 text-xs break-words text-muted">Fields: name, phone (required), email, company, city, message, source, language (e.g. hi-IN). Repeat enquiries update the same lead. Bots filling the hidden “website” field are ignored.</p>
+          <p className="mt-2 text-xs break-words text-muted">Any form works: phone is required; name, email, company, city, message, source and language (e.g. hi-IN) are recognised under their usual names (your-name, mobile, enquiry…), and every other field the form collects is saved on the lead for the agent to use. Repeat enquiries update the same lead. Bots filling the hidden “website” field are ignored.</p>
         </div>
         <Button size="sm" variant="ghost" className="w-full sm:w-auto" loading={rotate.isPending} onClick={async () => {
           if (rotate.isPending) return

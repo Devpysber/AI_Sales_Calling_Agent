@@ -267,6 +267,25 @@ def automation(agent_id: int = Depends(workspace)):
     return {"settings": cfg, "jobs": scheduler.job_status(agent_id), "within_calling_hours": within_calling_hours(cfg)}
 
 
+@router.get("/{agent_id}/inbound-owner")
+def get_inbound_owner(agent_id: int = Depends(workspace)):
+    """Which agent answers calls to this agent's line (shared numbers: many dial out, one answers)."""
+    number = agents.caller_id(agent_id)
+    owner = agents.inbound_owner(number) if number else None
+    sharing = [a for a in agents.list_agents() if "".join(c for c in (a.get("phone_number") or "") if c.isdigit()) in (number, "")]
+    return {"number": number, "owner_id": owner, "sharing": [{"id": a["id"], "name": a["name"]} for a in sharing]}
+
+
+@router.put("/{agent_id}/inbound-owner", dependencies=[Depends(require_admin)])
+def put_inbound_owner(request: Request, agent_id: int = Depends(workspace)):
+    """Make this agent the one that answers inbound calls on its line."""
+    number = agents.caller_id(agent_id)
+    try:
+        return agents.set_inbound_owner(number, agent_id, actor=actor(request))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.put("/{agent_id}/automation", dependencies=[Depends(require_admin)])
 def update_automation(values: dict, request: Request, agent_id: int = Depends(workspace)):
     try:

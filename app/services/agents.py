@@ -224,11 +224,8 @@ def _assert_unique(db, meta: dict, exclude_id: int | None = None) -> None:
         clash = db.scalar(select(Agent.id).where(func.lower(Agent.name) == meta["name"].lower(), Agent.id != (exclude_id or 0)))
         if clash:
             raise ValueError(f'An agent called "{meta["name"]}" already exists. Pick a different name.')
-    if meta.get("phone_number"):
-        clash = db.scalar(select(Agent.name).where(Agent.phone_number == meta["phone_number"], Agent.id != (exclude_id or 0)))
-        if clash:
-            raise ValueError(f"That number already belongs to the agent \"{clash}\". Each agent needs its own number "
-                             "(or leave it blank to use the default line).")
+    # Numbers may be shared: several agents dial out from one line; inbound on it goes to the agent
+    # designated with set_inbound_owner() (see for_inbound).
 
 
 def create(data: dict, actor: str = "admin", created_by: str | None = None) -> dict:
@@ -419,11 +416,48 @@ def caller_id(agent_id: int | None) -> str:
     return "".join(c for c in (number or settings.plivo_phone_number) if c.isdigit())
 
 
+INBOUND_OWNER_KEY = "inbound_owner"   # settings state: {"<digits>": agent_id} - who answers calls to that number
+
+
+def inbound_owner(number: str) -> int | None:
+    from app.services.settings_service import SettingsService
+    number = normalize_number(number) or ""
+    owners = SettingsService().get_state(INBOUND_OWNER_KEY) or {}
+    agent_id = owners.get(number)
+    return int(agent_id) if agent_id and exists(int(agent_id)) else None
+
+
+def set_inbound_owner(number: str, agent_id: int | None, actor: str = "admin") -> dict:
+    """Designate which agent answers calls to `number`; None clears it (first agent on the number answers)."""
+    from app.services.settings_service import SettingsService
+    number = normalize_number(number) or ""
+    if not number:
+        raise ValueError("A number is needed to route inbound calls.")
+    svc = SettingsService()
+    owners = dict(svc.get_state(INBOUND_OWNER_KEY) or {})
+    if agent_id is None:
+        owners.pop(number, None)
+    else:
+        if not exists(agent_id):
+            raise AgentNotFound(f"Agent {agent_id} not found.")
+        owners[number] = int(agent_id)
+    svc.set_state(INBOUND_OWNER_KEY, owners)
+    events.record("settings.updated", "Inbound routing updated", f"+{number} answered by agent {agent_id or '(default)'}",
+                  agent_id=agent_id, actor=actor)
+    return {"number": number, "agent_id": agent_id}
+
+
 def for_inbound(to_number: str, lead_agent_id: int | None = None) -> int | None:
-    """Route an inbound call: the agent owning the dialled number, else the caller's agent, else the first active agent."""
+    """
+    Route an inbound call: the agent designated for the dialled number, else an agent whose number it
+    is, else the caller's agent, else the first active agent.
+    """
     number = normalize_number(to_number)
     with get_db() as db:
         if number:
+            designated = inbound_owner(number)
+            if designated:
+                return designated
             owner = db.scalar(select(Agent.id).where(Agent.phone_number == number).order_by(Agent.id))
             if owner:
                 return owner
