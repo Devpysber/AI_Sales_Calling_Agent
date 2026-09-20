@@ -471,7 +471,10 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
     let src = url
     try { const u = new URL(url, location.origin); src = u.origin === location.origin ? u.href : u.pathname + u.search } catch { /* keep as given */ }
     audio.current = new Audio(src);
-    audio.current.onplay = () => setIsSpeaking(true);
+    // 'play' fires as soon as play() is called, seconds before a deferred TTS file has downloaded, so the
+    // mouth used to move in silence. 'playing' means audio is actually coming out; 'waiting' means it stalled.
+    audio.current.onplaying = () => setIsSpeaking(true);
+    audio.current.onwaiting = () => setIsSpeaking(false);
     audio.current.crossOrigin = 'anonymous'
     meter(audio.current)
     audio.current.onended = () => { setIsSpeaking(false); level.current = 0 };
@@ -680,9 +683,9 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                     )}
                   </div>
                   <div className={cn(
-                    'relative rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed break-words shadow-[0_8px_30px_-8px_rgba(0,0,0,.7)] backdrop-blur-xl',
+                    'relative rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed break-words shadow-[0_8px_30px_-8px_rgba(0,0,0,.7)]',
                     t.role === 'assistant'
-                      ? 'rounded-tl-md border border-white/12 bg-gradient-to-br from-white/14 to-white/6 text-white'
+                      ? 'rounded-tl-md border border-white/12 bg-gradient-to-br from-[#2a2d38] to-[#1a1c24] text-white'
                       : 'rounded-tr-md bg-gradient-to-br from-white to-white/85 font-medium text-black',
                     // One outline only: border + inset ring + a 1px shadow stacked into a doubled bottom edge.
                     i === arr.length - 1 && t.role === 'assistant' && 'border-brand/40 shadow-[0_12px_40px_-10px_color-mix(in_srgb,var(--brand)_60%,transparent)]',

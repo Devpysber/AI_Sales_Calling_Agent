@@ -83,6 +83,26 @@ function addJawMorph(mesh: THREE.Mesh, line: number, depth: number, amount: numb
   return geo.morphAttributes.position.length - 1
 }
 
+// Teeth: collapse the slab upward toward its top edge. A SkinnedMesh in attached bind mode cancels its own
+// object scale every frame (bindMatrixInverse tracks matrixWorld), so shrinking has to be a morph too.
+function addCollapseMorph(mesh: THREE.Mesh, amount: number) {
+  const geo = mesh.geometry
+  const pos = geo.attributes.position as THREE.BufferAttribute
+  geo.computeBoundingBox()
+  const top = geo.boundingBox!.max.y
+  const delta = new Float32Array(pos.count * 3)
+  for (let i = 0; i < pos.count; i++) delta[i * 3 + 1] = (top - pos.getY(i)) * amount
+  geo.morphAttributes.position = geo.morphAttributes.position ?? []
+  geo.morphAttributes.position.push(new THREE.Float32BufferAttribute(delta, 3))
+  for (const key of ['normal', 'color'] as const) {
+    const arr = geo.morphAttributes[key]
+    if (arr && arr.length) arr.push(new THREE.Float32BufferAttribute(new Float32Array(pos.count * arr[0].itemSize), arr[0].itemSize))
+  }
+  geo.morphTargetsRelative = true
+  mesh.updateMorphTargets()
+  return geo.morphAttributes.position.length - 1
+}
+
 // The rig is exported in a T-pose. Swing each upper arm so it hangs at the side: find the world direction
 // from the shoulder joint to the elbow and rotate the bone so that direction points down and slightly out.
 function lowerArm(model: THREE.Object3D, side: 'L' | 'R') {
@@ -191,7 +211,6 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
     let head: THREE.Object3D | undefined
     let headRestX = 0                 // the rig's own head pitch; the render loop offsets from it, never from zero
     let cavity: THREE.Mesh | null = null
-    let teethTop = 0, teethBaseY = 0  // to shrink the teeth slab from its top edge
     let blinkAction: THREE.AnimationAction | null = null
 
     // Dispose every geometry/material/texture under a subtree. Used both on teardown and when the GLB
@@ -242,7 +261,7 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       if (face?.isMesh) jawIndex = addJawMorph(face, 12.55, 0.9, 0.55)
       // Teeth are one block; dropping its lower half reads as the mouth opening between the rows.
       teeth = model.getObjectByName(nodeName('Teeth.001')) as THREE.Mesh | undefined
-      if (teeth?.isMesh) teethIndex = addJawMorph(teeth, 12.55, 0.35, 0.5)
+      if (teeth?.isMesh) teethIndex = addCollapseMorph(teeth, 0.7)
       head = model.getObjectByName(nodeName('spine.006'))
       headRestX = head?.rotation.x ?? 0
       // The teeth are one white slab filling the mouth hole, so dropping the jaw only made the grin
@@ -252,9 +271,6 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       // carries the armature scale, so parenting there put the box at the neck.
       if (teeth?.isMesh) {
         model.updateMatrixWorld(true)
-        teeth.geometry.computeBoundingBox()
-        teethTop = teeth.geometry.boundingBox!.max.y
-        teethBaseY = teeth.position.y
         const world = new THREE.Box3().setFromObject(teeth)
         const size = world.getSize(new THREE.Vector3())
         const centre = world.getCenter(new THREE.Vector3())
@@ -349,12 +365,6 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       mouth = THREE.MathUtils.lerp(mouth, target, target > mouth ? 0.5 : 0.25)
       if (face && jawIndex !== null && face.morphTargetInfluences) face.morphTargetInfluences[jawIndex] = mouth
       if (teeth && teethIndex !== null && teeth.morphTargetInfluences) teeth.morphTargetInfluences[teethIndex] = mouth
-      if (teeth) {
-        // Upper teeth stay put; the slab loses up to 65% of its height from the bottom as the mouth opens.
-        const sy = 1 - mouth * 0.65
-        teeth.scale.y = sy
-        teeth.position.y = teethBaseY + teethTop * (1 - sy)
-      }
       if (cavity) cavity.visible = mouth > 0.04
 
       camera.lookAt(0, EYE_LINE, 0)
