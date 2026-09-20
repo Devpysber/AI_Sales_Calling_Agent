@@ -175,18 +175,22 @@ def requested_language(text: str) -> str | None:
 NAME_PATTERNS = [
     re.compile(r"(?:my name is|i am|i'm|this is|name's)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)"),
     re.compile(r"(?:मेरा नाम|मेरा नाम है)\s+([\u0900-\u097F]+(?:\s+[\u0900-\u097F]+)?)"),
-    re.compile(r"(?:मैं)\s+([\u0900-\u097F]{2,}(?:\s+[\u0900-\u097F]{2,})?)\s+(?:बोल रहा|बोल रही)"),
+    re.compile(r"(?:मैं)\s+([\u0900-\u097F]{2,}(?:\s+[\u0900-\u097F]{2,})?)\s+(?:बोल रहा हूँ|बोल रही हूँ|बोल रहा हूं|बोल रही हूं)(?!\s*(?:से|से बोल))"),
 ]
-NOT_NAMES = {"है", "हूँ", "हूं", "interested", "busy", "fine", "good", "calling", "looking"}
+NOT_NAMES = {"है", "हूँ", "हूं", "interested", "busy", "fine", "good", "calling", "looking", "से", "यहाँ", "यहां", "अभी", "sir", "madam", "ji", "जी"}
+# "मैं भोपाल से बोल रहा हूँ" names a place, not a person.
+_PLACE_CUE = re.compile(r"\b(?:से|from)\s+(?:बोल|call|calling|speaking)|(?:से बोल रह)")
 
 
 def spoken_name(text: str) -> str | None:
     """A name the caller states about themselves ("my name is Neha", "मेरा नाम नेहा है"); None when unsure."""
+    if _PLACE_CUE.search(text):
+        return None
     for pattern in NAME_PATTERNS:
         m = pattern.search(text)
         if m:
             name = " ".join(w for w in m.group(1).split() if w.lower() not in NOT_NAMES and w not in NOT_NAMES).strip()
-            if 2 <= len(name) <= 40:
+            if 2 <= len(name) <= 40 and not any(ch.isdigit() for ch in name):
                 return name
     return None
 
@@ -199,6 +203,9 @@ def spoken_email(text: str) -> str | None:
     m = EMAIL.search(text)
     if not m:
         return None
+    before = text[:m.start()].rstrip()
+    if re.search(r"[\u0900-\u097F]\s*$", before) or re.search(r"[\u0900-\u097F]", m.group(0)):
+        return None  # part of the address was heard in Devanagari: ask them to spell it, never guess
     email = re.sub(r"\s*(?:\bat the rate\b|\bat\b)\s*", "@", m.group(0), count=1, flags=re.I)
     email = re.sub(r"\s*\bdot\b\s*", ".", email, flags=re.I).replace(" ", "").lower()
     return email if re.fullmatch(r"[\w.+-]+@[\w-]+(\.[a-z]{2,})+", email) else None
@@ -1362,6 +1369,8 @@ class CallStream:
         updates = {}
         if not lead.get("name") and (name := spoken_name(text)):
             updates["name"] = name
+        elif lead.get("name") and re.search(r"मेरा नाम|my name is", text, re.I) and (name := spoken_name(text)):
+            updates["name"] = name  # they corrected or stated their name explicitly: that wins over a guess
         if not lead.get("email") and (email := spoken_email(text)):
             updates["email"] = email
         if not updates:
