@@ -215,6 +215,22 @@ def created_count(created_by: str) -> int:
         return db.scalar(select(func.count(Agent.id)).where(Agent.created_by == created_by)) or 0
 
 
+def _assert_unique(db, meta: dict, exclude_id: int | None = None) -> None:
+    """
+    One name and one number per agent. Two agents called the same thing are indistinguishable in the
+    switcher, reports and emails; two agents on the same number make inbound routing a coin toss.
+    """
+    if meta.get("name"):
+        clash = db.scalar(select(Agent.id).where(func.lower(Agent.name) == meta["name"].lower(), Agent.id != (exclude_id or 0)))
+        if clash:
+            raise ValueError(f'An agent called "{meta["name"]}" already exists. Pick a different name.')
+    if meta.get("phone_number"):
+        clash = db.scalar(select(Agent.name).where(Agent.phone_number == meta["phone_number"], Agent.id != (exclude_id or 0)))
+        if clash:
+            raise ValueError(f"That number already belongs to the agent \"{clash}\". Each agent needs its own number "
+                             "(or leave it blank to use the default line).")
+
+
 def create(data: dict, actor: str = "admin", created_by: str | None = None) -> dict:
     meta = _clean_meta({"name": data.get("name"), **{k: data[k] for k in META_FIELDS if k in data and k != "name"}})
     profile = coerce(PROFILE_DEFAULTS, {k: v for k, v in (data.get("profile") or {}).items() if v not in (None, "")})
@@ -225,6 +241,7 @@ def create(data: dict, actor: str = "admin", created_by: str | None = None) -> d
         automation = get_automation(int(copy_from))
         automation["auto_dial_enabled"] = automation["retry_enabled"] = False
     with get_db() as db:
+        _assert_unique(db, meta)
         count = db.scalar(select(func.count(Agent.id))) or 0
         agent = Agent(**{"color": COLORS[count % len(COLORS)], "status": "active", **meta},
                       created_by=created_by,
@@ -242,6 +259,7 @@ def update(agent_id: int, data: dict, actor: str = "admin") -> dict:
         agent = db.get(Agent, agent_id)
         if not agent:
             raise AgentNotFound(f"Agent {agent_id} not found.")
+        _assert_unique(db, meta, exclude_id=agent_id)
         changed = [k for k, v in meta.items() if getattr(agent, k) != v]
         for key, value in meta.items():
             setattr(agent, key, value)

@@ -469,7 +469,7 @@ export default function Home() {
                     <XAxis dataKey="name" tick={{ fill: 'var(--muted)', fontSize: 12 }} axisLine={false} tickLine={false} />
                     <YAxis allowDecimals={false} tick={{ fill: 'var(--muted)', fontSize: 12 }} axisLine={false} tickLine={false} />
                     <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'var(--surface-2)' }} />
-                    <Bar dataKey="connected" name="Connected" stackId="c" fill="var(--fg)" radius={[0, 0, 4, 4]} isAnimationActive={false} />
+                    <Bar dataKey="connected" name="Connected" stackId="c" fill="var(--brand)" radius={[0, 0, 4, 4]} isAnimationActive={false} />
                     <Bar dataKey="other" name="Not connected" stackId="c" fill="var(--border-strong)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
                   </BarChart>
                 </ResponsiveContainer>
