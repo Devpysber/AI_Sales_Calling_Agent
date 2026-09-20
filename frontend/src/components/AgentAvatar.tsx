@@ -237,12 +237,32 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       })
 
       face = model.getObjectByName(nodeName('Face.002')) as THREE.Mesh | null
-      if (face?.isMesh) jawIndex = addJawMorph(face, 12.55, 0.7, 0.36)
+      if (face?.isMesh) jawIndex = addJawMorph(face, 12.55, 0.9, 0.55)
       // Teeth are one block; dropping its lower half reads as the mouth opening between the rows.
       teeth = model.getObjectByName(nodeName('Teeth.001')) as THREE.Mesh | undefined
-      if (teeth?.isMesh) teethIndex = addJawMorph(teeth, 12.55, 0.35, 0.3)
+      if (teeth?.isMesh) teethIndex = addJawMorph(teeth, 12.55, 0.35, 0.5)
       head = model.getObjectByName(nodeName('spine.006'))
       headRestX = head?.rotation.x ?? 0
+      // The parted teeth used to reveal skin-coloured face interior, so the jaw drop read as the teeth
+      // closing rather than the mouth opening. A dark box behind the teeth, riding on the head bone, gives
+      // the opening a real cavity to show.
+      if (teeth?.isMesh && head) {
+        teeth.geometry.computeBoundingBox()
+        const bb = teeth.geometry.boundingBox!
+        const size = bb.getSize(new THREE.Vector3())
+        const centre = bb.getCenter(new THREE.Vector3())
+        model.updateMatrixWorld(true)
+        teeth.localToWorld(centre)
+        head.worldToLocal(centre)
+        const cavity = new THREE.Mesh(
+          new THREE.BoxGeometry(size.x * 0.95, size.y * 1.6, Math.max(0.15, size.z * 0.8)),
+          new THREE.MeshBasicMaterial({ color: 0x140708 }),
+        )
+        cavity.position.copy(centre)
+        cavity.position.z -= size.z * 0.7
+        cavity.renderOrder = -1
+        head.add(cavity)
+      }
       lowerArm(model, 'L')
       lowerArm(model, 'R')
 
@@ -322,7 +342,7 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       if (isSpeaking && hasLevel && lv > 0.02) analyserLive = true
       const target = !isSpeaking || reduced ? 0
         : analyserLive && hasLevel ? Math.min(1, Math.max(0, lv) * 2.2)
-        : Math.max(0, 0.55 + 0.45 * Math.sin(t * 14) * Math.sin(t * 5.3 + 1) + 0.25 * Math.sin(t * 23))
+        : Math.max(0, 0.6 + 0.5 * Math.sin(t * 14) * Math.sin(t * 5.3 + 1) + 0.3 * Math.sin(t * 23))
       mouth = THREE.MathUtils.lerp(mouth, target, target > mouth ? 0.5 : 0.25)
       if (face && jawIndex !== null && face.morphTargetInfluences) face.morphTargetInfluences[jawIndex] = mouth
       if (teeth && teethIndex !== null && teeth.morphTargetInfluences) teeth.morphTargetInfluences[teethIndex] = mouth
