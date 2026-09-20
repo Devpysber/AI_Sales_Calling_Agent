@@ -649,16 +649,19 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                 'w-full min-w-0 flex-col gap-2 sm:flex sm:w-auto sm:max-w-[60%] sm:min-w-[320px]',
                 chatOpen ? 'flex' : 'hidden',
                 showAll
-                  ? 'pointer-events-auto max-h-[50vh] overflow-y-auto bg-black/40 backdrop-blur-md p-3 rounded-2xl sm:max-h-[60vh] sm:p-5 sm:rounded-3xl'
+                  // Solid panel: a backdrop blur here smeared the avatar into a grey slab behind the text.
+                  ? 'pointer-events-auto max-h-[50vh] overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0c12]/92 px-3 pb-3 sm:max-h-[60vh] sm:px-5 sm:pb-5 sm:rounded-3xl'
                   : 'pointer-events-none max-h-[34vh] justify-end overflow-hidden [scrollbar-width:none] sm:max-h-[42vh] [mask-image:linear-gradient(to_bottom,transparent,black_22%)]',
               )}
             >
               {history.length > 4 && (
-                <button type="button" onClick={() => setShowAll((v) => !v)}
-                  className={cn('pointer-events-auto z-10 mb-1 min-h-8 self-start rounded-full border border-white/10 bg-black/60 px-4 py-1.5 text-[11px] font-semibold text-white/85 shadow-lg transition hover:bg-white/15',
-                    showAll ? 'sticky top-0' : 'mt-6')}>
-                  {showAll ? 'Show last 4 turns' : `Show full transcript (${history.length} turns)`}
-                </button>
+                // Full view: a sticky header bar the turns scroll under. Collapsed: a pill above the last turns.
+                <div className={cn('z-10 self-stretch', showAll ? 'sticky top-0 -mx-3 mb-2 border-b border-white/5 bg-[#0b0c12]/95 px-3 py-2 sm:-mx-5 sm:px-5' : 'mt-6 mb-1')}>
+                  <button type="button" onClick={() => setShowAll((v) => !v)}
+                    className="pointer-events-auto min-h-8 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-[11px] font-semibold text-white/85 transition hover:bg-white/15">
+                    {showAll ? 'Show last 4 turns' : `Show full transcript (${history.length} turns)`}
+                  </button>
+                </div>
               )}
               {greeting.isError && history.length === 0 && (
                 <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-danger/40 bg-danger-soft/90 px-4 py-2.5 text-[13px] text-danger backdrop-blur-md shadow-xl">
