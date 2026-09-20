@@ -646,12 +646,13 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                 chatOpen ? 'flex' : 'hidden',
                 showAll
                   ? 'pointer-events-auto max-h-[50vh] overflow-y-auto bg-black/40 backdrop-blur-md p-3 rounded-2xl sm:max-h-[60vh] sm:p-5 sm:rounded-3xl'
-                  : 'pointer-events-none max-h-[34vh] justify-end overflow-hidden [scrollbar-width:none] sm:max-h-[42vh]',
+                  : 'pointer-events-none max-h-[34vh] justify-end overflow-hidden [scrollbar-width:none] sm:max-h-[42vh] [mask-image:linear-gradient(to_bottom,transparent,black_22%)]',
               )}
             >
               {history.length > 4 && (
                 <button type="button" onClick={() => setShowAll((v) => !v)}
-                  className="pointer-events-auto sticky top-0 z-10 mb-1 min-h-8 self-start rounded-full border border-white/10 bg-black/50 px-4 py-1.5 text-[11px] font-semibold text-white/85 shadow-lg backdrop-blur-xl transition hover:bg-white/15 border border-white/10 transition-colors">
+                  className={cn('pointer-events-auto z-10 mb-1 min-h-8 self-start rounded-full border border-white/10 bg-black/60 px-4 py-1.5 text-[11px] font-semibold text-white/85 shadow-lg transition hover:bg-white/15',
+                    showAll ? 'sticky top-0' : 'mt-6')}>
                   {showAll ? 'Show last 4 turns' : `Show full transcript (${history.length} turns)`}
                 </button>
               )}
@@ -714,8 +715,10 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                 </div>
               )}
               {ended && (
-                <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-warning/40 bg-warning-soft/90 px-4 py-2.5 text-[13px] text-warning backdrop-blur-md shadow-xl">
-                  <AlertTriangle className="size-4 shrink-0" />The agent ended the call.<Button size="sm" variant="ghost" onClick={() => void reset()}><RotateCcw />Start again</Button>
+                <div className="reveal reveal-in reveal-up pointer-events-auto flex flex-wrap items-center gap-3 self-start rounded-2xl border border-white/10 bg-[#1a1c24] px-4 py-2.5 text-[13px] text-white/80 shadow-xl">
+                  <span className="flex size-6 items-center justify-center rounded-full bg-white/10"><Square className="size-3" /></span>
+                  <span className="font-medium">Call ended</span><span className="text-white/45">by the agent</span>
+                  <Button size="sm" variant="ghost" className="ml-auto text-white/90" onClick={() => void reset()}><RotateCcw />Start again</Button>
                 </div>
               )}
               <div ref={bottom} />

@@ -779,6 +779,13 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
         yield from process_stream(messages, with_tools=False)
 
 
+# Spoken when the model returns no reply text; keyed by what it was doing and the call language.
+EMPTY_REPLY = {
+    "repeat": {"en": "Sorry, could you say that again?", "hi": "माफ़ कीजिए, क्या आप दोबारा बता सकते हैं?"},
+    "goodbye": {"en": "No problem. Thanks for your time, have a great day!", "hi": "कोई बात नहीं। आपके समय के लिए धन्यवाद, आपका दिन शुभ हो!"},
+}
+
+
 def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True,
             summary: str | None = None) -> dict:
     """
@@ -804,7 +811,12 @@ def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, 
             data = {"reply": raw.strip('"')}
 
     # Same gate as the streaming path: software words never reach a caller, whichever mode answered.
-    reply = plain_speech(str(data.get("reply") or "").strip()) or "Sorry, could you say that again?"
+    reply = plain_speech(str(data.get("reply") or "").strip())
+    if not reply:
+        # The model sent no spoken text (usually an end_call with an empty reply). Speak in the call's
+        # language, and say goodbye when it is ending the call rather than asking the caller to repeat.
+        lang = "hi" if str(data.get("language") or lead.get("language") or agents.get_profile(agent_id).get("default_language") or "").startswith("hi") else "en"
+        reply = EMPTY_REPLY["goodbye" if data.get("end_call") else "repeat"][lang]
     crm = data.get("crm_update") if isinstance(data.get("crm_update"), dict) else {}
     return {
         "reply": reply,
