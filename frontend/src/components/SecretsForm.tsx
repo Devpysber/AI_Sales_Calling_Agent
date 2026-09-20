@@ -170,7 +170,8 @@ export default function SecretsForm() {
         </div>
         <div className="space-y-4">
           <h3 className="font-bold">Balances</h3>
-          {num('sarvam_credits', 'Sarvam Credits Left', '51.00')}
+          {num('sarvam_credits', 'Sarvam credits (as topped up)', '100.00')}
+          {secrets?.sarvam_credits_estimate != null && <p className="-mt-2 text-xs text-muted">Estimated left after measured usage: {secrets.sarvam_credits_estimate}. Re-enter the amount whenever you top up.</p>}
         </div>
       </div>
       <div className="flex flex-col gap-2 border-t border-border p-4 sm:flex-row sm:items-center sm:justify-end sm:p-5">

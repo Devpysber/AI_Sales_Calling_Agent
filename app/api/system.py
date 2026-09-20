@@ -259,13 +259,14 @@ async def get_secrets():
     sarvam_credits_updated_at = secrets.get("sarvam_credits_updated_at")
     
     if sarvam_credits is not None and sarvam_credits_updated_at:
+        # The stored value stays the baseline the admin typed (re-saving must not re-baseline on an
+        # estimate); the estimate of what is left goes out separately for the form to display.
         try:
-            from app.services.analytics import get_sarvam_usage_since
-            usage_cost = get_sarvam_usage_since(sarvam_credits_updated_at)
-            reduced = float(sarvam_credits) - usage_cost
-            secrets["sarvam_credits"] = f"{reduced:.2f}" if reduced > 0 else "0.00"
-        except Exception:
-            pass
+            from app.services.alerts import sarvam_usage_cost_since
+            left = float(sarvam_credits) - sarvam_usage_cost_since(float(sarvam_credits_updated_at))
+            secrets["sarvam_credits_estimate"] = f"{left:.2f}" if left > 0 else "0.00"
+        except Exception:  # noqa: BLE001 - an estimate must never break the secrets form
+            secrets["sarvam_credits_estimate"] = None
             
     return secrets
 

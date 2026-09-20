@@ -92,6 +92,19 @@ def _openrouter() -> dict | None:
     }
 
 
+def sarvam_usage_cost_since(ts: float) -> float:
+    """Measured Sarvam spend (TTS chars, STT seconds, LLM replies at the configured prices) since a unix time."""
+    secrets = SettingsService().get_state("secrets") or {}
+    cost_per_tts = float(secrets.get("cost_per_10k_tts_chars") or settings.cost_per_10k_tts_chars)
+    cost_per_stt = float(secrets.get("cost_per_stt_hour") or settings.cost_per_stt_hour)
+    cost_per_llm = float(secrets.get("cost_per_llm_request") or settings.cost_per_llm_request)
+    since = datetime.utcfromtimestamp(float(ts))
+    with get_db() as db:
+        t = db.execute(select(func.coalesce(func.sum(Call.tts_chars), 0), func.coalesce(func.sum(Call.stt_seconds), 0),
+                              func.coalesce(func.sum(Call.llm_requests), 0)).where(Call.created_at >= since)).one()
+    return (t[0] / 10000 * cost_per_tts) + (t[1] / 3600 * cost_per_stt) + (t[2] * cost_per_llm)
+
+
 def _sarvam() -> dict | None:
     if not settings.sarvam_api_key:
         return None
