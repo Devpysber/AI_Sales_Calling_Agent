@@ -596,7 +596,7 @@ def compacted_upto(history: list[dict]) -> int:
 
 
 def build_messages(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True,
-                   top_k: int = 5, embed_timeout: float = 2.0, summary: str | None = None,
+                   top_k: int = 5, embed_timeout: float = 1.0, summary: str | None = None,
                    compacted_upto: int | None = None) -> tuple[list[dict], list[dict]]:
     persona = agents.get_profile(agent_id)
 

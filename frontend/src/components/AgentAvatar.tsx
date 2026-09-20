@@ -83,26 +83,6 @@ function addJawMorph(mesh: THREE.Mesh, line: number, depth: number, amount: numb
   return geo.morphAttributes.position.length - 1
 }
 
-// Teeth: collapse the slab upward toward its top edge. A SkinnedMesh in attached bind mode cancels its own
-// object scale every frame (bindMatrixInverse tracks matrixWorld), so shrinking has to be a morph too.
-function addCollapseMorph(mesh: THREE.Mesh, amount: number) {
-  const geo = mesh.geometry
-  const pos = geo.attributes.position as THREE.BufferAttribute
-  geo.computeBoundingBox()
-  const top = geo.boundingBox!.max.y
-  const delta = new Float32Array(pos.count * 3)
-  for (let i = 0; i < pos.count; i++) delta[i * 3 + 1] = (top - pos.getY(i)) * amount
-  geo.morphAttributes.position = geo.morphAttributes.position ?? []
-  geo.morphAttributes.position.push(new THREE.Float32BufferAttribute(delta, 3))
-  for (const key of ['normal', 'color'] as const) {
-    const arr = geo.morphAttributes[key]
-    if (arr && arr.length) arr.push(new THREE.Float32BufferAttribute(new Float32Array(pos.count * arr[0].itemSize), arr[0].itemSize))
-  }
-  geo.morphTargetsRelative = true
-  mesh.updateMorphTargets()
-  return geo.morphAttributes.position.length - 1
-}
-
 // The rig is exported in a T-pose. Swing each upper arm so it hangs at the side: find the world direction
 // from the shoulder joint to the elbow and rotate the bone so that direction points down and slightly out.
 function lowerArm(model: THREE.Object3D, side: 'L' | 'R') {
@@ -207,10 +187,11 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
     let face: THREE.Mesh | null = null
     let jawIndex: number | null = null
     let teeth: THREE.Mesh | undefined
-    let teethIndex: number | null = null
     let head: THREE.Object3D | undefined
     let headRestX = 0                 // the rig's own head pitch; the render loop offsets from it, never from zero
-    let cavity: THREE.Mesh | null = null
+    let teethMat: THREE.MeshStandardMaterial | null = null
+    let teethBase: THREE.Color | null = null
+    const cavityColour = new THREE.Color(0x1a0b0c)
     let blinkAction: THREE.AnimationAction | null = null
 
     // Dispose every geometry/material/texture under a subtree. Used both on teardown and when the GLB
@@ -261,27 +242,16 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       if (face?.isMesh) jawIndex = addJawMorph(face, 12.55, 0.9, 0.55)
       // Teeth are one block; dropping its lower half reads as the mouth opening between the rows.
       teeth = model.getObjectByName(nodeName('Teeth.001')) as THREE.Mesh | undefined
-      if (teeth?.isMesh) teethIndex = addCollapseMorph(teeth, 0.7)
+      if (teeth?.isMesh) {
+        // Closed = white grin, open = dark mouth: the slab's colour fades toward cavity colour with the jaw.
+        // Cloned so no other mesh sharing Teeth_Material changes.
+        const mat = (Array.isArray(teeth.material) ? teeth.material[0] : teeth.material) as THREE.MeshStandardMaterial
+        teethMat = mat.clone()
+        teeth.material = teethMat
+        teethBase = teethMat.color.clone()
+      }
       head = model.getObjectByName(nodeName('spine.006'))
       headRestX = head?.rotation.x ?? 0
-      // The teeth are one white slab filling the mouth hole, so dropping the jaw only made the grin
-      // taller. Two things make an opening read: the slab shrinks from its top edge as the jaw drops
-      // (upper teeth stay, lower teeth clear the hole), and a dark cavity sits just behind it so the
-      // cleared hole shows black instead of face interior. Both live in world space: the head bone
-      // carries the armature scale, so parenting there put the box at the neck.
-      if (teeth?.isMesh) {
-        model.updateMatrixWorld(true)
-        const world = new THREE.Box3().setFromObject(teeth)
-        const size = world.getSize(new THREE.Vector3())
-        const centre = world.getCenter(new THREE.Vector3())
-        cavity = new THREE.Mesh(
-          new THREE.BoxGeometry(size.x * 0.9, size.y * 1.5, Math.max(0.1, size.z * 0.6)),
-          new THREE.MeshBasicMaterial({ color: 0x120607 }),
-        )
-        cavity.position.copy(centre)
-        cavity.position.z -= size.z * 0.9
-        group.add(cavity)
-      }
       lowerArm(model, 'L')
       lowerArm(model, 'R')
 
@@ -364,8 +334,7 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
         : Math.max(0, 0.6 + 0.5 * Math.sin(t * 14) * Math.sin(t * 5.3 + 1) + 0.3 * Math.sin(t * 23))
       mouth = THREE.MathUtils.lerp(mouth, target, target > mouth ? 0.5 : 0.25)
       if (face && jawIndex !== null && face.morphTargetInfluences) face.morphTargetInfluences[jawIndex] = mouth
-      if (teeth && teethIndex !== null && teeth.morphTargetInfluences) teeth.morphTargetInfluences[teethIndex] = mouth
-      if (cavity) cavity.visible = mouth > 0.04
+      if (teethMat && teethBase) teethMat.color.copy(teethBase).lerp(cavityColour, Math.min(1, mouth * 1.4))
 
       camera.lookAt(0, EYE_LINE, 0)
       renderer.render(scene, camera)

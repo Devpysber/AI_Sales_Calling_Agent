@@ -10,7 +10,9 @@ automatically retried with Google gTTS (free, no API key required).
 
 import base64
 import hashlib
+import threading
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 
 import httpx
 
@@ -217,14 +219,51 @@ def store_audio(audio: bytes) -> str:
     return audio_id
 
 
+# Playground audio is rendered off the request path: prepare_audio_id() returns the id at once so the
+# text reply is not held up by synthesis, and kicks the render off in the background so that by the time
+# the browser asks for the file it is usually already cached. One in-flight render per id: a browser
+# fetch that arrives mid-render waits on the same future instead of synthesising twice.
+_render_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="tts-render")
+_renders: dict[str, Future] = {}
+_renders_lock = threading.Lock()
+
+
+def _render(audio_id: str) -> bytes | None:
+    audio = store.get_bytes(f"audio:{audio_id}")
+    if audio is not None:
+        return audio
+    params = store.get_json(f"tts_job:{audio_id}")
+    if not params:
+        return None
+    audio = synthesize(params["text"], params["language"], params["speaker"])
+    store.set_bytes(f"audio:{audio_id}", audio, ttl=CACHE_TTL)
+    return audio
+
+
+def _render_shared(audio_id: str) -> Future:
+    with _renders_lock:
+        fut = _renders.get(audio_id)
+        if fut is None:
+            fut = _render_pool.submit(_render, audio_id)
+            _renders[audio_id] = fut
+
+            def forget(_f, key=audio_id):
+                with _renders_lock:
+                    if _renders.get(key) is _f:
+                        _renders.pop(key, None)
+            fut.add_done_callback(forget)
+        return fut
+
+
 def prepare_audio_id(text: str, language: str, speaker: str) -> str:
     """
-    Returns an audio ID instantly, deferring actual TTS synthesis until it is requested by the browser.
+    Returns an audio ID instantly; synthesis starts in the background and is served from cache by load_audio().
     """
     key = hashlib.sha256(f"{settings.tts_engine}|{settings.sarvam_tts_model}|{settings.sarvam_tts_sample_rate}|{speaker}|{language}|{text}"
                          .encode()).hexdigest()[:40]
     if store.get_bytes(f"audio:{key}") is None:
         store.set_json(f"tts_job:{key}", {"text": text, "language": language, "speaker": speaker}, ttl=CACHE_TTL)
+        _render_shared(key)
     return key
 
 
@@ -232,14 +271,9 @@ def load_audio(audio_id: str) -> bytes | None:
     audio = store.get_bytes(f"audio:{audio_id}")
     if audio is not None:
         return audio
-        
-    params = store.get_json(f"tts_job:{audio_id}")
-    if params:
-        audio = synthesize(params["text"], params["language"], params["speaker"])
-        store.set_bytes(f"audio:{audio_id}", audio, ttl=CACHE_TTL)
-        return audio
-        
-    return None
+    if store.get_json(f"tts_job:{audio_id}") is None:
+        return None
+    return _render_shared(audio_id).result(timeout=40)
 
 
 def audio_url(audio_id: str) -> str:
