@@ -6,7 +6,7 @@ FastAPI backend (`app/`), SQLAlchemy + Alembic (`migrations/`), Vite/TS frontend
 - Minimal diffs. Never rewrite working code or tests. Never echo unchanged code.
 - Read only the function/range needed (`offset`/`limit`), not whole files.
 - Grep before Read. One targeted search, not repeated sweeps.
-- No subagents unless asked.
+- Routing: Opus plans. Bounded multi-file edits go to `executor` agent (Sonnet). Test/log runs go to `tester` agent (Haiku). No other subagents.
 - Ignore `AI_Voice_Agent - Copy/` (stale duplicate), `data/`, `venv/`, `node_modules/`.
 - Verify: `pytest tests/ -q` backend; `cd frontend && npx tsc --noEmit` frontend.
 - Key: `app/services/tts.py` (TTS), LLM prompt in agent service.

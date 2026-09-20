@@ -1,6 +1,7 @@
 {
   "model": "opus",
   "effortLevel": "medium",
+  "promptCacheTtl": "1h",
   "bashOutputMaxChars": 12000,
   "autoCompactEnabled": true,
   "precomputeCompactionEnabled": true,
