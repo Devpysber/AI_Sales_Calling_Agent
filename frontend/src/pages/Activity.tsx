@@ -76,10 +76,17 @@ export default function Activity() {
       }
       return true
     })
-    const out: { day: string; events: ActivityEvent[] }[] = []
+    // Keyed by calendar date plus an ordinal (a backfilled event can make the same day label appear
+    // twice), never by an event id: that remounted and re-animated the whole day on every new event.
+    const out: { day: string; key: string; events: ActivityEvent[] }[] = []
+    const ordinal: Record<string, number> = {}
     for (const e of events) {
       const day = dayLabel(e.created_at)
-      if (out[out.length - 1]?.day !== day) out.push({ day, events: [] })
+      if (out[out.length - 1]?.day !== day) {
+        const date = new Date(e.created_at).toDateString()
+        ordinal[date] = (ordinal[date] ?? 0) + 1
+        out.push({ day, key: `${date}#${ordinal[date]}`, events: [] })
+      }
       out[out.length - 1]!.events.push(e)
     }
     return out
@@ -129,9 +136,7 @@ export default function Activity() {
                 action={<Button loading={query.isFetching} onClick={() => { void query.refetch() }}>Try again</Button>} /></Card>
             ) : !groups.length && query.hasNextPage && query.isFetchingNextPage ? <Card className="space-y-4 p-4 sm:p-6">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-12" />)}</Card>
             : groups.length ? groups.map((g) => (
-              // Keyed by day plus the first event id: a backfilled event with an out-of-order created_at
-              // can make the same day label appear twice, which would otherwise duplicate the key.
-              <section key={`${g.day}-${g.events[0]?.id ?? 0}`}>
+              <section key={g.key}>
                 {/* Sits below the mobile top bar (h-12); on lg the top bar is hidden so it can hug the top. */}
                 {/* Floating pills, not a full-width strip: a solid bar over the page gradient read as a black line. */}
                 <div className="pointer-events-none sticky top-12 z-10 mb-3 flex items-center justify-between py-1 lg:top-0">

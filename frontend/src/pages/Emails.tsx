@@ -112,6 +112,7 @@ export default function Emails() {
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (last) => (last.length === 50 ? last[last.length - 1]!.id : undefined),
     refetchInterval: 10_000,
+    maxPages: 5,
   })
 
   // Read the setting rather than trusting a cache entry the Automation page may never have written:

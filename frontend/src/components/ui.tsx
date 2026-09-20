@@ -1,7 +1,7 @@
 import { Eye, EyeOff, Loader2, X } from 'lucide-react'
 import {
   createContext, forwardRef, useCallback, useContext, useEffect, useId, useRef, useState,
-  type ButtonHTMLAttributes, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type RefObject,
+  type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type RefObject,
   type SelectHTMLAttributes, type TextareaHTMLAttributes,
 } from 'react'
 import { createPortal } from 'react-dom'
@@ -395,14 +395,14 @@ export const useConfirm = () => useContext(ConfirmContext)
 
 /* ---------------- Metrics ---------------- */
 
-export function StatTile({ label, value, count, decimals, prefix, suffix, sub, icon, tone = 'brand', trend, className }: {
-  label: string; value?: ReactNode; sub?: ReactNode; icon?: ReactNode; tone?: Tone; trend?: ReactNode; className?: string
+export function StatTile({ label, value, count, decimals, prefix, suffix, sub, icon, tone = 'brand', trend, className, style }: {
+  label: string; value?: ReactNode; sub?: ReactNode; icon?: ReactNode; tone?: Tone; trend?: ReactNode; className?: string; style?: CSSProperties
   /** A number: counts up on first paint and re-counts whenever it changes, instead of jumping. */
   count?: number | null; decimals?: number; prefix?: string; suffix?: string
 }) {
   const counted = count !== undefined
   return (
-    <Card className={cn("glint group relative overflow-hidden p-4 sm:p-5", className)}>
+    <Card className={cn("glint group relative overflow-hidden p-4 sm:p-5", className)} style={style}>
       <div className="flex items-start justify-between gap-3">
         <span className="min-w-0 text-[13px] font-semibold break-words text-muted">{label}</span>
         {icon && (

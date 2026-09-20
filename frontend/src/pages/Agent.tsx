@@ -380,6 +380,7 @@ function ProfileEditor({ section, draft, setDraft, data }: {
 
 interface SpeechRecognitionLike { lang: string; interimResults: boolean; onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void; onend: () => void; onerror: (e: { error: string }) => void; start: () => void; stop: () => void }
 type ChatTurn = Turn & { meta?: AgentTurnResult }
+const VISIBLE_TURNS = 4  // turns shown when the transcript is collapsed
 
 /** Turns a raw provider error dump into one line a person can act on. */
 function humanLlmError(detail: string) {
@@ -437,6 +438,18 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
   }
   const bottom = useRef<HTMLDivElement>(null)
   const recog = useRef<SpeechRecognitionLike | null>(null)
+  // stop() still finalises captured audio and fires onresult; drop the handlers first so speech captured
+  // before a Restart / language switch cannot land in the new session.
+  const stopMic = () => {
+    const r = recog.current
+    if (!r) return
+    recog.current = null
+    r.onresult = () => {}
+    r.onerror = () => {}
+    r.onend = () => {}
+    try { r.stop() } catch { /* already stopped */ }
+    setListening(false)
+  }
   const audio = useRef<HTMLAudioElement | null>(null)
   const historyRef = useRef(history)
   useEffect(() => { historyRef.current = history }, [history])
@@ -464,7 +477,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
     setHistory((h) => (h[0]?.role === 'assistant' ? h : [{ role: 'assistant', text: greeting.data.text }, ...h]))
   }, [greeting.data])
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }) }, [history])
-  useEffect(() => () => { audio.current?.pause(); recog.current?.stop(); window.clearTimeout(mouthTimer.current); if (analyser.current) { cancelAnimationFrame(analyser.current.raf); analyser.current.source?.disconnect(); analyser.current.node?.disconnect(); void analyser.current.ctx.close() } }, [])
+  useEffect(() => () => { audio.current?.pause(); stopMic(); window.clearTimeout(mouthTimer.current); if (analyser.current) { cancelAnimationFrame(analyser.current.raf); analyser.current.source?.disconnect(); analyser.current.node?.disconnect(); void analyser.current.ctx.close() } }, [])
 
   const play = (url: string) => {
     audio.current?.pause();
@@ -499,10 +512,21 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
       if (speak && res.audio_url) play(res.audio_url)
       else {
         // Voice off or TTS fallback active: mouth the reply for roughly as long as it would take.
-        audio.current?.pause()
+        // Detach the old element's handlers before pausing: its 'pause' event lands a task later and
+        // would switch the speaking state straight back off.
+        if (audio.current) { audio.current.onpause = null; audio.current.onended = null; audio.current.onerror = null; audio.current.onwaiting = null; audio.current.pause() }
         setIsSpeaking(true)
         window.clearTimeout(mouthTimer.current)
-        mouthTimer.current = window.setTimeout(() => setIsSpeaking(false), Math.min(12000, 600 + res.reply.length * 55))
+        const dur = Math.min(12000, 600 + res.reply.length * 55)
+        const t0 = performance.now()
+        setSpokenFrac(0)
+        const step = () => {
+          const f = Math.min(1, (performance.now() - t0) / dur)
+          setSpokenFrac(f)
+          if (f < 1) mouthTimer.current = window.setTimeout(step, 80)
+          else setIsSpeaking(false)
+        }
+        mouthTimer.current = window.setTimeout(step, 80)
       }
       // audio_error is suppressed: Edge TTS fallback handles it silently on the server side.
       if (res.end_call) setEnded(true)
@@ -532,12 +556,12 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
     const W = window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike; webkitSpeechRecognition?: new () => SpeechRecognitionLike }
     const Ctor = W.SpeechRecognition ?? W.webkitSpeechRecognition
     if (!Ctor) return void toast.error('Voice input needs Chrome or Edge')
-    if (listening) { recog.current?.stop(); return }
+    if (listening) { stopMic(); return }
     const r = new Ctor()
     r.lang = lang
     r.interimResults = false
-    r.onresult = (e) => submit(e.results[0]![0]!.transcript)
-    r.onend = () => setListening(false)
+    r.onresult = (e) => { if (recog.current === r) submit(e.results[0]![0]!.transcript) }
+    r.onend = () => { if (recog.current === r) { recog.current = null; setListening(false) } }
     r.onerror = (e: { error: string }) => {
       setListening(false);
       if (e.error === 'no-speech') {
@@ -557,9 +581,12 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
 
   const clear = () => {
     session.current++; pending.current = false
-    audio.current?.pause(); recog.current?.stop(); window.clearTimeout(mouthTimer.current); setIsSpeaking(false); level.current = 0
-    setHistory([]); setSelected(null); setEnded(false); setFailed(null); setText('')
+    audio.current?.pause(); stopMic(); window.clearTimeout(mouthTimer.current); setIsSpeaking(false); level.current = 0
+    setHistory([]); setSelected(null); setEnded(false); setFailed(null); setText(''); setShowAll(false)
   }
+  // Error states carry their only Retry inside the transcript; on phones it must not stay display:none.
+  useEffect(() => { if (failed || greeting.isError) setChatOpen(true) }, [failed, greeting.isError])
+  useEffect(() => { if (greeting.isError) toast.error('Could not load the opening line', { description: greeting.error.message }) }, [greeting.isError, greeting.error])
   const waitingForGreeting = greeting.isPending && history.length === 0
   const inputLocked = ended || waitingForGreeting
   // Restart: refetch may hand back the same (structurally shared) greeting object, so the seeding effect would not re-run — seed directly.
@@ -654,12 +681,12 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                   : 'pointer-events-none max-h-[34vh] justify-end overflow-hidden [scrollbar-width:none] sm:max-h-[42vh] [mask-image:linear-gradient(to_bottom,transparent,black_22%)]',
               )}
             >
-              {history.length > 4 && (
+              {history.length > VISIBLE_TURNS && (
                 // Full view: a sticky header bar the turns scroll under. Collapsed: a pill above the last turns.
                 <div className={cn('z-10 self-stretch', showAll ? 'sticky top-0 -mx-3 mb-2 border-b border-white/5 bg-[#0b0c12]/95 px-3 py-2 sm:-mx-5 sm:px-5' : 'mt-6 mb-1')}>
                   <button type="button" onClick={() => setShowAll((v) => !v)}
                     className="pointer-events-auto min-h-8 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-[11px] font-semibold text-white/85 transition hover:bg-white/15">
-                    {showAll ? 'Show last 4 turns' : `Show full transcript (${history.length} turns)`}
+                    {showAll ? `Show last ${VISIBLE_TURNS} turns` : `Show full transcript (${history.length} turns)`}
                   </button>
                 </div>
               )}
@@ -672,7 +699,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
               {greeting.isPending && history.length === 0 && (
                 <div className="self-start rounded-2xl bg-black/60 px-4 py-2.5 text-[13px] text-white/70 backdrop-blur-md border border-white/10 shadow-xl">Preparing the opening line…</div>
               )}
-              {(showAll ? history : history.slice(-3)).map((t, i, arr) => (
+              {(showAll ? history : history.slice(-VISIBLE_TURNS)).map((t, i, arr) => (
                 <div key={history.length - arr.length + i}
                   className={cn('reveal reveal-in reveal-up pointer-events-auto flex max-w-[88%] flex-col gap-1 sm:max-w-[80%]',
                     t.role === 'assistant' ? 'self-start items-start' : 'self-end items-end')}>
