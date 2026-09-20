@@ -268,6 +268,13 @@ def reminders() -> list[dict]:
             add(agent_id, "slow_replies", "warning", n,
                 f"Replies are slow: p95 {round(p95 / 1000, 1)}s to first audio over {n} calls",
                 "/analytics", "See latency")
+    from app.core import store
+    moved = store.get_json("llm_outage_postponed")
+    if moved and moved.get("leads"):
+        n = len(moved["leads"])
+        items.insert(0, {"key": f"llm_outage:{today}", "agent_id": None, "agent": None, "kind": "llm_outage", "level": "danger", "count": n,
+                         "text": f"AI providers unavailable: {n} scheduled call{'s' if n != 1 else ''} moved two hours on, customers emailed. {moved.get('detail', '')[:80]}",
+                         "to": "/settings", "action": "Check providers", "when": None})
     order = {"danger": 0, "warning": 1, "success": 2, "info": 3}
     return sorted(items, key=lambda i: (order[i["level"]], i.get("when") or ""))
 

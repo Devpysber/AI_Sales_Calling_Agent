@@ -63,7 +63,8 @@ class Settings(BaseSettings):
     fallback_prompt_char_budget: int = Field(6000, alias="FALLBACK_PROMPT_CHAR_BUDGET")
     openrouter_embedding_model: str = Field("openai/text-embedding-3-small", alias="OPENROUTER_EMBEDDING_MODEL")
     # Post-call summaries are not latency-sensitive: try free/cheap models first, paid Sarvam as fallback.
-    summary_llm_providers: str = Field("openrouter,sarvam", alias="SUMMARY_LLM_PROVIDERS")
+    # Sarvam first: a summary is one request (~Rs 0.02) against ~Rs 0.15-0.20 of Gemini tokens; OpenRouter is the fallback.
+    summary_llm_providers: str = Field("sarvam,openrouter", alias="SUMMARY_LLM_PROVIDERS")
     llm_timeout_seconds: float = Field(4.5, alias="LLM_TIMEOUT_SECONDS")
     # Wall clock for one live turn across every provider and model in LLM_PROVIDERS. Without it a dead
     # provider set walks the whole chain (13.5s per model, then again without tools) past the 45s reply

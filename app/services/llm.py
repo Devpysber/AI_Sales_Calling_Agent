@@ -124,6 +124,33 @@ def _mark_openrouter_dead(reason: str) -> None:
     log.warning("OpenRouter unusable for %ss (%s); live turns go to Sarvam without tools until then", OPENROUTER_DEAD_SECONDS, reason[:120])
 
 
+PREFLIGHT_KEY = "llm_preflight"
+PREFLIGHT_SECONDS = 300
+
+
+def providers_ready(force: bool = False) -> tuple[bool, str]:
+    """
+    Can the agent talk right now? One tiny completion, cached five minutes, checked before an automated
+    call is placed: dialling a customer into an agent whose providers are down is worse than calling
+    later. (ok, detail)
+    """
+    from app.core import store
+    cached = None if force else store.get_json(PREFLIGHT_KEY)
+    if cached and float(cached.get("until", 0)) > time.time():
+        return bool(cached["ok"]), cached.get("detail", "")
+    ok, detail = False, ""
+    try:
+        r = complete([{"role": "user", "content": "Reply with the single word OK."}], max_tokens=5, temperature=0, timeout=8)
+        ok, detail = True, f"{r.provider}/{r.model} answered in {r.latency_ms}ms"
+    except Exception as e:  # noqa: BLE001 - every provider failed: that is the finding
+        detail = str(e)[:300]
+    # A failure is re-checked sooner so a recovered provider is picked up within a minute.
+    store.set_json(PREFLIGHT_KEY, {"ok": ok, "detail": detail, "until": time.time() + (PREFLIGHT_SECONDS if ok else 60)}, ttl=PREFLIGHT_SECONDS)
+    if ok:
+        store.delete("llm_outage_postponed")  # the panel warning clears once the agent can talk again
+    return ok, detail
+
+
 def _is_account_error(text: str) -> bool:
     """A 401/402-class failure: the whole provider account is out, not just this model."""
     lowered = (text or "").lower()
@@ -513,7 +540,7 @@ def embed(texts: list[str], timeout: float = 30) -> list[list[float]] | None:
     """
     Embeddings via OpenRouter; None when unavailable (RAG then uses keyword search only).
     """
-    if not settings.openrouter_api_key or not texts:
+    if not settings.openrouter_api_key or not texts or _openrouter_dead():
         return None
     try:
         res = _client.post(

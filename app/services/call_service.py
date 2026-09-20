@@ -248,6 +248,15 @@ class CallService:
         if self.has_active(lead_id):
             raise CallError("A call to this lead is already in progress.")
 
+        # An agent whose AI providers are down cannot hold the call. Automated triggers move the slot two
+        # hours on, tell the customer and the admin, and raise a panel alert; a manual attempt gets the reason.
+        from app.services import llm
+        ready, detail = llm.providers_ready()
+        if not ready:
+            if trigger != "manual":
+                self._postpone_for_outage(lead, trigger, detail)
+            raise CallError("The AI providers are not answering right now (" + detail[:120] + "). "
+                            + ("The call was moved two hours on and the customer told." if trigger != "manual" else "Try again in a few minutes."))
         # Plivo fetches the answer XML from PUBLIC_BASE_URL; if it can't, the callee hears a hang-up.
         if not public_url_reachable():
             raise CallError(f"Plivo can't reach {settings.base_url or 'PUBLIC_BASE_URL'}. Start the tunnel "
@@ -981,6 +990,30 @@ class CallService:
     def has_active(self, lead_id: int) -> bool:
         with get_db() as db:
             return bool(db.scalar(select(func.count(Call.id)).where(Call.lead_id == lead_id, Call.status.in_(ACTIVE))))
+
+    def _postpone_for_outage(self, lead: dict, trigger: str, detail: str) -> None:
+        """A scheduled call the agent cannot take right now: move it, tell the customer, tell the admin."""
+        from app.services.notification_service import notify_admin, send_email, email_sent
+        from app.core import store
+        later = datetime.now(IST) + timedelta(hours=2)
+        at = later.strftime("%Y-%m-%d %H:%M")
+        self.crm.update(lead["id"], {"callback_at": at, "call_status": "Pending"}, actor="system",
+                        event_type="callback.postponed", title=f"Call moved to {later:%d %b %H:%M}: AI providers unavailable")
+        company = (agents.get_profile(self.agent_id) or {}).get("company_name") or (agents.get(self.agent_id) or {}).get("name") or "our team"
+        if lead.get("email") and not lead.get("do_not_call"):
+            body = (f"Hi {lead.get('name') or ''},\n\nWe were about to call you but our lines are busy right now. "
+                    f"We will call you around {later:%I:%M %p} today ({later:%d %b}).\n\nIf another time suits you better, just reply to this email.\n\n{company}")
+            email_sent(send_email(lead["email"], f"{company}: we will call you a little later", body, lead_id=lead["id"], agent_id=self.agent_id, actor="system"))
+        # One panel alert per outage window, listing the calls it moved.
+        moved = store.get_json("llm_outage_postponed", {"leads": [], "since": time.time()}) or {}
+        moved.setdefault("leads", []).append({"lead_id": lead["id"], "name": lead.get("name") or lead.get("phone"), "agent_id": self.agent_id, "at": at, "trigger": trigger})
+        moved["detail"] = detail[:200]
+        store.set_json("llm_outage_postponed", moved, ttl=6 * 3600)
+        if len(moved["leads"]) == 1:
+            notify_admin("AI providers unavailable: scheduled calls are being moved",
+                         f"The agent could not reach any LLM provider ({detail[:300]}).\n\nScheduled calls are moved two hours on and the "
+                         f"customers with an email address are told. Check credits / keys on Integrations & system.\n\nFirst affected: "
+                         f"{lead.get('name') or lead.get('phone')} -> {at} IST.", lead_id=lead["id"], agent_id=self.agent_id)
 
     def expire_stale(self):
         """Calls still active 20 minutes after they started never got a hangup callback: close them properly."""
