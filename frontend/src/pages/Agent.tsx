@@ -627,7 +627,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
             >
               {history.length > 4 && (
                 <button type="button" onClick={() => setShowAll((v) => !v)}
-                  className="pointer-events-auto sticky top-0 z-10 mb-1 min-h-8 self-start rounded-full bg-white/10 px-4 py-1.5 text-[11px] font-medium text-white/90 backdrop-blur-md hover:bg-white/20 border border-white/10 transition-colors">
+                  className="pointer-events-auto sticky top-0 z-10 mb-1 min-h-8 self-start rounded-full border border-white/10 bg-black/50 px-4 py-1.5 text-[11px] font-semibold text-white/85 shadow-lg backdrop-blur-xl transition hover:bg-white/15 border border-white/10 transition-colors">
                   {showAll ? 'Show last 4 turns' : `Show full transcript (${history.length} turns)`}
                 </button>
               )}
@@ -642,17 +642,35 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
               )}
               {(showAll ? history : history.slice(-3)).map((t, i, arr) => (
                 <div key={history.length - arr.length + i}
-                  className={cn(
-                    'pointer-events-auto max-w-[85%] rounded-2xl px-4 py-3 text-[13px] leading-relaxed break-words shadow-2xl backdrop-blur-md',
+                  className={cn('reveal reveal-in reveal-up pointer-events-auto flex max-w-[88%] flex-col gap-1 sm:max-w-[80%]',
+                    t.role === 'assistant' ? 'self-start items-start' : 'self-end items-end')}>
+                  <div className={cn('flex items-center gap-1.5 px-1 text-[10.5px] font-semibold uppercase tracking-wider text-white/45',
+                    t.role === 'customer' && 'flex-row-reverse')}>
+                    {t.role === 'assistant'
+                      ? <span className="flex size-4 items-center justify-center rounded-full bg-gradient-to-br from-brand to-info text-[9px] text-white"><Sparkles className="size-2.5" /></span>
+                      : <span className="flex size-4 items-center justify-center rounded-full bg-white/20 text-white/80"><UserRound className="size-2.5" /></span>}
+                    <span>{t.role === 'assistant' ? profile.agent_name : caller}</span>
+                    {t.meta && <span className="rounded-full bg-white/10 px-1.5 py-px font-mono text-[9.5px] normal-case tracking-normal text-white/60">{(t.meta.total_ms / 1000).toFixed(1)}s</span>}
+                    {t.meta?.qualification && (
+                      <span className={cn('rounded-full px-1.5 py-px text-[9.5px] normal-case tracking-normal',
+                        t.meta.qualification === 'Hot' ? 'bg-danger/25 text-danger' : t.meta.qualification === 'Warm' ? 'bg-warning/25 text-warning' : 'bg-info/25 text-info')}>
+                        {t.meta.qualification}
+                      </span>
+                    )}
+                  </div>
+                  <div className={cn(
+                    'relative rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed break-words shadow-[0_8px_30px_-8px_rgba(0,0,0,.7)] backdrop-blur-xl',
                     t.role === 'assistant'
-                      ? 'self-start bg-black/60 text-white border border-white/10'
-                      : 'self-end bg-white text-black font-medium',
+                      ? 'rounded-tl-md border border-white/12 bg-gradient-to-br from-white/14 to-white/6 text-white ring-1 ring-inset ring-white/5'
+                      : 'rounded-tr-md bg-gradient-to-br from-white to-white/85 font-medium text-black',
+                    i === arr.length - 1 && t.role === 'assistant' && 'ring-brand/40 shadow-[0_0_0_1px_rgba(255,255,255,.08),0_12px_40px_-10px_color-mix(in_srgb,var(--brand)_60%,transparent)]',
                   )}>
-                  {t.text}
+                    {t.text}
+                  </div>
                 </div>
               ))}
               {send.isPending && (
-                <div className="self-start flex items-center gap-2 rounded-2xl bg-black/60 px-5 py-3.5 text-[13px] text-white/60 backdrop-blur-md border border-white/10 shadow-xl">
+                <div className="reveal reveal-in reveal-up self-start flex items-center gap-2 rounded-2xl rounded-tl-md border border-white/12 bg-gradient-to-br from-white/14 to-white/6 px-5 py-3.5 text-[13px] text-white/60 shadow-xl backdrop-blur-xl">
                   <span className="flex gap-1.5">
                     <span className="size-1.5 rounded-full bg-white/60 animate-bounce [animation-delay:0ms]" />
                     <span className="size-1.5 rounded-full bg-white/60 animate-bounce [animation-delay:150ms]" />
