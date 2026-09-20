@@ -189,6 +189,7 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
     let teeth: THREE.Mesh | undefined
     let teethIndex: number | null = null
     let head: THREE.Object3D | undefined
+    let headRestX = 0                 // the rig's own head pitch; the render loop offsets from it, never from zero
     let blinkAction: THREE.AnimationAction | null = null
 
     // Dispose every geometry/material/texture under a subtree. Used both on teardown and when the GLB
@@ -241,6 +242,7 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       teeth = model.getObjectByName(nodeName('Teeth.001')) as THREE.Mesh | undefined
       if (teeth?.isMesh) teethIndex = addJawMorph(teeth, 12.55, 0.35, 0.3)
       head = model.getObjectByName(nodeName('spine.006'))
+      headRestX = head?.rotation.x ?? 0
       lowerArm(model, 'L')
       lowerArm(model, 'R')
 
@@ -301,7 +303,10 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       group.position.z = reduced ? targetZ : THREE.MathUtils.lerp(group.position.z, targetZ, 0.05)
       if (head) {
         const sway = reduced ? 0 : Math.sin(t * 0.7) * 0.02
-        const nod = isSpeaking && !reduced ? Math.sin(t * 2.3) * 0.025 : 0
+        // Chin up slightly so the eyes meet the camera instead of reading as a downward glance; portrait
+        // frames show more torso below the face, which made the same pose look like staring at the floor.
+        const lift = camera.aspect < 1 ? -0.16 : -0.08
+        const nod = headRestX + lift + (isSpeaking && !reduced ? Math.sin(t * 2.3) * 0.025 : 0)
         const ry = (isListening ? 0.15 : 0) + sway
         const rz = isListening ? 0.08 : 0
         head.rotation.y = reduced ? ry : THREE.MathUtils.lerp(head.rotation.y, ry, 0.05)

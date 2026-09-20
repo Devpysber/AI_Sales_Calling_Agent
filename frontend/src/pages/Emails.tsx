@@ -332,9 +332,13 @@ export default function Emails() {
                 : groups.length
                   ? groups.map((g) => (
                     <section key={g.day}>
-                      <div className="sticky top-12 z-10 flex items-center justify-between border-b border-border/40 bg-bg/90 px-4 py-2 backdrop-blur sm:px-5 lg:top-0">
-                        <h2 className="truncate text-xs font-semibold tracking-wider text-muted uppercase">{g.day}</h2>
-                        <span className="text-[11px] font-medium text-muted tabular-nums bg-surface-2 px-2 py-0.5 rounded-full">{g.events.length} emails</span>
+                      {/* Floating pills, not a full-width strip: a solid bar over the page gradient read as a black line. */}
+                      <div className="pointer-events-none sticky top-12 z-10 mb-3 flex items-center justify-between py-1 lg:top-0">
+                        <h2 className="reveal reveal-in reveal-left pointer-events-auto inline-flex items-center gap-2 rounded-full border border-border/60 bg-surface/80 px-3 py-1 text-[11px] font-semibold tracking-wider text-muted uppercase shadow-sm backdrop-blur-md">
+                          {g.day === "Today" && <span className="relative flex size-1.5"><span className="absolute inline-flex size-full animate-live-ring rounded-full bg-success" /><span className="relative inline-flex size-1.5 rounded-full bg-success" /></span>}
+                          {g.day}
+                        </h2>
+                        <span className="reveal reveal-in reveal-right pointer-events-auto rounded-full border border-border/60 bg-surface/80 px-2 py-0.5 text-[11px] font-medium text-muted tabular-nums shadow-sm backdrop-blur-md">{g.events.length} emails</span>
                       </div>
                       <Card className="divide-y divide-border overflow-hidden">
                         {g.events.map((e, i) => {
