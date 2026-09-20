@@ -35,6 +35,19 @@ def send_email_tool(to: str, subject: str, body: str, agent_id: int) -> str:
     except Exception as e:
         return f"Failed to send email: {str(e)}"
 
+def check_email_status_tool(agent_id: int, hours: int = 24) -> str:
+    """Recent outgoing emails for this agent from the activity log, newest first."""
+    from app.services import events
+    since = datetime.now(timezone.utc) - timedelta(hours=max(1, min(hours, 24 * 14)))
+    rows = [e for e in events.list_events(agent_id, type_prefix="email", limit=50)
+            if str(e.get("created_at") or "") >= since.strftime("%Y-%m-%dT%H:%M")]
+    if not rows:
+        return f"No emails were sent by this agent in the last {hours} hours. Email sending itself is configured and working."
+    lines = [f"- {e.get('created_at', '')[:16].replace('T', ' ')}: {e.get('title')} ({e.get('detail') or 'sent'})" for e in rows[:10]]
+    failed = sum(1 for e in rows if "fail" in str(e.get("detail") or "").lower())
+    return f"{len(rows)} email(s) in the last {hours} hours, {failed} failed.\n" + "\n".join(lines)
+
+
 def check_records_tool(query: str, agent_id: int) -> str:
     """Query the CRM for past calls, leads, and histories."""
     crm = CRMService(agent_id)
@@ -183,6 +196,14 @@ TOOLS = [
                 },
                 "required": ["to", "subject", "body"]
             }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_email_status",
+            "description": "What emails this agent sent recently (to whom, subject, delivered or failed) and the last email service check. Use when a team member asks whether any mail went out or whether email is working.",
+            "parameters": {"type": "object", "properties": {"hours": {"type": "integer", "description": "How far back to look, in hours (default 24)."}}}
         }
     },
     {
@@ -371,6 +392,8 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
         return send_email_tool(args.get("to"), args.get("subject"), args.get("body"), agent_id)
     elif name == "check_records":
         return check_records_tool(args.get("query"), agent_id)
+    elif name == "check_email_status":
+        return check_email_status_tool(agent_id, int(args.get("hours") or 24))
     elif name == "check_credits":
         return check_credits_tool()
     elif name == "update_lead_status":

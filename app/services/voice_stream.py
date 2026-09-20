@@ -895,6 +895,16 @@ class CallStream:
             self.transferred = False
             log.error("Transfer failed for %s: %s", self.session_id[:8], e)
 
+    async def finalize_if_unreported(self, delay: float = 15.0):
+        await asyncio.sleep(delay)
+        call_id = self.session.get("call_id")
+        if not call_id:
+            return
+        with contextlib.suppress(Exception):
+            # on_hangup is idempotent: a callback that did arrive already closed the call and this is a no-op.
+            await asyncio.to_thread(CallService().on_hangup, int(call_id), "completed", 0,
+                                    "Stream ended; no hangup callback", self.call_uuid)
+
     async def wait_for_end(self):
         """
         Stay alive until plivo_loop acts on an armed hangup/transfer checkpoint, or the caller hangs up.
@@ -983,6 +993,10 @@ class CallStream:
             # the call is ended here. After a transfer Plivo owns the call, so it is left alone.
             if not self.transferred:
                 await self.hangup()
+                # Plivo's hangup callback normally lands within seconds and finalises the record (status,
+                # duration, summary). When it is lost (public URL changed, tunnel restart) the call sat
+                # "In Progress" until a sweeper marked it Failed 20 minutes later, transcript unsummarised.
+                asyncio.get_running_loop().create_task(self.finalize_if_unreported())
             with contextlib.suppress(Exception):
                 await self.ws.close()
             log.info("Stream closed for session %s", self.session_id[:8])

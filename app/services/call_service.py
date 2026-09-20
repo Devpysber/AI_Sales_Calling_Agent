@@ -958,10 +958,15 @@ class CallService:
             return bool(db.scalar(select(func.count(Call.id)).where(Call.lead_id == lead_id, Call.status.in_(ACTIVE))))
 
     def expire_stale(self):
+        """Calls still active 20 minutes after they started never got a hangup callback: close them properly."""
         cutoff = _utcnow() - timedelta(minutes=20)
         with get_db() as db:
-            for call in db.scalars(select(Call).where(Call.status.in_(ACTIVE), Call.created_at < cutoff)):
-                call.status, call.error, call.ended_at = "Failed", "No hangup callback received", _utcnow()
+            stale = [(c.id, c.agent_id, c.call_uuid, c.answered_at is not None)
+                     for c in db.scalars(select(Call).where(Call.status.in_(ACTIVE), Call.created_at < cutoff))]
+        for call_id, agent_id, uuid, answered in stale:
+            with contextlib.suppress(Exception):
+                CallService(agent_id).on_hangup(call_id, "completed" if answered else "no_answer", 0,
+                                                "No hangup callback received", uuid)
 
     def stats(self, days: int = 14) -> dict:
         today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
