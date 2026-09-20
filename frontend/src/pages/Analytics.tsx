@@ -169,7 +169,7 @@ export default function Analytics() {
 
           <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
             <Card className="min-w-0">
-              <CardHeader title="Best time to call" description={best ? `Highest connect rate: ${DAYS[best.weekday]} around ${best.hour}:00 (${Math.round((100 * best.connected) / best.calls)}% of ${best.calls} calls)` : 'Darker = more calls. Numbers show connect % where there were 3+ calls.'} />
+              <CardHeader title="Best time to call" description={best ? `Highest connect rate: ${DAYS[best.weekday]} around ${best.hour}:00 IST (${Math.round((100 * best.connected) / best.calls)}% of ${best.calls} calls)` : 'Darker = more calls. Numbers show connect % where there were 3+ calls. Hours in IST.'} />
               <div className="min-w-0 px-4 pb-4 sm:px-5 sm:pb-5">{heatmap.length ? <Heatmap cells={heatmap} /> : <p className="py-10 text-center text-sm text-muted">No calls in this period.</p>}</div>
             </Card>
             <Card className="min-w-0">

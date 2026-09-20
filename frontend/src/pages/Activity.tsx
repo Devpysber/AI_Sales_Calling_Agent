@@ -133,10 +133,9 @@ export default function Activity() {
               // can make the same day label appear twice, which would otherwise duplicate the key.
               <section key={`${g.day}-${g.events[0]?.id ?? 0}`}>
                 {/* Sits below the mobile top bar (h-12); on lg the top bar is hidden so it can hug the top. */}
-                <div className="sticky top-12 z-10 mb-3 flex items-center gap-3 bg-bg/90 py-1 backdrop-blur lg:top-0">
-                  <h2 className="truncate text-[13px] font-extrabold tracking-wider uppercase">{g.day}</h2>
-                  <span className="h-px flex-1 bg-border" />
-                  <span className="text-xs font-semibold text-muted tabular-nums">{g.events.length}</span>
+                <div className="sticky top-12 z-10 mb-3 flex items-center justify-between border-b border-border/40 bg-bg/90 py-2 backdrop-blur lg:top-0">
+                  <h2 className="truncate text-xs font-semibold tracking-wider text-muted uppercase">{g.day}</h2>
+                  <span className="text-[11px] font-medium text-muted tabular-nums bg-surface-2 px-2 py-0.5 rounded-full">{g.events.length} events</span>
                 </div>
                 <Card className="p-4 sm:p-6">
                   <ActivityFeed events={g.events} showLead onLead={(id) => navigate(path(`/leads/${id}`))} onCall={setCallId} />
