@@ -163,6 +163,35 @@ def system_diagnostics_tool() -> str:
     except Exception as e:
         return f"Failed to run diagnostics: {str(e)}"
 
+def resolve_agent(agent: str | int | None, fallback: int) -> tuple[int | None, str]:
+    """Admin names an agent by id, name or company ('carsindias', 'Hairscope wala'); nothing named = this agent."""
+    from app.services.agents import list_agents
+    if agent in (None, "", 0):
+        return fallback, ""
+    rows = list_agents()
+    text = str(agent).strip().lower()
+    if text.isdigit():
+        return (int(text), "") if any(r["id"] == int(text) for r in rows) else (None, f"Failed: no agent with id {text}.")
+    hits = [r for r in rows if text in str(r.get("name") or "").lower() or text in str((r.get("persona") or {}).get("company_name") or "").lower()]
+    if len(hits) == 1:
+        return hits[0]["id"], ""
+    if not hits:
+        return None, f"Failed: no agent matches '{agent}'. Agents: " + ", ".join(f"{r['name']} (id {r['id']})" for r in rows)
+    return None, f"Failed: '{agent}' matches several agents: " + ", ".join(f"{r['name']} (id {r['id']})" for r in hits)
+
+
+def all_agents_overview_tool() -> str:
+    """Every agent in one line each: today's calls, live, leads, hot, automation state (Admin only)."""
+    from app.services.agents import list_agents
+    rows = list_agents()
+    if not rows:
+        return "No agents in the system."
+    lines = [f"- {r['name']} (id {r['id']}): {r['stats']['calls_today']} calls today, {r['stats']['live']} live, "
+             f"{r['stats']['leads']} leads, {r['stats']['hot']} hot, {r['stats']['meetings']} meetings, "
+             f"automation {'on' if r.get('automation_on') else 'off'}" for r in rows]
+    return "All agents:\n" + "\n".join(lines)
+
+
 def list_all_agents_tool() -> str:
     """List all agents in the system."""
     from app.services.agents import list_agents
@@ -456,6 +485,44 @@ ADMIN_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "all_agents_overview",
+            "description": "One line per agent: calls today, live calls, leads, hot leads, meetings, automation on/off. "
+                           "Use for 'how are all agents doing', 'sab agents ka status'.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_agent_automation",
+            "description": "Turn automations on or off for ANY agent named by id, name or company (e.g. 'carsindias', "
+                           "'Hairscope'). Same switches as set_automation. Use when the admin names another agent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent": {"type": "string", "description": "Agent id, name or company name."},
+                    "switches": {"type": "array", "items": {"type": "string", "enum": ["auto_dial", "retry", "speed_to_lead", "nurture", "meeting_reminder", "daily_report", "auto_emails"]}},
+                    "on": {"type": "boolean"}
+                },
+                "required": ["agent", "switches", "on"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "agent_stats",
+            "description": "Today's numbers and recent calls for ANY agent named by id, name or company.",
+            "parameters": {
+                "type": "object",
+                "properties": {"agent": {"type": "string", "description": "Agent id, name or company name."}},
+                "required": ["agent"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_all_agents",
             "description": "List all agents across the entire platform.",
             "parameters": {
@@ -555,6 +622,14 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
             return system_diagnostics_tool()
         elif name == "list_all_agents":
             return list_all_agents_tool()
+        elif name == "all_agents_overview":
+            return all_agents_overview_tool()
+        elif name == "set_agent_automation":
+            target, note = resolve_agent(args.get("agent"), agent_id)
+            return note or set_automation_tool(target, args.get("switches") or args.get("switch") or [], bool(args.get("on")))
+        elif name == "agent_stats":
+            target, note = resolve_agent(args.get("agent"), agent_id)
+            return note or (today_stats_tool(target) + "\n" + recent_calls_tool(target, 3))
         elif name == "get_agent_config":
             return get_agent_config_tool(args.get("target_agent_id"))
         elif name == "pause_agent_automation":

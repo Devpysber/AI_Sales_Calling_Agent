@@ -231,3 +231,21 @@ def test_live_feed_carries_latest_event_stamp(client, base):
     after = client.get("/api/agents/live").json()["latest_event"]
     assert after and after["type"] == "settings.updated" and after["actor"] == "team"
     assert not before or after["id"] > before["id"]
+
+
+def test_admin_tools_target_other_agents_by_name(client, base):
+    from app.services import agent_tools
+
+    agent_id = int(base.rsplit("/", 1)[1])
+    other = client.post("/api/agents", json={"name": "Hairscope desk"}).json()
+    names = {t["function"]["name"] for t in agent_tools.get_tools_for_role("admin")}
+    assert {"set_agent_automation", "agent_stats", "all_agents_overview"} <= names
+    assert "set_agent_automation" not in {t["function"]["name"] for t in agent_tools.get_tools_for_role("team")}
+
+    out = agent_tools.execute_tool("set_agent_automation", '{"agent": "hairscope", "switches": ["auto_dial"], "on": true}', agent_id, role="admin")
+    assert "Auto-dialer now on" in out
+    assert client.get(f"/api/agents/{other['id']}/automation").json()["settings"]["auto_dial_enabled"] is True
+    assert "Failed" in agent_tools.execute_tool("set_agent_automation", '{"agent": "nobody-here", "switches": ["retry"], "on": false}', agent_id, role="admin")
+    assert "Today:" in agent_tools.execute_tool("agent_stats", '{"agent": "Hairscope desk"}', agent_id, role="admin")
+    assert "Hairscope desk" in agent_tools.execute_tool("all_agents_overview", "{}", agent_id, role="admin")
+    assert "Access Denied" in agent_tools.execute_tool("set_agent_automation", '{"agent": "hairscope", "switches": ["retry"], "on": false}', agent_id, role="team")
