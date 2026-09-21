@@ -615,7 +615,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
   return (
     <div className="grid gap-4 grid-cols-1">
       {/* ===== Main playground card ===== */}
-      <Card className="dark relative flex h-[calc(100dvh-180px)] min-h-[520px] flex-col overflow-hidden border-white/10 bg-[#080810] sm:h-[calc(100dvh-280px)] sm:min-h-[680px]">
+      <Card className="dark relative flex h-[calc(100svh-180px)] min-h-[520px] flex-col overflow-hidden border-white/10 bg-[#080810] sm:h-[calc(100dvh-280px)] sm:min-h-[680px]">
 
         {/* ── Toolbar ──────────────────────────────────────────── */}
         <div className="relative z-20 flex flex-wrap items-center gap-2 border-b border-white/10 bg-black/60 px-3 py-2 backdrop-blur-xl shrink-0 sm:px-4 sm:py-3">
@@ -633,12 +633,19 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                 </span>
                 <span className="truncate">{inbound ? 'Rehearsing an inbound call' : 'Rehearsing an outbound call'} · voice {titleCase(profile.voice_speaker)} · nothing is saved to the CRM</span>
               </div>
-              {u && !u.exempt && (
+              {u && (u.exempt ? (
+                <div className="mt-1.5 truncate text-[11px] text-white/60">Administrator · unlimited rehearsals{u.limit > 0 ? ` · team members get ${u.limit} per month` : ''}</div>
+              ) : (
                 <div className="mt-1.5 flex items-center gap-2 text-[11px] text-white/70" aria-live="polite">
-                  <span className="h-1 w-24 shrink-0 overflow-hidden rounded-full bg-white/15"><span className={cn('block h-full rounded-full', u.remaining === 0 ? 'bg-danger' : u.remaining === 1 ? 'bg-warning' : 'bg-success')} style={{ width: `${Math.min(100, (100 * u.used) / Math.max(1, u.limit))}%` }} /></span>
-                  <span className="truncate">{u.used} of {u.limit} rehearsals used this month · resets {new Date(u.resets_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>
+                  <span className="h-1.5 w-28 shrink-0 overflow-hidden rounded-full bg-white/15">
+                    <span key={u.used} className={cn('grow-x block h-full rounded-full transition-[width] duration-500', u.remaining === 0 ? 'bg-danger' : u.remaining === 1 ? 'bg-warning' : 'bg-success')}
+                      style={{ width: `${Math.min(100, (100 * u.used) / Math.max(1, u.limit))}%` }} />
+                  </span>
+                  <span className={cn('truncate', u.remaining === 0 ? 'font-semibold text-danger' : u.remaining === 1 && 'text-warning')}>
+                    {u.remaining === 0 ? `All ${u.limit} rehearsals used this month` : `${u.used} of ${u.limit} rehearsals used this month · ${u.remaining} left`} · resets {new Date(u.resets_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                  </span>
                 </div>
-              )}
+              ))}
             </div>
           </div>
           <Tabs value={direction} onChange={(v) => { setDirection(v); clear() }}

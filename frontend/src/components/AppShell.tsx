@@ -564,14 +564,19 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
         <Sidebar {...sidebarProps} compact={compact} setCompact={setCompact} />
       </aside>
 
-      {mobile && (
-        <div className="fixed inset-0 z-40 lg:hidden">
-          <div className="absolute inset-0 animate-fade-in bg-black/50" onClick={() => setMobile(false)} aria-hidden />
-          <aside ref={drawer} role="dialog" aria-modal="true" aria-label="Navigation" className="absolute inset-y-0 left-0 max-w-full animate-drawer-in shadow-pop will-change-transform">
-            <Sidebar {...sidebarProps} compact={false} setCompact={() => undefined} mobile onClose={() => setMobile(false)} />
-          </aside>
-        </div>
-      )}
+      {/* The drawer stays mounted and slides with a transition: mounting it on open re-laid out the whole
+          page (the content wrapper flips to inert at the same moment) and the first animation frame painted
+          the panel before its layer existed, which read as a flicker on phones. Closed, it is invisible,
+          inert and off-screen, so it costs nothing and cannot take focus. */}
+      <div className={cn('fixed inset-0 z-40 lg:hidden', !mobile && 'pointer-events-none')} inert={!mobile || undefined} aria-hidden={!mobile}>
+        <div className={cn('absolute inset-0 bg-black/50 transition-opacity duration-200 ease-[var(--ease-pointer)]', mobile ? 'opacity-100' : 'opacity-0')}
+          onClick={() => setMobile(false)} aria-hidden />
+        <aside ref={drawer} role="dialog" aria-modal="true" aria-label="Navigation"
+          className={cn('absolute inset-y-0 left-0 max-w-full shadow-pop transition-[transform,visibility] duration-200 ease-[var(--ease-entrance)] will-change-transform',
+            mobile ? 'visible translate-x-0' : 'invisible -translate-x-full')}>
+          <Sidebar {...sidebarProps} compact={false} setCompact={() => undefined} mobile onClose={() => setMobile(false)} />
+        </aside>
+      </div>
 
       <div className="relative z-10 flex min-w-0 flex-1 flex-col" inert={mobile || undefined}>
         <header className="sticky top-0 z-30 flex min-h-12 items-center gap-1.5 border-b border-border bg-bg/85 px-2 py-1 backdrop-blur-md sm:px-4 lg:hidden">
