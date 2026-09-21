@@ -239,7 +239,13 @@ def playground_usage(request: Request) -> dict:
     """Rehearsals started this calendar month against the limit; a rehearsal is the first customer line of a session."""
     from datetime import datetime, timezone
 
-    limit = int(settings.playground_monthly_limit or 0)
+    # Admin sets the allowance on Settings -> Secrets (stored with the pricing); the env value is the default.
+    from app.services.settings_service import SettingsService
+    stored = (SettingsService().get_state("secrets") or {}).get("playground_monthly_limit")
+    try:
+        limit = int(float(stored)) if stored not in (None, "") else int(settings.playground_monthly_limit or 0)
+    except (TypeError, ValueError):
+        limit = int(settings.playground_monthly_limit or 0)
     now = datetime.now(timezone.utc)
     resets = (now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
               .replace(year=now.year + (now.month == 12), month=1 if now.month == 12 else now.month + 1))

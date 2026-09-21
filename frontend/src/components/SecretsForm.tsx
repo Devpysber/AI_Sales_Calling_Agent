@@ -172,6 +172,9 @@ export default function SecretsForm() {
           <h3 className="font-bold">Balances</h3>
           {num('sarvam_credits', 'Sarvam credits (as topped up)', '100.00')}
           {secrets?.sarvam_credits_estimate != null && <p className="-mt-2 text-xs text-muted">Estimated left after measured usage: {secrets.sarvam_credits_estimate}. Re-enter the amount whenever you top up.</p>}
+          <h3 className="pt-2 font-bold">Limits</h3>
+          {num('playground_monthly_limit', 'Playground rehearsals per team member per month', '5')}
+          <p className="-mt-2 text-xs text-muted">0 means unlimited. Administrators are never limited. Each member sees their own usage line in the playground.</p>
         </div>
       </div>
       <div className="flex flex-col gap-2 border-t border-border p-4 sm:flex-row sm:items-center sm:justify-end sm:p-5">

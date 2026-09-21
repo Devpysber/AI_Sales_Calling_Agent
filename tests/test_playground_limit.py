@@ -8,12 +8,12 @@ def _team_request(team_id=7):
     return SimpleNamespace(state=SimpleNamespace(user="team", token_payload={"team_id": team_id, "unlocked": [1]}))
 
 
-def test_admin_is_exempt():
+def test_admin_is_exempt(client):
     req = SimpleNamespace(state=SimpleNamespace(user="admin", token_payload={}))
     assert agents_api.playground_usage(req)["exempt"] is True
 
 
-def test_team_member_counts_down_to_the_limit(monkeypatch):
+def test_team_member_counts_down_to_the_limit(client, monkeypatch):
     monkeypatch.setattr(agents_api.settings, "playground_monthly_limit", 2)
     req = _team_request(team_id=4242)
     usage = agents_api.playground_usage(req)
