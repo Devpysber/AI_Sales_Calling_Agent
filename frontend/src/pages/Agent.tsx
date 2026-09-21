@@ -349,13 +349,13 @@ function ProfileEditor({ section, draft, setDraft, data }: {
                     <span className="mr-auto text-[13px] font-medium text-fg-2">{label}</span>
                     {PLACEHOLDERS.map((p) => <button key={p} type="button" onClick={() => insert(key, p)} className="min-h-10 rounded-md border border-border px-2.5 py-0.5 font-mono text-[11px] text-muted hover:border-brand hover:text-brand sm:min-h-0 sm:px-1.5">{`{${p}}`}</button>)}
                   </div>
-                  <Textarea rows={2} value={draft[key]} maxLength={400} onChange={(e) => set(key, e.target.value)} className={cn(bad.length && 'border-danger focus:border-danger focus:ring-danger/15')} />
+                  <Textarea rows={2} value={draft[key]} maxLength={200} onChange={(e) => set(key, e.target.value)} className={cn(bad.length && 'border-danger focus:border-danger focus:ring-danger/15')} />
                   <div className="flex items-start gap-3 rounded-lg bg-surface-2 px-3 py-2.5">
                     <Button size="icon" variant="ghost" className="-my-2 -ml-1 size-10 sm:-my-1 sm:size-8" onClick={() => preview(key, fill(draft[key]), lang)} disabled={!draft[key].trim()} aria-label={`Play ${label} greeting`}>{playing === key ? <Square /> : <Play />}</Button>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm text-fg-2">{fill(draft[key]) || <span className="text-muted">Empty</span>}</p>
-                      <p className={cn('mt-0.5 text-xs', bad.length ? 'text-danger' : words > 25 ? 'text-warning' : 'text-muted')}>
-                        {bad.length ? `Unknown placeholder ${bad.map((b) => `{${b}}`).join(', ')}` : `Preview for a lead named Rahul · ${words} words${words > 25 ? ' — consider shortening' : ''}`}
+                      <p className={cn('mt-0.5 text-xs', bad.length ? 'text-danger' : words > 18 ? 'text-warning' : 'text-muted')}>
+                        {bad.length ? `Unknown placeholder ${bad.map((b) => `{${b}}`).join(', ')}` : `Preview for a lead named Rahul · ${words} words · ${draft[key].length}/200 chars${words > 18 ? ' — shorter is cheaper (TTS is billed per character)' : ''}`}
                       </p>
                     </div>
                   </div>

@@ -85,21 +85,24 @@ def call_goal(lead: dict, purpose: str | None) -> str | None:
     """Instruction for a purpose-specific call (from the lead page's next best action)."""
     if purpose == "confirm_meeting" and lead.get("meeting_at"):
         return (f"Confirm the booked meeting on {lead['meeting_at']} (IST). Ask if that time still works; "
-                "if not, agree a new day and time and repeat it back. Do not pitch again. Keep the call under a minute.")
+                "if not, agree a new day and time and repeat it back. Do not pitch again. Keep the call under a minute "
+                "and every reply under 100 characters.")
     if purpose == "inbound_new":
         wanted = [COLLECT_LABELS[f] for f in (lead.get("collect") or ["name", "requirement"]) if f in COLLECT_LABELS
                   and not lead.get(COLLECT_FIELDS.get(f, f))]
         if not wanted:
-            return "The caller's details are complete. Help them from the knowledge base and move to the call to action."
+            return ("The caller's details are complete. Help them from the knowledge base and move to the call to action. "
+                    "Replies under 150 characters.")
         return ("A new caller not yet in our CRM. Before going deep, you MUST collect these details naturally, ONE question per turn, "
                 f"in this order: Language Preference (ask which language they prefer to speak in), {', '.join(wanted)}. "
-                "Acknowledge each answer briefly. If they ask something first, answer it very briefly, then immediately ask the next detail. "
+                "Acknowledge each answer in a few words (whole reply under 100 characters). If they ask something first, answer it "
+                "very briefly, then immediately ask the next detail. "
                 "You must not skip asking for their Name. Once collected, help them and move to the primary call to action.")
     if purpose == "inbound_choose":
         options = "; ".join(f"{c['label']}" + (f" — {c['about']}" if c.get("about") else "") for c in lead.get("choices") or [])
         return ("This caller is known to more than one of our desks and we do not yet know which one this call is about: "
                 f"{options}. Your ONLY job right now is to find out which of these they are calling about, in one short, "
-                "natural question. Do not pitch, do not answer product questions yet, do not collect details. If they "
+                "natural question under 100 characters. Do not pitch, do not answer product questions yet, do not collect details. If they "
                 "name something else entirely, ask which of the options it is closest to.")
     if purpose in ("team", "admin"):
         who = (lead.get("team_name") or "").strip()
@@ -114,18 +117,20 @@ def call_goal(lead: dict, purpose: str | None) -> str | None:
                 "If they ask something you don't know or don't have access to (like past call history), say so plainly — "
                 "NEVER say you will pass a message to the team or arrange a callback, because YOU ARE TALKING TO THE TEAM. "
                 "If they ask you to role-play a customer call, do it and stay in character until they stop you. "
-                "Keep answers short and concrete, the way a colleague would explain their own job.")
+                "Keep answers short and concrete, the way a colleague would explain their own job: under 150 characters "
+                "per reply, and when reading back a tool result give only the fact they asked for, not the whole list.")
     if purpose == "inbound":
         return ("The customer called us. Thank them, find out what they need, answer from the knowledge base, "
-                "and move them to the call to action. Ask their name if you do not know it.")
+                "and move them to the call to action. Ask their name if you do not know it. Replies under 150 characters.")
     if purpose == "follow_up":
-        return "This is the follow-up the customer asked for. Refer to the previous call summary and continue from there."
+        return ("This is the follow-up the customer asked for. Refer to the previous call summary and continue from there; "
+                "do not repeat the pitch. Replies under 120 characters.")
     if purpose == "missed_previous":
         return ("You already rang this person and they could not pick up. Open like a person would: say you called "
                 "earlier and they were probably busy, ask if now is a good time, and wait for their answer. "
                 "Do not apologise twice, do not explain the system, and do not launch into the pitch before they reply. "
                 "If they say they are still busy, ask when to call and end the call politely. "
-                "If they say go ahead, continue from the last conversation as if nothing was missed.")
+                "If they say go ahead, continue from the last conversation as if nothing was missed. Replies under 120 characters.")
     return None
 
 
@@ -822,7 +827,8 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
             "You have direct access to backend tools and databases. If the caller asks you to check records, send emails, "
             "send sms, schedule callbacks, diagnose the system, or check configs, YOU MUST USE YOUR TOOLS. "
             "Do NOT say you cannot help them, and do NOT offer to transfer them to a human. "
-            "Simply execute the required tool, and when you receive the result, summarize it back to the caller in their language."
+            "Simply execute the required tool, and when you receive the result, say back only the fact asked for, in their "
+            "language, under 150 characters (speech is billed per character)."
             "\nCRITICAL: DO NOT fill the 'team_action' field. You are the team! Act immediately by executing a tool call instead of passing a message."
             "\nCall a tool only when the answer is not already in the conversation or the Caller section. A result starting with "
             "'Failed' means the action did NOT happen: say in half a line that it could not be done right now and offer the next "
@@ -955,7 +961,7 @@ def _json_tool_turn(messages: list[dict], tools: list[dict], agent_id: int, purp
         outcome = execute_tool(name, json.dumps(args, ensure_ascii=False), agent_id, purpose)
         log.info("JSON tool round %s: %s -> %s", _round + 1, name, outcome[:80])
         work.append({"role": "assistant", "content": json.dumps({"reply": reply, "tool": {"name": name, "arguments": args}}, ensure_ascii=False)})
-        work.append({"role": "user", "content": f"[Result of {name}: {outcome[:1500]}]\nNow tell the caller, in one or two spoken sentences, and set tool to null."})
+        work.append({"role": "user", "content": f"[Result of {name}: {outcome[:1500]}]\nNow tell the caller only what they asked, in one spoken sentence under 150 characters, and set tool to null."})
     log.warning("JSON tool loop hit %s rounds for purpose %s", MAX_TOOL_ROUNDS, purpose)
     yield "Ji, maine note kar liya hai, aage ka kaam ho jayega."
 

@@ -1577,7 +1577,7 @@ class CallStream:
             if chosen:
                 lead = await asyncio.to_thread(self.switch_agent, chosen)
                 guidance = " ".join(g for g in (guidance, f"The caller chose {self.persona['company_name']}. Acknowledge in a few "
-                                                          "words and continue as that agent.") if g)
+                                                          "words and continue as that agent; whole reply under 120 characters.") if g)
         if self.session.get("lead_id"):
             with contextlib.suppress(Exception):
                 fresh = await asyncio.to_thread(CallService(self.agent_id).crm.get, self.session["lead_id"])

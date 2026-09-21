@@ -366,8 +366,8 @@ export default function Inbound() {
               </div>
               {form.after_hours_mode === 'message' && (
                 <div className="md:col-span-2">
-                  <Field label="Closed message" hint="Leave empty for a default message in the caller's language.">
-                    <Textarea rows={2} maxLength={300} value={form.after_hours_message ?? ''} disabled={busy} onChange={(e) => set('after_hours_message', e.target.value)}
+                  <Field label="Closed message" hint={`Leave empty for a default message in the caller's language. ${(form.after_hours_message ?? '').length}/200 chars — spoken text is billed per character.`}>
+                    <Textarea rows={2} maxLength={200} value={form.after_hours_message ?? ''} disabled={busy} onChange={(e) => set('after_hours_message', e.target.value)}
                       placeholder="Thanks for calling. We're closed right now: please call again between 9 AM and 9 PM." />
                   </Field>
                 </div>
