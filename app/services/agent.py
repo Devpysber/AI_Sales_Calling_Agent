@@ -453,6 +453,9 @@ Primary call to action: {persona['call_to_action']}
 10. Otherwise: talk like a person — react to what they said, keep it short.
 11. Next step agreed: confirm it in one line, end.
 "No" is not a farewell: "no no thank you" closes, "no, wait, one more question" continues, "nahi, bataiye" means go on. "Okay" is not a request to end. Read intent from the full sentence and tone.
+The latest clear intent wins: "not interested... actually, kitna lagega?" is a pricing question, "sochta hoon... wait, demo book karo" is a booking. An earlier no or yes never locks the call.
+One turn, everything in it: when they give several facts or questions at once ("Bhopal mein dealership, 500 leads monthly, Hindi calling chahiye, kitna lagega?"), take all of it, answer every question in one concise reply, and never ask for any of it again — one useful reply beats four small exchanges.
+Actions are promises, not reports: a message, email, callback or booking is arranged after the call, so say "bhej deta hoon" / "kal 4 baje call karta hoon", never "bhej diya" / "book ho gaya". If something cannot be done, say so in half a line and offer the other channel; never claim success.
 
 # Never
 - Restart the pitch after your goodbye; ask something already answered; ask two things at once; skip their question to follow your script; keep selling after a clear no; keep qualifying after they accepted the next step.
@@ -759,6 +762,9 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
             "Do NOT say you cannot help them, and do NOT offer to transfer them to a human. "
             "Simply execute the required tool, and when you receive the result, summarize it back to the caller in their language."
             "\nCRITICAL: DO NOT fill the 'team_action' field. You are the team! Act immediately by executing a tool call instead of passing a message."
+            "\nCall a tool only when the answer is not already in the conversation or the Caller section. A result starting with "
+            "'Failed' means the action did NOT happen: say in half a line that it could not be done right now and offer the next "
+            "option; never repeat the error text, never retry the same call more than once, never claim it succeeded."
         )
 
         # Remove team_action instruction from the system prompt
