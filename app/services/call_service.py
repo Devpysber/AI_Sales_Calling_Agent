@@ -357,8 +357,17 @@ class CallService:
         return call_session.get(call.session_id) if call else None
 
     def create_inbound(self, from_number: str, to_number: str, call_uuid: str) -> dict | None:
-        # The dialled number decides the agent; the caller is matched only against that agent's leads.
-        agent_id = agents.for_inbound(to_number)
+        # A caller some agent already knows gets that agent back (its persona and knowledge base); only an
+        # unknown number is routed by the dialled number. Known to several agents: the first one answers,
+        # asks which matter the call is about, and the live call switches to that agent (see agent.choose_agent).
+        known_per_agent = CRMService(None).find_by_phone_per_agent(from_number)
+        choices = agents.inbound_choices([l["agent_id"] for l in known_per_agent]) if len(known_per_agent) > 1 else []
+        known = known_per_agent[0] if known_per_agent else None
+        if choices:
+            # Prefer the agent designated for the dialled number when it is one of the candidates.
+            preferred = agents.for_inbound(to_number)
+            known = next((l for l in known_per_agent if l["agent_id"] == preferred), known)
+        agent_id = agents.for_inbound(to_number, lead_agent_id=known and known.get("agent_id"))
         if agent_id is None:
             return None
         crm = CRMService(agent_id)
@@ -384,11 +393,11 @@ class CallService:
             context = {"phone": from_number, "call_purpose": purpose, "team_name": team_name or "",
                        "name": team_name or ""}
             context["call_goal"] = agent.call_goal(context, purpose)
+        elif len(choices) > 1:
+            context = {**(lead or {"phone": from_number}), "call_purpose": "inbound_choose", "choices": choices}
+            context["call_goal"] = agent.call_goal(context, "inbound_choose")
         else:
-            collect = persona.get("inbound_collect") or ["name", "requirement"]
-            missing = [f for f in collect if not (lead or {}).get(agent.COLLECT_FIELDS.get(f, f))]
-            context = {**(lead or {"phone": from_number}), "call_purpose": "inbound", "collect": collect}
-            context["call_goal"] = agent.call_goal(context, "inbound_new" if missing else "inbound")
+            context = agent.inbound_context(persona, lead, from_number)
         session = call_session.create(agent_id=agent_id, lead_id=lead and lead["id"], lead=context, language=language)
         with get_db() as db:
             call = Call(agent_id=agent_id, lead_id=lead and lead["id"], session_id=session["id"], direction="inbound",

@@ -140,3 +140,45 @@ def test_inbound_collect_setting_and_cross_agent_recognition(client, base, monke
     client.post("/api/plivo/answer", data={"From": "919812300088", "To": "918000000000", "CallUUID": "cross-1"})
     lead = client.get(f"{base}/leads", params={"search": "9812300088"}).json()["items"][0]
     assert lead["name"] == "Known Elsewhere" and lead["city"] == "Delhi" and lead["source"] == "inbound call"
+
+
+def test_known_caller_reaches_their_own_agent(client, base, monkeypatch):
+    """A number some agent already knows is answered by that agent, not by the first agent on the line."""
+    from app.services import agents
+
+    other = client.post("/api/agents", json={"name": "Caller's own agent"}).json()
+    client.post(f"/api/agents/{other['id']}/leads", json={"name": "Returning Caller", "phone": "9812300099"})
+    monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
+
+    assert agents.for_inbound("918000000000") != other["id"]                           # unknown caller: dialled-number routing
+    assert agents.for_inbound("918000000000", lead_agent_id=other["id"]) == other["id"]  # known caller: their agent wins
+
+    client.post("/api/plivo/answer", data={"From": "919812300099", "To": "918000000000", "CallUUID": "own-1"})
+    calls = client.get(f"/api/agents/{other['id']}/calls", params={"direction": "inbound"}).json()["items"]
+    assert calls and calls[0]["lead_id"] and calls[0]["agent_id"] == other["id"]
+    assert not client.get(f"{base}/leads", params={"search": "9812300099"}).json()["items"]  # no duplicate lead on the other agent
+
+
+def test_caller_known_to_two_agents_is_asked_which_desk(client, base, monkeypatch):
+    from app.services import agent, agents, call_session
+
+    a = client.post("/api/agents", json={"name": "Cars desk"}).json()
+    b = client.post("/api/agents", json={"name": "Homes desk"}).json()
+    client.put(f"/api/agents/{a['id']}/profile", json={"company_name": "Acme Cars"})
+    client.put(f"/api/agents/{b['id']}/profile", json={"company_name": "Blue Homes"})
+    for aid in (a["id"], b["id"]):
+        client.post(f"/api/agents/{aid}/leads", json={"name": "Two Desks", "phone": "9812300111"})
+    monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
+
+    choices = agents.inbound_choices([a["id"], b["id"]])
+    assert [c["label"] for c in choices] == ["Acme Cars", "Blue Homes"]
+    assert agent.choose_agent("I'm calling about blue homes", choices) == b["id"]
+    assert agent.choose_agent("acme", choices) == a["id"]
+
+    from app.services.call_service import CallService
+
+    session = CallService(None).create_inbound("919812300111", "918000000000", "two-1")
+    assert session["agent_id"] == a["id"] and session["lead"]["call_purpose"] == "inbound_choose"
+    assert call_session.get(session["id"])["lead"]["choices"] == choices
+    text = agent.greeting(a["id"], session["lead"], "en-IN")
+    assert "Acme Cars or Blue Homes" in text and "Two Desks" in text

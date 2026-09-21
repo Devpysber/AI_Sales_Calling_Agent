@@ -1004,6 +1004,35 @@ class CallStream:
         call_session.save(fresh)
         self.session = fresh
 
+    def switch_agent(self, agent_id: int) -> dict:
+        """
+        Hand the live call to another of our agents (a caller known to several desks said which one they
+        want). Persona, knowledge base, CRM lead and the call record all move; the transcript so far stays.
+        """
+        from app.core.database import get_db
+        from app.models.call import Call
+        old = self.agent_id
+        self.agent_id = agent_id
+        self.persona = agents.get_profile(agent_id)
+        crm = CallService(agent_id).crm
+        phone = (self.session.get("lead") or {}).get("phone") or self.session.get("from_number")
+        lead = crm.find_by_phone(phone) if phone else None
+        context = agent.inbound_context(self.persona, lead, phone or "")
+        self.session["agent_id"] = agent_id
+        self.session["lead_id"] = lead and lead["id"]
+        self.session["lead"] = context
+        if self.session.get("call_id"):
+            with get_db() as db:
+                call = db.get(Call, self.session["call_id"])
+                if call:
+                    call.agent_id, call.lead_id = agent_id, lead and lead["id"]
+        self.save_session()
+        events.record("call.rerouted", f"Call moved to {self.persona['agent_name']} ({self.persona['company_name']})",
+                      f"The caller chose this desk; agent {old} greeted them.", agent_id=agent_id,
+                      lead_id=lead and lead["id"], call_id=self.session.get("call_id"))
+        log.info("Session %s switched from agent %s to %s", self.session_id[:8], old, agent_id)
+        return context
+
     # ----- lifecycle -----
 
     async def run(self):
@@ -1535,6 +1564,14 @@ class CallStream:
         self.publish_state()
         prompt_text = text if text is not None else "(The customer is listening. Continue the call now, following the supervisor instruction.)"
         lead = self.session.get("lead") or {}
+        if text and lead.get("call_purpose") == "inbound_choose":
+            # The caller was asked which of our desks this call is about: once they say, the rest of the call
+            # runs as that agent (its persona, knowledge base and CRM record).
+            chosen = await asyncio.to_thread(agent.choose_agent, text, lead.get("choices") or [])
+            if chosen:
+                lead = await asyncio.to_thread(self.switch_agent, chosen)
+                guidance = " ".join(g for g in (guidance, f"The caller chose {self.persona['company_name']}. Acknowledge in a few "
+                                                          "words and continue as that agent.") if g)
         if self.session.get("lead_id"):
             with contextlib.suppress(Exception):
                 fresh = await asyncio.to_thread(CallService(self.agent_id).crm.get, self.session["lead_id"])

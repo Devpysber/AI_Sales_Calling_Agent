@@ -237,6 +237,17 @@ class CRMService:
             lead = db.scalars(self._scoped(select(Lead)).where(Lead.phone == normalized).order_by(Lead.id.desc())).first()
             return lead.to_dict() if lead else None
 
+    def find_by_phone_per_agent(self, phone) -> list[dict]:
+        """The latest lead for this number on each agent that knows it (one entry per agent, oldest agent first)."""
+        normalized = normalize_phone(phone)
+        if not normalized:
+            return []
+        seen: dict[int, dict] = {}
+        with get_db() as db:
+            for lead in db.scalars(self._scoped(select(Lead)).where(Lead.phone == normalized).order_by(Lead.id.desc())):
+                seen.setdefault(lead.agent_id, lead.to_dict())
+        return [seen[k] for k in sorted(seen)]
+
     def pending_for_dial(self, limit: int) -> list[dict]:
         with get_db() as db:
             query = self._scoped(select(Lead)).where(

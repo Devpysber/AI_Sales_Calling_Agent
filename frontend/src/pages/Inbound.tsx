@@ -170,7 +170,7 @@ export default function Inbound() {
         description="Choose who answers when customers call, and where the AI sends callers who need a person." />
 
       <Card className="mb-4">
-        <CardHeader title="Who answers this line" description="Several agents can dial out from one number; exactly one of them answers when a customer calls it back. Change it any time - and give an agent its own number under Agent settings when you get one." />
+        <CardHeader title="Who answers this line" description="Several agents can dial out from one number. A customer who is already in an agent's CRM gets that agent back (its persona and knowledge); one known to several agents is asked which matter the call is about, then handed to that agent. A new number goes to the agent chosen here. Give an agent its own number under Agent settings when you get one." />
         <div className="flex flex-wrap items-center gap-3 px-4 pb-4 text-sm sm:px-5 sm:pb-5">
           {ownerQ.data ? (
             <>
@@ -180,7 +180,7 @@ export default function Inbound() {
                 ? <Badge tone="success">This agent answers</Badge>
                 : ownerQ.data.owner_id
                   ? <span>Answered by <strong>{ownerQ.data.sharing.find((a) => a.id === ownerQ.data!.owner_id)?.name ?? `agent #${ownerQ.data.owner_id}`}</strong></span>
-                  : <span className="text-muted">No agent designated: the first agent on this number answers</span>}
+                  : <span className="text-muted">No agent designated: known callers reach their own agent, new numbers reach the first agent on this line</span>}
               {ownerQ.data.owner_id !== agent?.id && (
                 <Button size="sm" variant="primary" className="ml-auto" loading={setOwner.isPending} onClick={() => setOwner.mutate()}>
                   <PhoneIncoming />Make {agent?.name} answer

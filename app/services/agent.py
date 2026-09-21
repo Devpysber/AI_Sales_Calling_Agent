@@ -95,6 +95,12 @@ def call_goal(lead: dict, purpose: str | None) -> str | None:
                 f"in this order: Language Preference (ask which language they prefer to speak in), {', '.join(wanted)}. "
                 "Acknowledge each answer briefly. If they ask something first, answer it very briefly, then immediately ask the next detail. "
                 "You must not skip asking for their Name. Once collected, help them and move to the primary call to action.")
+    if purpose == "inbound_choose":
+        options = "; ".join(f"{c['label']}" + (f" — {c['about']}" if c.get("about") else "") for c in lead.get("choices") or [])
+        return ("This caller is known to more than one of our desks and we do not yet know which one this call is about: "
+                f"{options}. Your ONLY job right now is to find out which of these they are calling about, in one short, "
+                "natural question. Do not pitch, do not answer product questions yet, do not collect details. If they "
+                "name something else entirely, ask which of the options it is closest to.")
     if purpose in ("team", "admin"):
         who = (lead.get("team_name") or "").strip()
         return ("This caller is one of OUR OWN COLLEAGUES" + (f", {who}" if who else "") + ", not a customer. They are "
@@ -147,6 +153,11 @@ INBOUND_GREETING = {"en": "Thank you for calling {company}, this is {agent}. How
                     "hi": "{company} में call करने के लिए धन्यवाद, मैं {agent} बोल रहा हूँ। मैं आपकी क्या मदद कर सकता हूँ?"}
 INBOUND_GREETING_NAMED = {"en": "Hi {name}, thank you for calling {company}, this is {agent}. How can I help you today?",
                           "hi": "नमस्ते {name}, {company} में call करने के लिए धन्यवाद, मैं {agent} बोल रहा हूँ। बताइए, मैं आपकी क्या मदद कर सकता हूँ?"}
+# A caller several of our agents know: find out which matter this call is about before any agent takes over.
+INBOUND_CHOOSE_GREETING = {"en": "Hi {name}, thanks for calling, this is {agent}. Are you calling about {options} today?",
+                           "hi": "नमस्ते {name}, call करने के लिए धन्यवाद, मैं {agent} बोल रहा हूँ। आज आप {options} — किस बारे में बात करना चाहेंगे?"}
+INBOUND_CHOOSE_GREETING_ANON = {"en": "Hi, thanks for calling, this is {agent}. Are you calling about {options} today?",
+                                "hi": "नमस्ते, call करने के लिए धन्यवाद, मैं {agent} बोल रहा हूँ। आज आप {options} — किस बारे में बात करना चाहेंगे?"}
 
 # Someone we have already spoken to does not need the full "this is X calling from Y" introduction
 # again: a person picking the thread back up just says who it is and gets to the point.
@@ -181,6 +192,54 @@ def is_returning(agent_id: int | None, lead: dict) -> bool:
     return bool(agent_id and past_conversations(agent_id, lead))
 
 
+def inbound_context(persona: dict, lead: dict | None, from_number: str) -> dict:
+    """Call context for a customer ringing in: who they are plus what the agent still has to ask them."""
+    collect = persona.get("inbound_collect") or ["name", "requirement"]
+    missing = [f for f in collect if not (lead or {}).get(COLLECT_FIELDS.get(f, f))]
+    context = {**(lead or {"phone": from_number}), "call_purpose": "inbound", "collect": collect}
+    context["call_goal"] = call_goal(context, "inbound_new" if missing else "inbound")
+    return context
+
+
+def choice_options(choices: list[dict], english: bool) -> str:
+    """'Acme Cars or Blue Homes' — how the greeting names what a known caller can be calling about."""
+    labels = [c["label"] for c in choices]
+    if not labels:
+        return ""
+    joiner = " or " if english else " या "
+    return (", ".join(labels[:-1]) + joiner + labels[-1]) if len(labels) > 1 else labels[0]
+
+
+def choose_agent(text: str, choices: list[dict]) -> int | None:
+    """
+    Which of the offered desks the caller means. Cheap word overlap first (the caller usually repeats a
+    company or agent name), then a tiny LLM classification; None when they still have not said.
+    """
+    said = re.sub(r"[^\w\s]", " ", (text or "").lower())
+    words = set(said.split())
+    if not words:
+        return None
+    scored = []
+    for c in choices:
+        keys = {w for w in re.sub(r"[^\w\s]", " ", f"{c['label']} {c['company']} {c['agent_name']}".lower()).split() if len(w) > 2}
+        scored.append((len(keys & words), c["agent_id"]))
+    scored.sort(reverse=True)
+    if scored and scored[0][0] and (len(scored) == 1 or scored[0][0] > scored[1][0]):
+        return scored[0][1]
+    # Ordinal answers ("the first one", "second") and paraphrases go to the model.
+    menu = "\n".join(f"{i + 1}. {c['label']}" + (f" — {c['about']}" if c.get("about") else "") for i, c in enumerate(choices))
+    try:
+        result = llm.complete([
+            {"role": "system", "content": "A caller was asked which of these matters they are calling about:\n" + menu +
+                                          "\nReply with the option number only, or 0 if their answer does not pick one."},
+            {"role": "user", "content": text}], max_tokens=5, temperature=0, providers=settings.summary_llm_providers, timeout=6)
+        n = int(re.search(r"\d+", result.text or "0").group())
+        return choices[n - 1]["agent_id"] if 0 < n <= len(choices) else None
+    except Exception as e:  # noqa: BLE001 - ask again rather than guess
+        log.warning("Desk choice classification failed: %s", e)
+        return None
+
+
 def greeting(agent_id: int, lead: dict, language: str) -> str:
     persona = agents.get_profile(agent_id)
     name = (lead.get("name") or "").strip()
@@ -195,6 +254,8 @@ def greeting(agent_id: int, lead: dict, language: str) -> str:
         team_name = (lead.get("team_name") or "").strip()
         template = TEAM_GREETING[key] if team_name else TEAM_GREETING_ANON[key]
         name = team_name or name
+    elif purpose == "inbound_choose":
+        template = (INBOUND_CHOOSE_GREETING if name else INBOUND_CHOOSE_GREETING_ANON)[key]
     elif purpose == "inbound":
         template = INBOUND_GREETING[key] if not name else INBOUND_GREETING_NAMED[key]
     elif purpose in CONTINUATION or is_returning(agent_id, lead):
@@ -202,7 +263,8 @@ def greeting(agent_id: int, lead: dict, language: str) -> str:
         template = (RETURNING_GREETING if name else RETURNING_GREETING_ANON)[key]
         returning = True
     template = genderize(template, persona)
-    values = {"name": name, "agent": persona["agent_name"], "company": persona["company_name"]}
+    values = {"name": name, "agent": persona["agent_name"], "company": persona["company_name"],
+              "options": choice_options(lead.get("choices") or [], english)}
     # Unknown or malformed placeholders are left as typed instead of crashing the call.
     text = re.sub(r"\{(\w+)\}", lambda m: values.get(m.group(1), m.group(0)), template)
     suffix = GREETING_SUFFIX.get(purpose, {}).get(key)

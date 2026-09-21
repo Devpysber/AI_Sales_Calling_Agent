@@ -447,13 +447,37 @@ def set_inbound_owner(number: str, agent_id: int | None, actor: str = "admin") -
     return {"number": number, "agent_id": agent_id}
 
 
+def inbound_choices(agent_ids: list[int]) -> list[dict]:
+    """
+    What a caller known to several agents can be asked to choose between. Each agent is named by what
+    tells them apart on the phone: the company when the agents serve different companies, else the agent.
+    """
+    rows = []
+    for aid in agent_ids:
+        try:
+            p = get_profile(aid)
+        except Exception:  # noqa: BLE001 - a deleted agent is simply not offered
+            continue
+        rows.append({"agent_id": aid, "agent_name": p["agent_name"], "company": p["company_name"],
+                     "about": (p.get("company_tagline") or p.get("objective") or "").strip()[:120]})
+    if len(rows) < 2:
+        return []
+    distinct_companies = len({r["company"].strip().lower() for r in rows}) == len(rows)
+    for r in rows:
+        r["label"] = r["company"] if distinct_companies else f"{r['agent_name']} ({r['company']})"
+    return rows
+
+
 def for_inbound(to_number: str, lead_agent_id: int | None = None) -> int | None:
     """
-    Route an inbound call: the agent designated for the dialled number, else an agent whose number it
-    is, else the caller's agent, else the first active agent.
+    Route an inbound call: the caller's own agent (the one whose CRM already knows the number) so the
+    conversation continues with that agent's persona and knowledge; else the agent designated for the
+    dialled number, else an agent whose number it is, else the first active agent.
     """
     number = normalize_number(to_number)
     with get_db() as db:
+        if lead_agent_id and db.get(Agent, lead_agent_id):
+            return lead_agent_id
         if number:
             designated = inbound_owner(number)
             if designated:
@@ -461,8 +485,6 @@ def for_inbound(to_number: str, lead_agent_id: int | None = None) -> int | None:
             owner = db.scalar(select(Agent.id).where(Agent.phone_number == number).order_by(Agent.id))
             if owner:
                 return owner
-        if lead_agent_id and db.get(Agent, lead_agent_id):
-            return lead_agent_id
         return db.scalar(select(Agent.id).order_by((Agent.status != "active"), Agent.id))
 
 
