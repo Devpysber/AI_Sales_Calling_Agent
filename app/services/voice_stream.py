@@ -212,7 +212,10 @@ def spoken_name(text: str) -> str | None:
     return None
 
 
-EMAIL = re.compile(r"[\w.+-]+\s*(?:@|\bat the rate\b|\bat\b)\s*[\w-]+\s*(?:\.|\bdot\b)\s*[a-z]{2,}(?:\s*(?:\.|\bdot\b)\s*[a-z]{2,})?", re.I)
+EMAIL = re.compile(r"[\w+-]+(?:\s*(?:\.|\bdot\b|\bunderscore\b)\s*[\w+-]+)*"  # "ashish dot sharma", "ashish underscore sharma"
+                   r"\s*(?:@|\bat the rate\b|\bat\b)\s*[\w-]+\s*(?:\.|\bdot\b)\s*[a-z]{2,}(?:\s*(?:\.|\bdot\b)\s*[a-z]{2,})?", re.I)
+# The caller is replacing an email already on record ("actually it's ...", "nahi, ... hai").
+EMAIL_CORRECTION = re.compile(r"\b(actually|correct|correction|wrong|galat|nahi|nahin|not|no,)\b|नहीं|गलत|सही", re.I)
 
 
 def spoken_email(text: str) -> str | None:
@@ -224,7 +227,8 @@ def spoken_email(text: str) -> str | None:
     if re.search(r"[\u0900-\u097F]\s*$", before) or re.search(r"[\u0900-\u097F]", m.group(0)):
         return None  # part of the address was heard in Devanagari: ask them to spell it, never guess
     email = re.sub(r"\s*(?:\bat the rate\b|\bat\b)\s*", "@", m.group(0), count=1, flags=re.I)
-    email = re.sub(r"\s*\bdot\b\s*", ".", email, flags=re.I).replace(" ", "").lower()
+    email = re.sub(r"\s*\bdot\b\s*", ".", email, flags=re.I)
+    email = re.sub(r"\s*\bunderscore\b\s*", "_", email, flags=re.I).replace(" ", "").lower()
     return email if re.fullmatch(r"[\w.+-]+@[\w-]+(\.[a-z]{2,})+", email) else None
 
 
@@ -1420,6 +1424,8 @@ class CallStream:
             updates["name"] = name  # they corrected or stated their name explicitly: that wins over a guess
         if not lead.get("email") and (email := spoken_email(text)):
             updates["email"] = email
+        elif lead.get("email") and EMAIL_CORRECTION.search(text) and (email := spoken_email(text)) and email != lead["email"]:
+            updates["email"] = email  # "actually it's ashish123@gmail.com": the correction replaces the record
         if not updates:
             return
         lead.update(updates)

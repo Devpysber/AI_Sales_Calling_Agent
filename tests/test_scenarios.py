@@ -136,3 +136,36 @@ def test_backchannel_is_listening_not_barge_in():
     for text in ("hmm", "haan ji", "ok", "accha", "हाँ"):
         assert BACKCHANNEL.match(text)
     assert not BACKCHANNEL.match("okay okay I understand")
+
+
+# --- Email as a first-class action: deterministic capture, no extra LLM call ---
+
+from app.services.voice_stream import EMAIL_CORRECTION, spoken_email
+
+
+@pytest.mark.parametrize("text,email", [
+    ("Ashish at Gmail dot com", "ashish@gmail.com"),
+    ("my email is ashish dot sharma at gmail dot com", "ashish.sharma@gmail.com"),
+    ("ashish underscore sharma at the rate gmail dot com", "ashish_sharma@gmail.com"),
+    ("Yes, I'm interested. My email is rahul@gmail.com, send me the pricing.", "rahul@gmail.com"),
+    ("Actually it's ashish123@gmail.com.", "ashish123@gmail.com"),
+])
+def test_spoken_email_normalises(text, email):
+    assert spoken_email(text) == email
+
+
+@pytest.mark.parametrize("text", ["Send me the details on email.", "Email me the pricing.", "I don't want to give my email."])
+def test_email_request_without_address_is_not_an_email(text):
+    assert spoken_email(text) is None
+
+
+def test_email_correction_cue():
+    assert EMAIL_CORRECTION.search("Actually it's ashish123@gmail.com")
+    assert EMAIL_CORRECTION.search("nahi, ashish123 at gmail dot com hai")
+    assert not EMAIL_CORRECTION.search("my email is ashish@gmail.com")
+
+
+@pytest.mark.parametrize("text", ["Thanks, email me the details.", "Wait, email me the pricing.", "Don't email me, WhatsApp me instead."])
+def test_email_request_is_never_a_sign_off(text):
+    assert not is_caller_closing(text)
+    assert not is_post_farewell_noise(text)
