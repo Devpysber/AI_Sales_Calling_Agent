@@ -886,6 +886,8 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
                             tool_call_buffer[idx]["function"]["name"] = func["name"]
                         if func.get("arguments"):
                             tool_call_buffer[idx]["function"]["arguments"] += func["arguments"]
+            elif isinstance(delta, dict) and "usage" in delta:
+                yield delta   # token accounting for the call record
             elif isinstance(delta, str):
                 spoken.append(delta)
                 yield delta
@@ -948,6 +950,7 @@ def _json_tool_turn(messages: list[dict], tools: list[dict], agent_id: int, purp
     seen = None
     for _round in range(MAX_TOOL_ROUNDS + 1):
         result = llm.complete(work, json_mode=True, max_tokens=TOOL_MAX_TOKENS, temperature=0.3)
+        yield {"usage": llm.turn_usage(work, None, len(result.text or ""), None)}
         data = _parse_turn(result.text)
         tool = data.get("tool") if isinstance(data.get("tool"), dict) else None
         reply = str(data.get("reply") or "").strip()

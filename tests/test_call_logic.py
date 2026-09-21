@@ -67,7 +67,8 @@ def test_usage_cost_estimate(monkeypatch):
     from app.services.analytics import usage
     from app.services.call_service import _usage_fields
 
-    assert _usage_fields({"tts_chars": 120.0, "stt_seconds": 33.333, "llm_requests": 4}) == {"tts_chars": 120, "stt_seconds": 33.3, "llm_requests": 4}
+    assert _usage_fields({"tts_chars": 120.0, "stt_seconds": 33.333, "llm_requests": 4}) == {
+        "tts_chars": 120, "stt_seconds": 33.3, "llm_requests": 4, "llm_input_tokens": None, "llm_output_tokens": None}
     assert _usage_fields(None) == {}
     monkeypatch.setattr("app.services.settings_service.SettingsService.get_state", lambda self, key: {})
     monkeypatch.setattr(settings, "cost_per_call_minute", 1.0)
@@ -99,3 +100,39 @@ def test_spoken_email():
     assert spoken_email("my email is neha at the rate gmail dot com") == "neha@gmail.com"
     assert spoken_email("mail neha.g@yahoo.co.in") == "neha.g@yahoo.co.in"
     assert spoken_email("I will be at home") is None
+
+
+def test_usage_bills_llm_by_tokens_when_measured(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.core.config import settings
+    from app.services import llm
+    from app.services.analytics import usage
+    from app.services.call_service import _usage_fields
+
+    # Token counts ride on the usage dict into the call record
+    fields = _usage_fields({"tts_chars": 800, "stt_seconds": 180, "llm_requests": 10, "llm_input_tokens": 70_000, "llm_output_tokens": 600})
+    assert fields["llm_input_tokens"] == 70_000 and fields["llm_output_tokens"] == 600
+    # Provider usage frame wins; otherwise a character estimate
+    assert llm.turn_usage([{"content": "x" * 360}], None, 36, {"prompt_tokens": 95, "completion_tokens": 12}) == {"input_tokens": 95, "output_tokens": 12, "estimated": False}
+    est = llm.turn_usage([{"content": "x" * 360}], None, 36, None)
+    assert est["estimated"] and est["input_tokens"] == 100 and est["output_tokens"] == 10
+
+    monkeypatch.setattr("app.services.settings_service.SettingsService.get_state", lambda self, key: {})
+    monkeypatch.setattr(settings, "cost_per_call_minute", 0.38)
+    monkeypatch.setattr(settings, "cost_per_10k_tts_chars", 30.0)
+    monkeypatch.setattr(settings, "cost_per_stt_hour", 30.0)
+    monkeypatch.setattr(settings, "cost_per_llm_request", 0.209352)
+    monkeypatch.setattr(settings, "cost_per_1m_llm_input", 29.28)
+    monkeypatch.setattr(settings, "cost_per_1m_llm_output", 73.20)
+    measured = SimpleNamespace(status="Completed", duration=180, tts_chars=800, stt_seconds=180, llm_requests=10,
+                               llm_input_tokens=70_000, llm_output_tokens=600, qualification=None, outcome=None)
+    legacy = SimpleNamespace(status="Completed", duration=180, tts_chars=800, stt_seconds=180, llm_requests=10,
+                             llm_input_tokens=None, llm_output_tokens=None, qualification=None, outcome=None)
+    u = usage([measured, legacy])
+    assert u["llm_billing"] == "tokens" and u["token_calls"] == 1
+    # measured call by tokens (2.0496 + 0.0439) + legacy call by flat rate (2.09352)
+    assert u["cost"]["llm"] == round(70_000 / 1e6 * 29.28 + 600 / 1e6 * 73.20 + 10 * 0.209352, 2)
+    assert u["per_call"]["llm_requests"] == 10 and u["per_call"]["llm_input_tokens"] == 70_000
+    assert u["per_call"]["llm_input_tokens_per_request"] == 7_000
+    assert u["per_call"]["total_cost"] == u["cost_per_connected_call"]

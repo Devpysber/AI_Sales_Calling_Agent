@@ -190,8 +190,11 @@ export interface AnalyticsUsage {
   cost_per_connected_call: number | null; rates_configured: boolean; currency: string
   per_minute?: { tts_chars: number; tts_cost: number; total_cost: number } | null
   qualified_leads?: number; cost_per_qualified_lead?: number | null
-  per_call?: { tts_chars: number; tts_cost: number; duration: number } | null
+  per_call?: { tts_chars: number; tts_cost: number; duration: number; llm_requests?: number; llm_cost?: number; stt_cost?: number
+    telephony_cost?: number; total_cost?: number; llm_input_tokens?: number | null; llm_output_tokens?: number | null
+    llm_input_tokens_per_request?: number | null } | null
   budget?: { tts_chars: number; target_minutes: number }
+  llm_billing?: 'tokens' | 'requests'; token_calls?: number
 }
 
 export interface AnalyticsReport {

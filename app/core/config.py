@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     cost_per_10k_tts_chars: float = Field(0, alias="COST_PER_10K_TTS_CHARS")
     cost_per_stt_hour: float = Field(0, alias="COST_PER_STT_HOUR")
     cost_per_llm_request: float = Field(0, alias="COST_PER_LLM_REQUEST")
+    # Per-token LLM pricing (₹ per 1M tokens). When set and calls carry token counts, Analytics bills by tokens
+    # instead of the flat per-request rate. sarvam-105b: 29.28 in / 73.20 out.
+    cost_per_1m_llm_input: float = Field(0, alias="COST_PER_1M_LLM_INPUT")
+    cost_per_1m_llm_output: float = Field(0, alias="COST_PER_1M_LLM_OUTPUT")
     # Playground rehearsals a team member may start per calendar month (0 = unlimited). Admin and API token are exempt.
     playground_monthly_limit: int = Field(5, alias="PLAYGROUND_MONTHLY_LIMIT")
     # Cost guardrails for a live call (see voice_stream silence_loop): the agent is steered to close

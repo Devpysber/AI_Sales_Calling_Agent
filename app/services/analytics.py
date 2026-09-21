@@ -46,6 +46,9 @@ def usage(rows) -> dict:
     tts = sum(r.tts_chars or 0 for r in metered)
     stt = sum(r.stt_seconds or 0 for r in metered)
     llm = sum(r.llm_requests or 0 for r in metered)
+    tokens_in = sum(getattr(r, "llm_input_tokens", 0) or 0 for r in metered)
+    tokens_out = sum(getattr(r, "llm_output_tokens", 0) or 0 for r in metered)
+    token_calls = sum(1 for r in metered if getattr(r, "llm_input_tokens", None))
     connected_minutes = sum((r.duration or 0) for r in rows if r.status == ANSWERED or (r.status == "Failed" and (r.duration or 0) > 0)) / 60
     from app.services.settings_service import SettingsService
     secrets = SettingsService().get_state("secrets") or {}
@@ -53,13 +56,20 @@ def usage(rows) -> dict:
     cost_per_tts = float(secrets.get("cost_per_10k_tts_chars") or settings.cost_per_10k_tts_chars)
     cost_per_stt = float(secrets.get("cost_per_stt_hour") or settings.cost_per_stt_hour)
     cost_per_llm = float(secrets.get("cost_per_llm_request") or settings.cost_per_llm_request)
+    per_1m_in = float(secrets.get("cost_per_1m_llm_input") or settings.cost_per_1m_llm_input)
+    per_1m_out = float(secrets.get("cost_per_1m_llm_output") or settings.cost_per_1m_llm_output)
+    # Token pricing beats the flat per-request rate once calls carry token counts; requests without counts
+    # (older calls) keep the flat rate so the total stays comparable.
+    by_tokens = bool(per_1m_in and token_calls)
+    untracked_requests = sum(r.llm_requests or 0 for r in metered if not getattr(r, "llm_input_tokens", None))
+    llm_cost = (tokens_in / 1e6 * per_1m_in + tokens_out / 1e6 * per_1m_out + untracked_requests * cost_per_llm) if by_tokens else llm * cost_per_llm
     currency = secrets.get("cost_currency") or settings.cost_currency
 
     cost = {
         "telephony": connected_minutes * cost_per_call,
         "tts": tts / 10_000 * cost_per_tts,
         "stt": stt / 3600 * cost_per_stt,
-        "llm": llm * cost_per_llm,
+        "llm": llm_cost,
     }
     answered = sum((r.status == ANSWERED or (r.status == "Failed" and (r.duration or 0) > 0)) for r in metered) or 0
     total = sum(cost.values())
@@ -79,7 +89,16 @@ def usage(rows) -> dict:
         "cost_per_qualified_lead": round(total / qualified, 2) if qualified else None,
         # Per connected call: the pilot targets (TTS_CHARS_PER_CALL, CALL_TARGET_MINUTES) are what these are tuned against.
         "per_call": ({"tts_chars": round(tts / answered), "tts_cost": round(cost["tts"] / answered, 2),
-                      "duration": round(answered_secs / answered)} if answered else None),
+                      "duration": round(answered_secs / answered),
+                      "llm_requests": round(llm / answered, 1), "llm_cost": round(cost["llm"] / answered, 2),
+                      "stt_cost": round(cost["stt"] / answered, 2), "telephony_cost": round(cost["telephony"] / answered, 2),
+                      "total_cost": round(total / answered, 2),
+                      "llm_input_tokens": round(tokens_in / token_calls) if token_calls else None,
+                      "llm_output_tokens": round(tokens_out / token_calls) if token_calls else None,
+                      "llm_input_tokens_per_request": round(tokens_in / max(1, sum((r.llm_requests or 0) for r in metered if getattr(r, "llm_input_tokens", None)))) if token_calls else None,
+                      } if answered else None),
+        "llm_billing": "tokens" if by_tokens else "requests",
+        "token_calls": token_calls,
         "budget": {"tts_chars": settings.tts_chars_per_call, "target_minutes": settings.call_target_minutes},
     }
 
@@ -94,7 +113,7 @@ def report(agent_id: int, days: int = 30) -> dict:
         rows = db.execute(
             select(Call.created_at, Call.status, Call.duration, Call.outcome, Call.qualification, Call.sentiment,
                    Call.trigger, Call.hangup_cause, Call.error, Call.avg_latency_ms,
-                   Call.tts_chars, Call.stt_seconds, Call.llm_requests)
+                   Call.tts_chars, Call.stt_seconds, Call.llm_requests, Call.llm_input_tokens, Call.llm_output_tokens)
             .where(Call.agent_id == agent_id, Call.created_at >= prev_start)
         ).all()
         by_status = dict(db.execute(select(Lead.status, func.count()).where(mine).group_by(Lead.status)).all())

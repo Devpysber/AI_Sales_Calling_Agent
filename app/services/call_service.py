@@ -57,7 +57,9 @@ def _usage_fields(usage: dict | None) -> dict:
     if not usage:
         return {}
     return {"tts_chars": int(usage.get("tts_chars") or 0), "stt_seconds": round(float(usage.get("stt_seconds") or 0), 1),
-            "llm_requests": int(usage.get("llm_requests") or 0)}
+            "llm_requests": int(usage.get("llm_requests") or 0),
+            "llm_input_tokens": int(usage.get("llm_input_tokens") or 0) or None,
+            "llm_output_tokens": int(usage.get("llm_output_tokens") or 0) or None}
 
 
 def _valid_callback(value) -> str | None:

@@ -320,6 +320,22 @@ def _sarvam(messages: list[dict], json_mode: bool, max_tokens: int, temperature:
 PROVIDERS = {"openrouter": _openrouter, "sarvam": _sarvam}
 
 
+CHARS_PER_TOKEN = 3.6   # mixed Hinglish/Devanagari prompt: measured against provider counts, refine from telemetry
+
+
+def estimate_tokens(text: str) -> int:
+    return int(len(text or "") / CHARS_PER_TOKEN + 0.5)
+
+
+def turn_usage(messages: list[dict], tools: list[dict] | None, out_chars: int, raw: dict | None) -> dict:
+    """Token usage for one request: the provider's count when its stream reported one, else a character estimate."""
+    if raw and (raw.get("prompt_tokens") or raw.get("completion_tokens")):
+        return {"input_tokens": int(raw.get("prompt_tokens") or 0), "output_tokens": int(raw.get("completion_tokens") or 0),
+                "estimated": False}
+    prompt = "".join(str(m.get("content") or "") for m in messages) + (json.dumps(tools) if tools else "")
+    return {"input_tokens": estimate_tokens(prompt), "output_tokens": estimate_tokens("x" * out_chars), "estimated": True}
+
+
 def _stream_sse(url: str, headers: dict, body: dict, first_token_timeout: float):
     """
     OpenAI-compatible streaming chat. Yields content deltas; raises LLMError if no token arrives in
@@ -348,6 +364,8 @@ def _stream_sse(url: str, headers: dict, body: dict, first_token_timeout: float)
             if payload == "[DONE]":
                 break
             data = json.loads(payload)
+            if isinstance(data.get("usage"), dict):
+                yield {"usage_raw": data["usage"]}   # OpenAI-style final frame (stream_options.include_usage)
             if "error" in data:
                 # Gateways deliver some failures (rate limit, moderation, prompt cap) as an error frame with HTTP 200.
                 err = data["error"]
@@ -447,7 +465,7 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
         else:
             url = "https://openrouter.ai/api/v1/chat/completions"
             headers = {"Authorization": f"Bearer {settings.openrouter_api_key}", "X-Title": settings.app_name}
-            body = {"model": model, "reasoning": {"enabled": False}}
+            body = {"model": model, "reasoning": {"enabled": False}, "stream_options": {"include_usage": True}}
             if tools:
                 body["tools"] = tools
         if name == "openrouter-fallback":
@@ -465,10 +483,17 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
                 break
             body.update(messages=attempt_messages, max_tokens=max_tokens, temperature=temperature)
             produced = False
+            out_chars, raw_usage = 0, None
             try:
                 for delta in _stream_sse(url, headers, body, min(settings.llm_timeout_seconds, remaining)):
+                    if isinstance(delta, dict) and "usage_raw" in delta:
+                        raw_usage = delta["usage_raw"]
+                        continue
                     produced = True
+                    if isinstance(delta, str):
+                        out_chars += len(delta)
                     yield delta
+                yield {"usage": turn_usage(attempt_messages, body.get("tools"), out_chars, raw_usage)}
                 return
             except Exception as e:
                 if produced:

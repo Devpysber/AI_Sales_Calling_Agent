@@ -743,6 +743,14 @@ class CallStream:
         """Billable usage for cost tracking; saved on the call record when it ends."""
         self.usage[key] = self.usage.get(key, 0) + amount
 
+    def meter_llm(self, delta: dict):
+        """A {"usage": {...}} delta from the LLM stream: tokens in and out of this request, onto the call record."""
+        u = delta.get("usage") or {}
+        self.meter("llm_input_tokens", int(u.get("input_tokens") or 0))
+        self.meter("llm_output_tokens", int(u.get("output_tokens") or 0))
+        if u.get("estimated"):
+            self.usage["llm_tokens_estimated"] = True
+
     def lang_key(self) -> str:
         return "hi" if (self.session.get("language") or "").startswith("hi") else "en"
 
@@ -1719,6 +1727,9 @@ class CallStream:
                 while (item := await deltas.get()) is not None:
                     if isinstance(item, Exception):
                         raise item
+                    if isinstance(item, dict):
+                        self.meter_llm(item)
+                        continue
                     await push(cleaner.feed(item))
                 llm_done = True
                 await push(cleaner.flush(), final=True)
@@ -1799,6 +1810,9 @@ class CallStream:
                         while (item := await asyncio.wait_for(deltas.get(), 20)) is not None:
                             if isinstance(item, Exception):
                                 raise item
+                            if isinstance(item, dict):
+                                self.meter_llm(item)
+                                continue
                             rest += cleaner.feed(item)
                         rest += cleaner.flush()
                 except Exception as e:  # noqa: BLE001 - the model failed too: this is the real breakdown
@@ -1826,9 +1840,13 @@ class CallStream:
                     retry = ReplyFilter()
                     spoken_only = ((guidance + " ") if guidance else "") + SPOKEN_ONLY
                     self.meter("llm_requests")
-                    raw = await asyncio.to_thread(lambda: "".join(agent.respond_stream(
-                        self.agent_id, history, prompt_text, lead, spoken_only, language,
-                        summary=self.session.get("summary"))))
+                    def spoken_retry() -> str:
+                        parts = []
+                        for d in agent.respond_stream(self.agent_id, history, prompt_text, lead, spoken_only, language,
+                                                      summary=self.session.get("summary")):
+                            (self.meter_llm(d) if isinstance(d, dict) else parts.append(d))
+                        return "".join(parts)
+                    raw = await asyncio.to_thread(spoken_retry)
                     reply = " ".join((retry.feed(raw) + retry.flush()).split())
                     cleaner.end_call = retry.end_call
                     if reply:

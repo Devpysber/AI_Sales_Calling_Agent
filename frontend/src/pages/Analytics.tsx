@@ -297,6 +297,19 @@ function UsageCard({ usage: u }: { usage: AnalyticsUsage }) {
           <div className="text-xs text-muted">{u.cost_per_connected_call != null ? `${money(u.cost_per_connected_call)} per connected call` : 'estimated'}</div>
           {u.per_minute && <div className="mt-1 text-xs font-semibold tabular-nums text-fg-2">{money(u.per_minute.total_cost)}/min · TTS {money(u.per_minute.tts_cost)}/min · {u.per_minute.tts_chars.toLocaleString('en-IN')} chars/min</div>}
           {u.per_call && <div className="mt-1 text-xs tabular-nums text-muted">{u.per_call.tts_chars.toLocaleString('en-IN')} chars/call{u.budget ? ` (budget ${u.budget.tts_chars})` : ''} · {Math.round(u.per_call.duration / 60)}m{u.per_call.duration % 60}s avg{u.cost_per_qualified_lead != null ? ` · ${money(u.cost_per_qualified_lead)} per qualified lead` : ''}</div>}</div>} />
+      {u.rates_configured && u.per_call && (
+        // The 100-call baseline: what one connected call actually costs, part by part, and what the LLM is fed.
+        <div className="mx-4 mb-3 grid gap-2 rounded-xl border border-border bg-surface-2/60 p-3 text-xs tabular-nums sm:mx-5 sm:grid-cols-2 lg:grid-cols-4">
+          <div><div className="text-muted">Per connected call</div><div className="font-bold text-sm">{money(u.per_call.total_cost ?? 0)}</div>
+            <div className="text-muted">tel {money(u.per_call.telephony_cost ?? 0)} · STT {money(u.per_call.stt_cost ?? 0)} · TTS {money(u.per_call.tts_cost)} · LLM {money(u.per_call.llm_cost ?? 0)}</div></div>
+          <div><div className="text-muted">LLM requests / call</div><div className="font-bold text-sm">{u.per_call.llm_requests ?? 0}</div>
+            <div className="text-muted">{u.llm_billing === 'tokens' ? 'billed by tokens' : 'billed per request'}</div></div>
+          <div><div className="text-muted">LLM tokens / call</div><div className="font-bold text-sm">{u.per_call.llm_input_tokens != null ? `${u.per_call.llm_input_tokens.toLocaleString('en-IN')} in · ${(u.per_call.llm_output_tokens ?? 0).toLocaleString('en-IN')} out` : 'not measured yet'}</div>
+            <div className="text-muted">{u.per_call.llm_input_tokens_per_request != null ? `${u.per_call.llm_input_tokens_per_request.toLocaleString('en-IN')} in per request · ${u.token_calls} calls measured` : 'counts start with the next calls'}</div></div>
+          <div><div className="text-muted">TTS chars / call</div><div className="font-bold text-sm">{u.per_call.tts_chars.toLocaleString('en-IN')}{u.budget ? ` / ${u.budget.tts_chars}` : ''}</div>
+            <div className="text-muted">{Math.round(u.per_call.duration / 60)}m{u.per_call.duration % 60}s avg{u.budget ? ` / ${u.budget.target_minutes}m target` : ''}</div></div>
+        </div>
+      )}
       <div className="grid gap-3 px-4 pb-4 sm:grid-cols-2 sm:px-5 sm:pb-5 lg:grid-cols-4">
         {rows.map(([label, amount, cost], i) => (
           <div key={label} style={{ animationDelay: `${i * 70}ms` }} className="reveal reveal-in reveal-up glint rounded-xl border border-border p-3 transition hover:-translate-y-0.5 hover:border-border-strong">

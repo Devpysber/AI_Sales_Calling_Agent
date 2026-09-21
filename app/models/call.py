@@ -42,6 +42,8 @@ class Call(Base):
     tts_chars: Mapped[int | None] = mapped_column(Integer)
     stt_seconds: Mapped[float | None] = mapped_column(Float)
     llm_requests: Mapped[int | None] = mapped_column(Integer)
+    llm_input_tokens: Mapped[int | None] = mapped_column(Integer)   # provider usage when reported, else a chars/3.6 estimate
+    llm_output_tokens: Mapped[int | None] = mapped_column(Integer)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
     answered_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -70,6 +72,7 @@ class Call(Base):
             "recording_url": self.recording_url,
             "avg_latency_ms": self.avg_latency_ms,
             "tts_chars": self.tts_chars, "stt_seconds": self.stt_seconds, "llm_requests": self.llm_requests,
+            "llm_input_tokens": self.llm_input_tokens, "llm_output_tokens": self.llm_output_tokens,
             "created_at": iso(self.created_at),
             "answered_at": iso(self.answered_at),
             "ended_at": iso(self.ended_at),
