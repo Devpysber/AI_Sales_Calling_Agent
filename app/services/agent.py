@@ -832,7 +832,9 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
             "\nCRITICAL: DO NOT fill the 'team_action' field. You are the team! Act immediately by executing a tool call instead of passing a message."
             "\nCall a tool only when the answer is not already in the conversation or the Caller section. A result starting with "
             "'Failed' means the action did NOT happen: say in half a line that it could not be done right now and offer the next "
-            "option; never repeat the error text, never retry the same call more than once, never claim it succeeded."
+            "option; never repeat the error text, never retry the same call more than once, never claim it succeeded. "
+            "NEVER say something was switched on/off, sent, paused, resumed or saved unless a tool result in THIS conversation "
+            "says so. If no tool exists for what they ask, say plainly that you cannot do that from the call."
         )
 
         # Remove team_action instruction from the system prompt

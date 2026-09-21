@@ -211,7 +211,8 @@ def test_quick_action_patterns_and_team_tools(client, base):
 
     agent_id = int(base.rsplit("/", 1)[1])
     names = {t["function"]["name"] for t in agent_tools.get_tools_for_role("team")}
-    assert {"today_stats", "pause_my_automation", "recent_calls"} <= names
+    assert {"today_stats", "set_automation", "recent_calls"} <= names
     assert "Today:" in agent_tools.execute_tool("today_stats", "{}", agent_id, role="team")
-    assert "paused" in agent_tools.execute_tool("pause_my_automation", "{}", agent_id, role="team")
+    assert "off" in agent_tools.execute_tool("set_automation", '{"switch": "auto_dial", "on": false}', agent_id, role="team")
+    assert "Failed" in agent_tools.execute_tool("set_automation", '{"switch": "warp_drive", "on": true}', agent_id, role="team")
     assert client.get(f"{base}/automation").json()["settings"]["auto_dial_enabled"] is False

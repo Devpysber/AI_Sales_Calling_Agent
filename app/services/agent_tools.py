@@ -80,6 +80,27 @@ def recent_calls_tool(agent_id: int, limit: int = 5, lead: str | None = None) ->
     return "Latest calls, newest first (the current live call is not listed):\n" + "\n".join(lines)
 
 
+AUTOMATION_SWITCHES = {
+    "auto_dial": ("auto_dial_enabled", "Auto-dialer"), "retry": ("retry_enabled", "Retry calls"),
+    "speed_to_lead": ("speed_to_lead_enabled", "Speed to lead"), "nurture": ("nurture_enabled", "Follow-up calls"),
+    "meeting_reminder": ("meeting_reminder_enabled", "Meeting reminders"), "daily_report": ("daily_report_enabled", "Daily report"),
+    "auto_emails": ("ai_auto_emails", "AI emails"),
+}
+
+
+def set_automation_tool(agent_id: int, switch: str, on: bool) -> str:
+    """Turn one of this agent's automations on or off; the only way a colleague's 'pause/resume X' takes effect."""
+    from app.services.agents import update_automation
+    key, label = AUTOMATION_SWITCHES.get((switch or "").strip().lower(), (None, None))
+    if not key:
+        return f"Failed: unknown automation '{switch}'. Choose one of: {', '.join(AUTOMATION_SWITCHES)}."
+    try:
+        update_automation(agent_id, {key: bool(on)}, actor="team")
+        return f"{label} is now {'on' if on else 'off'}."
+    except Exception as e:  # noqa: BLE001 - spoken back as a failure, never as success
+        return f"Failed to change {label}: {e}"
+
+
 def today_stats_tool(agent_id: int) -> str:
     """This agent's numbers right now: leads, hot leads, meetings, calls and connections today, live calls."""
     from app.services import agents
@@ -308,9 +329,18 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "pause_my_automation",
-            "description": "Pause this agent's auto-dialer (stop outbound calls) when the colleague asks to stop or pause calling.",
-            "parameters": {"type": "object", "properties": {}}
+            "name": "set_automation",
+            "description": "Turn one of this agent's automations on or off: auto_dial (outbound dialer), retry, speed_to_lead "
+                           "(call new website leads), nurture (follow-up calls), meeting_reminder, daily_report, auto_emails. "
+                           "Use for 'pause/stop/resume/start/on/off' requests. Nothing changes unless this tool is called.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "switch": {"type": "string", "enum": ["auto_dial", "retry", "speed_to_lead", "nurture", "meeting_reminder", "daily_report", "auto_emails"]},
+                    "on": {"type": "boolean", "description": "true to switch on / resume, false to switch off / pause."}
+                },
+                "required": ["switch", "on"]
+            }
         }
     },
     {
@@ -499,8 +529,8 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
         return recent_calls_tool(agent_id, int(args.get("limit") or 5), lead=args.get("lead") or args.get("name"))
     elif name == "today_stats":
         return today_stats_tool(agent_id)
-    elif name == "pause_my_automation":
-        return pause_agent_automation_tool(agent_id)
+    elif name == "set_automation":
+        return set_automation_tool(agent_id, args.get("switch"), bool(args.get("on")))
     elif name == "update_lead_status":
         return update_lead_status_tool(args.get("lead_id"), args.get("new_status"), agent_id, lead=args.get("lead") or args.get("name"))
     elif name == "check_agent_schedule":
