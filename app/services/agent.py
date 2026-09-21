@@ -783,6 +783,19 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
     return messages, knowledge
 
 
+# A colleague's turn that needs a tool: a switch, a send, a schedule, a lookup. Anything else is conversation.
+_TOOL_WORDS = re.compile(
+    r"\b(on|off|band|bandh|chalu|start|stop|pause|resume|enable|disable|switch|send|bhej|email|mail|sms|whatsapp|message|"
+    r"schedule|callback|call ?back|book|meeting|update|mark|status|stats|report|how many|kitn[aei]|count|calls?|leads?|"
+    r"record|check|dekho|batao|last|recent|pichl[aei]|aaj|today|yesterday|kal|diagnos|credit|balance|config|setting|"
+    r"automation|dialer|dial|reminder|nurture|retry|speed|agents?|overview|active|live|running|paused?|hours)\b|"
+    r"बंद|चालू|भेज|मेल|कॉल|लीड|कितन|स्टेटस|रिपोर्ट|आज|कल|पिछल|चेक|देखो|बताओ|ऑन|ऑफ|शेड्यूल|मीटिंग|अपडेट", re.I)
+
+
+def wants_tool(text: str) -> bool:
+    return bool(_TOOL_WORDS.search(text or ""))
+
+
 def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead: dict, guidance: str | None = None,
                    language: str | None = None, summary: str | None = None, compacted_upto: int | None = None):
     """
@@ -896,7 +909,12 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
         # No native tool calling available (OpenRouter out of credits or not configured): the same tools,
         # driven through a JSON turn on whatever provider answers (Sarvam), so a colleague's "send them the
         # brochure" / "schedule a callback" still happens instead of an agent that can only chat.
-        yield from _json_tool_turn(messages, tools, agent_id, purpose)
+        # The JSON round is non-streaming (whole reply before any audio, ~3-4s); only turns that read like
+        # a command or a data question pay it. Chat ("kya kar sakte ho", "bye") streams like a customer turn.
+        if wants_tool(customer_text):
+            yield from _json_tool_turn(messages, tools, agent_id, purpose)
+            return
+        yield from process_stream(messages, with_tools=False)
         return
 
     for _round in range(MAX_TOOL_ROUNDS):

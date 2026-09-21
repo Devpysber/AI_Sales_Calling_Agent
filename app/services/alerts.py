@@ -282,8 +282,10 @@ def reminders() -> list[dict]:
 def _slow_agents(db) -> list[tuple[int, float, int]]:
     """(agent_id, p95 first-audio ms, calls) for agents whose recent answered calls feel slow."""
     since = datetime.utcnow() - timedelta(days=7)
+    # Customer calls only: a colleague's check-in runs tool rounds and would report the tool path, not what callers hear.
     rows = db.execute(select(Call.agent_id, Call.avg_latency_ms)
-                      .where(Call.avg_latency_ms.is_not(None), Call.avg_latency_ms > 0, Call.created_at >= since)).all()
+                      .where(Call.avg_latency_ms.is_not(None), Call.avg_latency_ms > 0, Call.created_at >= since,
+                             Call.trigger != "internal")).all()
     by_agent: dict[int, list[float]] = {}
     for agent_id, latency in rows:
         by_agent.setdefault(agent_id, []).append(float(latency))

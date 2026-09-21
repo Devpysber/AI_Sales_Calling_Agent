@@ -249,3 +249,13 @@ def test_admin_tools_target_other_agents_by_name(client, base):
     assert "Today:" in agent_tools.execute_tool("agent_stats", '{"agent": "Hairscope desk"}', agent_id, role="admin")
     assert "Hairscope desk" in agent_tools.execute_tool("all_agents_overview", "{}", agent_id, role="admin")
     assert "Access Denied" in agent_tools.execute_tool("set_agent_automation", '{"agent": "hairscope", "switches": ["retry"], "on": false}', agent_id, role="team")
+
+
+def test_team_turns_only_pay_the_tool_round_for_commands():
+    from app.services.agent import wants_tool
+
+    for said in ("auto dialer band kar do", "speed to lead off karo", "kitni calls hui aaj", "Omkar ko email bhej do",
+                 "last call kitne minute chali", "सब agents का status बताओ", "retry calls on karo"):
+        assert wants_tool(said), said
+    for said in ("ठीक है, बाय", "tum kya kar sakte ho", "haan theek hai", "customer ko kaise handle karte ho", "bye"):
+        assert not wants_tool(said), said

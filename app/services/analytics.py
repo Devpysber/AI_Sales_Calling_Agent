@@ -24,7 +24,7 @@ def _kpis(rows) -> dict:
     connected = [r for r in rows if r.status == ANSWERED or (r.status == "Failed" and (r.duration or 0) > 0)]
     talk = sum(r.duration or 0 for r in connected)
     meetings = sum(r.outcome == "meeting_booked" for r in rows)
-    latencies = [r.avg_latency_ms for r in rows if r.avg_latency_ms]
+    latencies = [r.avg_latency_ms for r in rows if r.avg_latency_ms and getattr(r, "trigger", None) != "internal"]  # what customers hear
     return {
         "calls": total,
         "connected": len(connected),
