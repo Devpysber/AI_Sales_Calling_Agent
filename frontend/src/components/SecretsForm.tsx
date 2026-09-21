@@ -166,7 +166,10 @@ export default function SecretsForm() {
           {num('cost_per_call_minute', 'Plivo Cost per Minute', '0.38')}
           {num('cost_per_10k_tts_chars', 'Sarvam TTS per 10k Chars', '30.00')}
           {num('cost_per_stt_hour', 'Sarvam STT per Hour', '30.00')}
-          {num('cost_per_llm_request', 'Sarvam LLM per Request', '0.02')}
+          {num('cost_per_llm_request', 'LLM per Request (flat, used when tokens are not measured)', '0.209352')}
+          {num('cost_per_1m_llm_input', 'LLM per 1M Input Tokens (sarvam-105b 29.28)', '29.28')}
+          {num('cost_per_1m_llm_output', 'LLM per 1M Output Tokens (sarvam-105b 73.20)', '73.20')}
+          <p className="text-xs text-muted">Leave a field empty to use the server .env value. Token pricing applies to calls that carry token counts; older calls stay on the flat rate.</p>
         </div>
         <div className="space-y-4">
           <h3 className="font-bold">Balances</h3>
