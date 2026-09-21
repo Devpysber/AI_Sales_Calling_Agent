@@ -471,7 +471,7 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
     window.addEventListener('keydown', trap)
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    drawer.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus()
+    drawer.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus({ preventScroll: true })
     const mq = window.matchMedia('(min-width: 1024px)')
     const onWide = (e: MediaQueryListEvent) => { if (e.matches) setMobile(false) }
     mq.addEventListener('change', onWide)
@@ -567,7 +567,7 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
       {mobile && (
         <div className="fixed inset-0 z-40 lg:hidden">
           <div className="absolute inset-0 animate-fade-in bg-black/50" onClick={() => setMobile(false)} aria-hidden />
-          <aside ref={drawer} role="dialog" aria-modal="true" aria-label="Navigation" className="absolute inset-y-0 left-0 max-w-full animate-fade-in shadow-pop">
+          <aside ref={drawer} role="dialog" aria-modal="true" aria-label="Navigation" className="absolute inset-y-0 left-0 max-w-full animate-drawer-in shadow-pop will-change-transform">
             <Sidebar {...sidebarProps} compact={false} setCompact={() => undefined} mobile onClose={() => setMobile(false)} />
           </aside>
         </div>

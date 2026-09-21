@@ -663,7 +663,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
               isSpeaking={isSpeaking}
               isListening={listening}
               level={level}
-              className="absolute inset-0"
+              className="absolute inset-x-0 top-0 bottom-16 sm:inset-0"
             />
           </div>
 

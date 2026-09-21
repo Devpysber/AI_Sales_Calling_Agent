@@ -43,6 +43,7 @@
 
   --animate-pulse-dot: pulse-dot 1.4s ease-in-out infinite;
   --animate-fade-in: fade-in .18s ease-out;
+  --animate-drawer-in: drawer-in .22s cubic-bezier(.22,1,.36,1) both;
   --animate-slide-in: slide-in .22s cubic-bezier(.2,.8,.2,1);
   --animate-pop-in: pop-in .16s cubic-bezier(.2,.8,.2,1);
   --animate-rise: rise .35s cubic-bezier(.2,.8,.2,1) both;
@@ -60,6 +61,9 @@
 
 @keyframes pulse-dot { 50% { opacity: .35; transform: scale(.85); } }
 @keyframes fade-in { from { opacity: 0; } }
+/* The phone navigation drawer slides in on the compositor. Fading a full-height panel with a large shadow
+   and animated text (.text-sheen) repainted every frame on phones and flickered. */
+@keyframes drawer-in { from { transform: translateX(-100%); } }
 @keyframes slide-in { from { transform: translateX(24px); opacity: 0; } }
 @keyframes pop-in { from { transform: translateY(-6px) scale(.98); opacity: 0; } }
 @keyframes rise { from { transform: translateY(8px); opacity: 0; } }
@@ -175,8 +179,9 @@ kbd {
 /* Hidden only while waiting to play. Never put opacity:0 on the element that animates: the
    keyframes define just `from`, so the animation ends on the element's own style, and a base of
    opacity:0 would fade it from 0 to 0 and leave it invisible. */
-.reveal:not(.reveal-in) { opacity: 0; }
-.reveal { will-change: opacity, transform; }
+.reveal:not(.reveal-in) { opacity: 0; will-change: opacity, transform; }
+/* will-change only while waiting to play: left on every revealed card and bubble, it kept hundreds of
+   compositor layers alive and phones ran out of GPU memory (the page froze, taps stopped landing). */
 .reveal-in { animation-duration: .42s; animation-timing-function: var(--ease-entrance); animation-fill-mode: both; }
 .reveal-up.reveal-in { animation-name: reveal-up; }
 .reveal-down.reveal-in { animation-name: reveal-down; }
@@ -468,3 +473,18 @@ html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="
 }
 @keyframes scheduler-fill { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
 .scheduler-ring { animation: scheduler-fill 20s linear infinite; }
+
+/* ---------------- Phones and tablets ----------------
+   Continuous repaint effects (blurred blobs scaling, a conic-gradient border spinning through @property,
+   a pulsing box-shadow, gradient text sliding) each cost a full re-rasterisation per frame. On a phone GPU
+   they stacked up until the page hung and taps on the live-call cards never registered. Entrances still
+   play; the decorations hold their first frame. */
+@media (max-width: 1023px), (hover: none) and (pointer: coarse) {
+  .aurora-blob { animation: none; }
+  .beam::before { animation: none; }
+  .is-live-card, .is-live-card.reveal-in { animation: none; }
+  .text-sheen { animation: none; }
+  .scan-line::after { animation: none; display: none; }
+  .scheduler-ring { animation: none; }
+  .reveal-in { animation-duration: .28s; }
+}

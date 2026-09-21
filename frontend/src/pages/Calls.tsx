@@ -23,7 +23,8 @@ function LiveCallCard({ call, onOpen, index, className, style }: { call: Call; o
   const turns = detail.data?.transcript ?? call.transcript ?? []
   return (
     <Card className={cn('beam beam-on beam-live is-live-card flex flex-col overflow-hidden', className)} style={style}>
-      <div className="flex items-center gap-3 border-b border-border p-4">
+      <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() } }}
+        className="flex cursor-pointer items-center gap-3 border-b border-border p-4 transition hover:bg-surface-2/70 focus-visible:bg-surface-2/70 focus-visible:outline-none">
         <VoiceOrb state={call.status === 'In Progress' ? 'live' : 'listening'} size={40} />
         <div className="min-w-0 flex-1 leading-tight">
           <div className="truncate font-bold">{callParty(call)}</div>
