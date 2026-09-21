@@ -88,17 +88,22 @@ AUTOMATION_SWITCHES = {
 }
 
 
-def set_automation_tool(agent_id: int, switch: str, on: bool) -> str:
-    """Turn one of this agent's automations on or off; the only way a colleague's 'pause/resume X' takes effect."""
+def set_automation_tool(agent_id: int, switches: list[str] | str, on: bool) -> str:
+    """Turn one or more of this agent's automations on or off; the only way a colleague's 'pause/resume X' takes effect."""
     from app.services.agents import update_automation
-    key, label = AUTOMATION_SWITCHES.get((switch or "").strip().lower(), (None, None))
-    if not key:
-        return f"Failed: unknown automation '{switch}'. Choose one of: {', '.join(AUTOMATION_SWITCHES)}."
+    names = [switches] if isinstance(switches, str) else list(switches or [])
+    known, unknown = {}, []
+    for name in names:
+        key, label = AUTOMATION_SWITCHES.get(str(name or "").strip().lower(), (None, None))
+        (known.__setitem__(key, label) if key else unknown.append(str(name)))
+    if not known:
+        return f"Failed: unknown automation {', '.join(unknown) or '(none)'}. Choose from: {', '.join(AUTOMATION_SWITCHES)}."
     try:
-        update_automation(agent_id, {key: bool(on)}, actor="team")
-        return f"{label} is now {'on' if on else 'off'}."
+        update_automation(agent_id, {k: bool(on) for k in known}, actor="team")
     except Exception as e:  # noqa: BLE001 - spoken back as a failure, never as success
-        return f"Failed to change {label}: {e}"
+        return f"Failed to change {', '.join(known.values())}: {e}"
+    done = f"{', '.join(known.values())} now {'on' if on else 'off'}."
+    return done + (f" Unknown: {', '.join(unknown)}." if unknown else "")
 
 
 def today_stats_tool(agent_id: int) -> str:
@@ -330,16 +335,18 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "set_automation",
-            "description": "Turn one of this agent's automations on or off: auto_dial (outbound dialer), retry, speed_to_lead "
-                           "(call new website leads), nurture (follow-up calls), meeting_reminder, daily_report, auto_emails. "
-                           "Use for 'pause/stop/resume/start/on/off' requests. Nothing changes unless this tool is called.",
+            "description": "Turn one or more of this agent's automations on or off in one go: auto_dial (outbound dialer), retry "
+                           "(retry unanswered calls), speed_to_lead (call new website leads), nurture (follow-up / warm-lead calls), "
+                           "meeting_reminder, daily_report, auto_emails. Use for 'pause/stop/resume/start/on/off/band/chalu' "
+                           "requests; list every automation they named. Nothing changes unless this tool is called.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "switch": {"type": "string", "enum": ["auto_dial", "retry", "speed_to_lead", "nurture", "meeting_reminder", "daily_report", "auto_emails"]},
+                    "switches": {"type": "array", "items": {"type": "string", "enum": ["auto_dial", "retry", "speed_to_lead", "nurture", "meeting_reminder", "daily_report", "auto_emails"]},
+                                 "description": "All automations the caller named."},
                     "on": {"type": "boolean", "description": "true to switch on / resume, false to switch off / pause."}
                 },
-                "required": ["switch", "on"]
+                "required": ["switches", "on"]
             }
         }
     },
@@ -530,7 +537,7 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
     elif name == "today_stats":
         return today_stats_tool(agent_id)
     elif name == "set_automation":
-        return set_automation_tool(agent_id, args.get("switch"), bool(args.get("on")))
+        return set_automation_tool(agent_id, args.get("switches") or args.get("switch") or [], bool(args.get("on")))
     elif name == "update_lead_status":
         return update_lead_status_tool(args.get("lead_id"), args.get("new_status"), agent_id, lead=args.get("lead") or args.get("name"))
     elif name == "check_agent_schedule":

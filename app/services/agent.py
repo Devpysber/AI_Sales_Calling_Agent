@@ -939,7 +939,9 @@ def _json_tool_turn(messages: list[dict], tools: list[dict], agent_id: int, purp
         '"tool": {"name": "<tool name>", "arguments": {...}} or null}\n'
         "Available tools:\n" + catalogue + "\n"
         "When the tool result comes back you will be asked again: then give the spoken reply and set tool to null. "
-        "Never invent a result; if a tool is needed, run it."
+        "Never invent a result; if a tool is needed, run it. When the caller asks for an action (switch something "
+        "on/off, send, update, schedule), tool MUST NOT be null and reply must not claim it is done yet. "
+        "If they said goodbye, reply with a short goodbye in their language and tool null."
     )
     work = [dict(messages[0]), *messages[1:]]
     work[0]["content"] = work[0]["content"] + instruction
@@ -950,7 +952,9 @@ def _json_tool_turn(messages: list[dict], tools: list[dict], agent_id: int, purp
         tool = data.get("tool") if isinstance(data.get("tool"), dict) else None
         reply = str(data.get("reply") or "").strip()
         if not tool:
-            yield reply or "Ji, bataiye."
+            # An empty reply is left empty: the stream layer answers a goodbye with a goodbye and anything
+            # else with "go on", instead of a canned "Ji, bataiye" after the caller said bye.
+            yield reply
             return
         name = str(tool.get("name") or "")
         args = tool.get("arguments") if isinstance(tool.get("arguments"), dict) else {}

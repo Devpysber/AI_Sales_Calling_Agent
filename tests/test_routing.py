@@ -214,6 +214,10 @@ def test_quick_action_patterns_and_team_tools(client, base):
     assert {"today_stats", "set_automation", "recent_calls"} <= names
     assert "Today:" in agent_tools.execute_tool("today_stats", "{}", agent_id, role="team")
     assert "off" in agent_tools.execute_tool("set_automation", '{"switch": "auto_dial", "on": false}', agent_id, role="team")
+    multi = agent_tools.execute_tool("set_automation", '{"switches": ["retry", "nurture", "speed_to_lead"], "on": false}', agent_id, role="team")
+    assert "Retry calls" in multi and "Follow-up calls" in multi and "Speed to lead" in multi
+    from app.services.voice_stream import is_caller_closing
+    assert is_caller_closing("ठीक है, बाय") and is_caller_closing("okay bye") and is_caller_closing("chalo tata")
     assert "Failed" in agent_tools.execute_tool("set_automation", '{"switch": "warp_drive", "on": true}', agent_id, role="team")
     assert client.get(f"{base}/automation").json()["settings"]["auto_dial_enabled"] is False
 
@@ -223,7 +227,7 @@ def test_live_feed_carries_latest_event_stamp(client, base):
 
     agent_id = int(base.rsplit("/", 1)[1])
     before = client.get("/api/agents/live").json()["latest_event"]
-    agent_tools.execute_tool("set_automation", '{"switch": "retry", "on": true}', agent_id, role="team")
+    agent_tools.execute_tool("set_automation", '{"switches": ["retry"], "on": true}', agent_id, role="team")
     after = client.get("/api/agents/live").json()["latest_event"]
     assert after and after["type"] == "settings.updated" and after["actor"] == "team"
     assert not before or after["id"] > before["id"]

@@ -71,7 +71,7 @@ REQUEST_WORDS = re.compile(r"email|e-mail|number|नंबर|बताइए|�
 # Explicit goodbye tokens: these end the call wherever they appear in the caller's sentence.
 CALLER_GOODBYE = re.compile(
     r"\b(bye|goodbye|ok bye|okay bye|alvida|cut the call|hang up|rakhta hoon|rakhti hoon|rakh do|milte hain|"
-    r"theek hai bye|thik hai bye)\b|अलविदा|रखता हूँ|रखती हूँ|रखता हूं|रखती हूं|रख दो|फ़ोन रखो|फोन रखो|कॉल काटो|फिर मिलते", re.I)
+    r"theek hai bye|thik hai bye|tata|ta ta)\b|अलविदा|बाय|बाई|टाटा|रखता हूँ|रखती हूँ|रखता हूं|रखती हूं|रख दो|फ़ोन रखो|फोन रखो|कॉल काटो|फिर मिलते", re.I)
 # Acknowledgements that only count as a closing when they are the caller's whole short utterance:
 # "ठीक है, कर दीजिए" is agreement, "ठीक है" alone after a goodbye is a goodbye.
 # "No no thank you" is also a closing: repeated refusal words are allowed before the closing phrase.
@@ -1841,6 +1841,9 @@ class CallStream:
                 # Still nothing to say (never hang up). "I didn't catch that" is only honest when they said
                 # nothing: after a caller has spoken, the failure is ours, so invite them to carry on instead.
                 from app.api.plivo import PROMPTS
+                if text and is_caller_closing(text):
+                    # They said bye and the model produced nothing: answer the goodbye, do not ask them to go on.
+                    cleaner.end_call = True
                 fallback = "goodbye" if cleaner.end_call else ("continue" if (text or "").strip() else "repeat")
                 reply = PROMPTS[fallback][self.lang_key()]
                 spoken.append(reply)
