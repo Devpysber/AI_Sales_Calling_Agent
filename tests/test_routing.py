@@ -216,3 +216,14 @@ def test_quick_action_patterns_and_team_tools(client, base):
     assert "off" in agent_tools.execute_tool("set_automation", '{"switch": "auto_dial", "on": false}', agent_id, role="team")
     assert "Failed" in agent_tools.execute_tool("set_automation", '{"switch": "warp_drive", "on": true}', agent_id, role="team")
     assert client.get(f"{base}/automation").json()["settings"]["auto_dial_enabled"] is False
+
+
+def test_live_feed_carries_latest_event_stamp(client, base):
+    from app.services import agent_tools
+
+    agent_id = int(base.rsplit("/", 1)[1])
+    before = client.get("/api/agents/live").json()["latest_event"]
+    agent_tools.execute_tool("set_automation", '{"switch": "retry", "on": true}', agent_id, role="team")
+    after = client.get("/api/agents/live").json()["latest_event"]
+    assert after and after["type"] == "settings.updated" and after["actor"] == "team"
+    assert not before or after["id"] > before["id"]

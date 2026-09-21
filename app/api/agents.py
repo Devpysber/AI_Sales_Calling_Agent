@@ -112,7 +112,9 @@ def live(request: Request):
     user = getattr(request.state, "user", "admin")
     payload = getattr(request.state, "token_payload", {})
     unlocked = payload.get("unlocked", []) if user == "team" else None
-    return {"live_calls": agents.live_calls(unlocked)}
+    # The newest event rides along so every open page can refresh when the agent changes something
+    # from a live call (automation switched, lead updated, details sent) without a push channel.
+    return {"live_calls": agents.live_calls(unlocked), "latest_event": events.latest(unlocked)}
 
 
 @router.get("/overview")

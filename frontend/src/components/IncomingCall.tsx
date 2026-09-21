@@ -9,10 +9,11 @@
  * ones people actually need to notice.
  */
 
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bot, Headphones, PhoneForwarded, PhoneIncoming, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
 import { CallTimer } from '@/components/Live'
 import { VoiceOrb, Waveform } from '@/components/VoiceViz'
 import { api } from '@/lib/api'
@@ -20,6 +21,15 @@ import type { Call } from '@/lib/types'
 import { callParty, cn } from '@/lib/utils'
 
 type LiveCall = Call & { agent_name: string | null }
+type LatestEvent = { id: number; type: string; title: string; actor: string; agent_id: number | null } | null
+
+// Which cached queries an event type makes stale. Everything else (agent created/deleted…) refreshes all.
+const STALE: [RegExp, string[][]][] = [
+  [/^settings\.|^automation/, [['automation'], ['intake'], ['agent'], ['agents'], ['system']]],
+  [/^lead\./, [['leads'], ['lead'], ['pipeline'], ['activity'], ['agents']]],
+  [/^call\./, [['calls'], ['call'], ['activity'], ['agents'], ['leads']]],
+  [/^knowledge\.|^document/, [['knowledge'], ['agent'], ['agents']]],
+]
 
 const CARD_MS = 14_000          // a card folds into the pill after this long
 const FRESH_MS = 90_000         // on page load, only calls younger than this pop a card
@@ -45,13 +55,29 @@ const toTeam = (c: LiveCall) => c.trigger === 'forwarded' || !!c.transferred_to
 
 export default function IncomingCall() {
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const { data } = useQuery({
     queryKey: ['live-calls'],
-    queryFn: () => api<{ live_calls: LiveCall[] }>('/api/agents/live'),
+    queryFn: () => api<{ live_calls: LiveCall[]; latest_event: LatestEvent }>('/api/agents/live'),
     refetchInterval: 3000,
     refetchIntervalInBackground: true,
     retry: false,
   })
+
+  // Real-time pages without a push channel: when a new event lands (the agent switched automation off from a
+  // call, flagged a lead, sent details), refresh the queries it makes stale and say what happened.
+  const lastEvent = useRef<number | null>(null)
+  useEffect(() => {
+    const ev = data?.latest_event
+    if (!ev) return
+    if (lastEvent.current === null) { lastEvent.current = ev.id; return } // first poll: nothing is stale yet
+    if (ev.id === lastEvent.current) return
+    lastEvent.current = ev.id
+    const keys = STALE.find(([re]) => re.test(ev.type))?.[1]
+    if (keys) keys.forEach((k) => qc.invalidateQueries({ queryKey: k }))
+    else qc.invalidateQueries()
+    if (ev.actor === 'ai' || ev.actor === 'team') toast.info(ev.title, { id: `event-${ev.id}` })
+  }, [data, qc])
   const [preview, setPreview] = useState<LiveCall | null>(null)
   useEffect(() => {
     const timers: number[] = []

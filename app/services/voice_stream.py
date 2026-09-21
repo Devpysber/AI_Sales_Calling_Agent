@@ -1573,7 +1573,7 @@ class CallStream:
             self.session["details_sent"] = True
             self.save_session()
             events.record("lead.details_sent", "Details sent by SMS", body, agent_id=self.agent_id, lead_id=lead_id,
-                          call_id=self.session.get("call_id"))
+                          call_id=self.session.get("call_id"), actor="ai")
             await self.say_recorded(DETAILS_LINE[key])
             return True
         return False

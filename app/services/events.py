@@ -15,6 +15,20 @@ from app.models.lead import Lead
 log = get_logger(__name__)
 
 
+def latest(agent_ids: list[int] | None = None) -> dict | None:
+    """The newest event (id, type, title, actor, agent_id): a cheap change stamp for the app-wide poll."""
+    try:
+        with get_db() as db:
+            query = select(Event.id, Event.type, Event.title, Event.actor, Event.agent_id).order_by(Event.id.desc()).limit(1)
+            if agent_ids is not None:
+                query = query.where(Event.agent_id.in_(agent_ids) | Event.agent_id.is_(None))
+            row = db.execute(query).first()
+            return {"id": row[0], "type": row[1], "title": row[2], "actor": row[3], "agent_id": row[4]} if row else None
+    except Exception:
+        log.exception("Failed to read latest event")
+        return None
+
+
 def record(type: str, title: str, detail: str | None = None, *, agent_id: int | None = None, lead_id: int | None = None,
            call_id: int | None = None, actor: str = "system", data: dict | None = None):
     try:

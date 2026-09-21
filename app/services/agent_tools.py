@@ -134,7 +134,7 @@ def update_lead_status_tool(lead_id, new_status: str, agent_id: int, lead: str |
         allowed = ", ".join(list(JOURNEY) + sorted(EXIT_STAGES) + sorted(QUALIFICATIONS))
         return f"Invalid status '{new_status}'. Allowed values: {allowed}."
     try:
-        crm.update(lead_id, {field: value}, actor="system")
+        crm.update(lead_id, {field: value}, actor="team")
         return f"Successfully updated lead {lead_id} {field} to '{value}'."
     except Exception as e:
         return f"Failed to update lead status: {str(e)}"
@@ -206,7 +206,7 @@ def schedule_callback_tool(lead_id, date_time: str, agent_id: int, lead: str | N
     if not when:
         return f"Invalid callback time '{date_time}': use 'YYYY-MM-DD HH:MM' in IST, not in the past and within 30 days."
     try:
-        crm.update(lead_id, {"callback_at": when, "call_status": "Pending"}, actor="system")
+        crm.update(lead_id, {"callback_at": when, "call_status": "Pending"}, actor="team")
         return f"Callback scheduled for lead {lead_id} at {when} IST."
     except Exception as e:
         return f"Failed to schedule callback: {str(e)}"
@@ -253,7 +253,7 @@ def book_calendar_event_tool(email: str, date_time: str, duration_minutes: int =
         lead = next((l for l in leads if (l.get("email") or "").strip().lower() == email.strip().lower()), None)
         if not lead:
             return f"Calendar booking is not available: no external calendar is connected and no CRM lead has the email {email}."
-        crm.update(lead["id"], {"meeting_at": when}, actor="system")
+        crm.update(lead["id"], {"meeting_at": when}, actor="team")
         return f"Meeting recorded on CRM lead {lead['id']} ({lead.get('name')}) at {when} IST for {duration_minutes} minutes. No calendar invite was sent."
     except Exception as e:
         return f"Calendar booking is not available: {str(e)}"
