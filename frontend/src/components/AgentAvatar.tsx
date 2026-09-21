@@ -134,6 +134,9 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
     const EYE_LINE = 13.5
     const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 1000)
     camera.position.set(0, EYE_LINE, 6.5)
+    // Portrait (phones): the reply bar sits over the lower third of the canvas, so aim the camera a little
+    // below the eye line and the face rides up out from under it. Landscape keeps the eyes centred.
+    let lookY = EYE_LINE
 
     const updateSize = () => {
       const rect = el.getBoundingClientRect()
@@ -145,6 +148,8 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       const BASE_FOV = 38
       const hTan = Math.tan(THREE.MathUtils.degToRad(BASE_FOV / 2))
       camera.fov = camera.aspect >= 1 ? BASE_FOV : 2 * THREE.MathUtils.radToDeg(Math.atan(hTan / camera.aspect))
+      lookY = camera.aspect < 1 ? EYE_LINE - 1.6 : EYE_LINE
+      camera.position.y = lookY
       camera.updateProjectionMatrix()
       // Re-read the DPR every resize: browser zoom or moving the window to a differently scaled monitor
       // changes it, and a stale ratio renders the canvas blurry (zoomed in) or oversampled (zoomed out).
@@ -327,7 +332,7 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       // drop reads as a dark open mouth; they return the instant it closes.
       if (teeth) teeth.visible = mouth < 0.18
 
-      camera.lookAt(0, EYE_LINE, 0)
+      camera.lookAt(0, lookY, 0)
       renderer.render(scene, camera)
       raf = requestAnimationFrame(frame)
     }
