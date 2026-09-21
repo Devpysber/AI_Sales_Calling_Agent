@@ -487,6 +487,13 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
                     dead.add(provider)
                     if provider == "openrouter":
                         _mark_openrouter_dead(str(e))
+                        if tools and settings.sarvam_api_key:
+                            # Out of credits mid-turn: the free-tier walk (timeouts included) cost ~4s before a
+                            # spoken answer. Sarvam without tools answers in about a second; take it now.
+                            log.warning("OpenRouter account error on a tools turn; answering from Sarvam without tools")
+                            yield from stream(_without_tools(messages), max_tokens=max_tokens, temperature=temperature,
+                                              tools=None, deadline=deadline)
+                            return
                 break
     if tools:
         # Team/admin calls otherwise depend on OpenRouter alone; answer in speech rather than hang up.

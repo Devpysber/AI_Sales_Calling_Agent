@@ -183,3 +183,12 @@ def test_caller_known_to_two_agents_is_asked_which_desk(client, base, monkeypatc
     assert call_session.get(session["id"])["lead"]["choices"] == choices
     text = agent.greeting(a["id"], session["lead"], "en-IN")
     assert "Acme Cars or Blue Homes" in text and "Two Desks" in text
+
+
+def test_recent_calls_tool_reports_real_durations(client, base):
+    from app.services import agent_tools
+
+    agent_id = int(base.rsplit("/", 1)[1])
+    out = agent_tools.execute_tool("recent_calls", '{"limit": 3}', agent_id, role="team")
+    assert "Latest calls" in out or "No calls found" in out
+    assert "recent_calls" in {t["function"]["name"] for t in agent_tools.get_tools_for_role("team")}

@@ -17,7 +17,7 @@ const SUMMARY_GRACE_MS = 2 * 60 * 1000
 // A summary is only "on its way" when the call finished moments ago and the customer actually spoke;
 // the backend skips summarising assistant-only transcripts and gives up silently when the LLM is down.
 const summaryPending = (c: Call) => {
-  if (c.summary || c.status !== 'Completed') return false
+  if (c.summary || c.status !== 'Completed' || c.trigger === 'internal') return false // team check-ins are never summarised
   const turns = c.transcript ?? []
   if (turns.length < 2 || !turns.some((t) => t.role === 'customer')) return false
   const ended = Date.parse(c.ended_at ?? c.created_at)

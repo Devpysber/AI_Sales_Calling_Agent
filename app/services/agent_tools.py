@@ -60,6 +60,26 @@ def check_records_tool(query: str, agent_id: int) -> str:
         result += f"- {lead.get('name', 'Unknown')} ({lead.get('phone')}) - Status: {lead.get('status')}\n"
     return result
 
+def recent_calls_tool(agent_id: int, limit: int = 5, lead: str | None = None) -> str:
+    """The agent's latest calls with who, direction, duration, result and when: the answer to 'last call?'."""
+    from app.services.call_service import ACTIVE, CallService
+    limit = max(1, min(int(limit or 5), 10))
+    items = [c for c in CallService(agent_id).list_calls(search=lead, page=1, page_size=limit + 2).get("items", [])
+             if c.get("status") not in ACTIVE][:limit]
+    if not items:
+        return "No calls found for this agent." + (f" (search: {lead})" if lead else "")
+    lines = []
+    for c in items:
+        who = c.get("lead_name") or c.get("team_name") or (c.get("from_number") if c.get("direction") == "inbound" else c.get("to_number")) or "unknown"
+        seconds = int(c.get("duration") or 0)
+        length = f"{seconds // 60}m {seconds % 60}s" if seconds else "not connected"
+        when = _to_ist_text(c.get("created_at") or "") or "unknown time"
+        summary = (c.get("summary") or "").strip()
+        lines.append(f"- {when} IST · {c.get('direction')} · {who} · {c.get('status')} · {length}"
+                     + (f" · {c.get('outcome')}" if c.get("outcome") else "") + (f" · {summary[:140]}" if summary else ""))
+    return "Latest calls, newest first (the current live call is not listed):\n" + "\n".join(lines)
+
+
 def check_credits_tool() -> str:
     """Query the user's account balance/credit status."""
     return "Account credit balance is unknown: no billing integration is connected, so do not quote a balance."
@@ -266,6 +286,21 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "recent_calls",
+            "description": "List this agent's latest completed calls with who, direction, duration, result and time. Use for "
+                           "'last call', 'how long did the call go', 'who called', 'what happened on the call with X'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "How many calls to list (1-10, default 5)."},
+                    "lead": {"type": "string", "description": "Optional lead name or phone number to narrow down."}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "update_lead_status",
             "description": "Update the status of a lead in the CRM.",
             "parameters": {
@@ -430,6 +465,8 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
         return check_email_status_tool(agent_id, int(args.get("hours") or 24))
     elif name == "check_credits":
         return check_credits_tool()
+    elif name == "recent_calls":
+        return recent_calls_tool(agent_id, int(args.get("limit") or 5), lead=args.get("lead") or args.get("name"))
     elif name == "update_lead_status":
         return update_lead_status_tool(args.get("lead_id"), args.get("new_status"), agent_id, lead=args.get("lead") or args.get("name"))
     elif name == "check_agent_schedule":
