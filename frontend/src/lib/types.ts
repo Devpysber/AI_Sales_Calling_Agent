@@ -220,6 +220,10 @@ export interface AgentTurnResult {
   reply: string
   /** Monthly rehearsal allowance after this turn (team members only). */
   usage?: PlaygroundUsage
+  /** Characters the agent has spoken so far in this rehearsal, against TTS_CHARS_PER_CALL; steer = which live-call nudge applied. */
+  spoken_chars?: number
+  char_budget?: number
+  steer?: 'steer' | 'budget' | null
   language: string | null
   intent: string
   qualification: string | null

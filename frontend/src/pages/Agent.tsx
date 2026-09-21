@@ -633,6 +633,17 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                 </span>
                 <span className="truncate">{inbound ? 'Rehearsing an inbound call' : 'Rehearsing an outbound call'} · voice {titleCase(profile.voice_speaker)} · nothing is saved to the CRM</span>
               </div>
+              {(() => {
+                const last = [...history].reverse().find((t) => t.meta?.char_budget)?.meta
+                if (!last?.char_budget) return null
+                const pct = Math.min(100, (100 * (last.spoken_chars ?? 0)) / last.char_budget)
+                return (
+                  <div className="mt-1.5 flex items-center gap-2 text-[11px] text-white/70" title="Same TTS character budget the live call is steered by">
+                    <span className="h-1.5 w-28 shrink-0 overflow-hidden rounded-full bg-white/15"><span className={cn('block h-full rounded-full transition-[width] duration-500', pct >= 100 ? 'bg-danger' : pct >= 75 ? 'bg-warning' : 'bg-success')} style={{ width: `${pct}%` }} /></span>
+                    <span className="truncate">{last.spoken_chars} / {last.char_budget} chars spoken{last.steer === 'budget' ? ' · budget spent: closing' : last.steer === 'steer' ? ' · steering to next step' : ''}</span>
+                  </div>
+                )
+              })()}
               {u && (u.exempt ? (
                 <div className="mt-1.5 truncate text-[11px] text-white/60">Administrator · unlimited rehearsals{u.limit > 0 ? ` · team members get ${u.limit} per month` : ''}</div>
               ) : (

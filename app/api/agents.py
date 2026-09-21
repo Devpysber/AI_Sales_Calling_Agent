@@ -284,10 +284,23 @@ async def playground(body: PlaygroundMessage, request: Request, agent_id: int = 
     if goal:
         lead = {**lead, "call_purpose": body.purpose, "call_goal": goal}
     history = list(body.history)
+    # The rehearsal follows the same cost guardrails as a live call: characters the agent has spoken so far
+    # against TTS_CHARS_PER_CALL pick the same steer voice_stream would give at that point.
+    from app.services.voice_stream import BUDGET_GUIDANCE, STEER_GUIDANCE
+    spoken = sum(len(t.get("text") or "") for t in history if t.get("role") == "assistant")
+    char_budget = int(settings.tts_chars_per_call or 0)
+    guidance = None
+    if char_budget and spoken >= char_budget:
+        guidance = BUDGET_GUIDANCE
+    elif char_budget and spoken >= 0.75 * char_budget:
+        guidance = STEER_GUIDANCE
     try:
-        res = await asyncio.to_thread(agent.respond, agent_id, history, body.message, lead)
+        res = await asyncio.to_thread(agent.respond, agent_id, history, body.message, lead, guidance=guidance)
     except LLMError as e:
         raise HTTPException(502, str(e))
+    res["spoken_chars"] = spoken + len(res.get("reply") or "")
+    res["char_budget"] = char_budget
+    res["steer"] = "budget" if guidance is BUDGET_GUIDANCE else "steer" if guidance is STEER_GUIDANCE else None
     # A voice outage (quota, network) must not hide the text reply: return it without audio and say why.
     try:
         profile = agents.get_profile(agent_id)
