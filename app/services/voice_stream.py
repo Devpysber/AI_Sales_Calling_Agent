@@ -279,6 +279,25 @@ def is_caller_closing(text: str) -> bool:
     return len(text.split()) <= 6 and bool(CALLER_CLOSING.match(text))
 
 
+# Deterministic customer requests answered without an LLM turn: zero prompt tokens, one short cached TTS line.
+# Do-not-call: an explicit "stop calling / remove my number". A "call later" is a callback, so words that
+# schedule (baad mein, kal, shaam, tomorrow, evening…) keep the turn with the model.
+DNC_REQUEST = re.compile(r"(call|phone|कॉल|फोन)\s*(mat|मत)\s*(kar|karo|karna|karein|kijiye|कर|करो|करना|करें|कीजिए)|"
+                         r"(don'?t|do not|stop|never)\s+(call|calling|ring)|remove (my|this) number|unsubscribe|"
+                         r"number\s*(hata|hatao|hata do|delete|nikal|निकाल|हटा)|dobara (call|phone) (mat|nahi|na)\b|"
+                         r"दोबारा (कॉल|फोन) (मत|नहीं|ना)", re.I)
+DNC_NOT_NOW = re.compile(r"\b(baad|bad me|later|kal|tomorrow|shaam|subah|evening|morning|afternoon|after|abhi nahi|"
+                         r"busy|meeting|drive|driving|time|baje|o'?clock)\b|बाद|कल|शाम|सुबह|अभी नहीं|बजे|व्यस्त", re.I)
+DNC_LINE = {"en": "Sorry for the trouble. I'm removing your number now; you won't be called again. Have a good day.",
+            "hi": "तकलीफ़ के लिए माफ़ी। आपका number अभी हटा रहा हूँ, दोबारा call नहीं आएगा। धन्यवाद।"}
+# "Send me the details on WhatsApp / SMS": a template text with the site link goes out and one line confirms it.
+DETAILS_REQUEST = re.compile(r"(whatsapp|sms|message|msg|text|मैसेज|मेसेज|व्हाट्सएप|व्हाट्सऐप)", re.I)
+DETAILS_WORDS = re.compile(r"(detail|details|link|brochure|info|information|price|rate|list|catalog|website|site|"
+                           r"डिटेल|जानकारी|लिंक|भेज|bhej|send|kar do|karo|कर दो)", re.I)
+DETAILS_LINE = {"en": "Sure, I've sent the details to this number. Anything else I can help with?",
+                "hi": "जी, details इसी number पर भेज दी हैं। और कुछ बताऊँ?"}
+
+
 def is_post_farewell_noise(text: str) -> bool:
     """After the agent's goodbye, a greeting or acknowledgement ("hello", "haan ji", "ok sir") means the
     caller has nothing more: the call should end, not restart."""
@@ -1510,7 +1529,54 @@ class CallStream:
         if self.caller_speaking:
             return
         self.heard = []
+        if await self.quick_action(text):
+            return
         self.reply_task = asyncio.create_task(self.run_reply(text, self.speech_ended_at or time.monotonic()))
+
+    async def quick_action(self, text: str) -> bool:
+        """
+        Customer requests with one right answer, handled without the model: "stop calling me" and "send me the
+        details on WhatsApp". Saves a full prompt round and keeps the spoken line short. Team/admin check-ins and
+        the desk-choice turn are left to the model. Returns True when the turn was answered here.
+        """
+        lead = self.session.get("lead") or {}
+        purpose = lead.get("call_purpose") or ""
+        if purpose in ("team", "admin", "inbound_choose") or not text:
+            return False
+        lead_id = self.session.get("lead_id")
+        key = self.lang_key()
+        if DNC_REQUEST.search(text) and not DNC_NOT_NOW.search(text):
+            log.info("Do-not-call request on session %s: %s", self.session_id[:8], text)
+            self.turn("customer", text)
+            if lead_id:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(CallService(self.agent_id).crm.update, lead_id,
+                                            {"do_not_call": True, "status": "Do Not Call"}, "ai")
+            self.save_session()
+            await self.say_recorded(DNC_LINE[key], hangup=True)
+            await self.wait_for_end()
+            return True
+        phone = lead.get("phone") or self.session.get("from_number")
+        site = (self.persona.get("website_url") or "").strip()
+        if (DETAILS_REQUEST.search(text) and DETAILS_WORDS.search(text) and phone and site
+                and not self.session.get("details_sent")):
+            self.turn("customer", text)
+            body = f"{self.persona['company_name']}: details as discussed - {site}"
+            try:
+                from app.services.plivo_service import PlivoService
+                await asyncio.to_thread(PlivoService().send_sms, phone, body)
+            except Exception as e:  # noqa: BLE001 - the model answers instead; never claim a text that did not go
+                log.warning("Details SMS failed on session %s: %s", self.session_id[:8], e)
+                self.heard = [text]
+                self.session["history"].pop()
+                return False
+            self.session["details_sent"] = True
+            self.save_session()
+            events.record("lead.details_sent", "Details sent by SMS", body, agent_id=self.agent_id, lead_id=lead_id,
+                          call_id=self.session.get("call_id"))
+            await self.say_recorded(DETAILS_LINE[key])
+            return True
+        return False
 
     async def run_reply(self, text: str | None, speech_ended_at: float):
         """reply() under a hard deadline, so a stuck provider can never hold the line open until Plivo's limit."""

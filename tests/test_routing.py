@@ -192,3 +192,26 @@ def test_recent_calls_tool_reports_real_durations(client, base):
     out = agent_tools.execute_tool("recent_calls", '{"limit": 3}', agent_id, role="team")
     assert "Latest calls" in out or "No calls found" in out
     assert "recent_calls" in {t["function"]["name"] for t in agent_tools.get_tools_for_role("team")}
+
+
+def test_quick_action_patterns_and_team_tools(client, base):
+    from app.services import agent_tools
+    from app.services.voice_stream import DETAILS_REQUEST, DETAILS_WORDS, DNC_NOT_NOW, DNC_REQUEST
+
+    # Explicit do-not-call, in either language, without a scheduling word
+    for said in ("dobara call mat karna", "please don't call me again", "मेरा number हटा दो", "remove my number"):
+        assert DNC_REQUEST.search(said) and not DNC_NOT_NOW.search(said), said
+    # "Call later" is a callback, never a DNC
+    for said in ("abhi call mat karo, shaam ko karna", "don't call now, call tomorrow", "अभी नहीं, कल कॉल करना"):
+        assert not DNC_REQUEST.search(said) or DNC_NOT_NOW.search(said), said
+    # Details on WhatsApp / SMS
+    for said in ("details WhatsApp par bhej do", "can you send me the link on sms", "व्हाट्सएप पर जानकारी भेज दो"):
+        assert DETAILS_REQUEST.search(said) and DETAILS_WORDS.search(said), said
+    assert not (DETAILS_REQUEST.search("I will message you later") and DETAILS_WORDS.search("I will message you later"))
+
+    agent_id = int(base.rsplit("/", 1)[1])
+    names = {t["function"]["name"] for t in agent_tools.get_tools_for_role("team")}
+    assert {"today_stats", "pause_my_automation", "recent_calls"} <= names
+    assert "Today:" in agent_tools.execute_tool("today_stats", "{}", agent_id, role="team")
+    assert "paused" in agent_tools.execute_tool("pause_my_automation", "{}", agent_id, role="team")
+    assert client.get(f"{base}/automation").json()["settings"]["auto_dial_enabled"] is False

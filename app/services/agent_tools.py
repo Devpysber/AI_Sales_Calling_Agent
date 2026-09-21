@@ -80,6 +80,19 @@ def recent_calls_tool(agent_id: int, limit: int = 5, lead: str | None = None) ->
     return "Latest calls, newest first (the current live call is not listed):\n" + "\n".join(lines)
 
 
+def today_stats_tool(agent_id: int) -> str:
+    """This agent's numbers right now: leads, hot leads, meetings, calls and connections today, live calls."""
+    from app.services import agents
+    row = next((a for a in agents.list_agents() if a["id"] == agent_id), None)
+    if not row:
+        return "No stats available for this agent."
+    s = row["stats"]
+    return (f"Today: {s['calls_today']} calls, {s['connected_today']} connected, {s['live']} live now. "
+            f"Overall: {s['leads']} leads, {s['hot']} hot, {s['meetings']} meetings booked, {s['documents']} knowledge documents. "
+            f"Automation {'on' if row.get('automation_on') else 'off'}, "
+            f"{'within' if row.get('within_calling_hours') else 'outside'} calling hours.")
+
+
 def check_credits_tool() -> str:
     """Query the user's account balance/credit status."""
     return "Account credit balance is unknown: no billing integration is connected, so do not quote a balance."
@@ -286,6 +299,23 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "today_stats",
+            "description": "This agent's numbers: calls and connections today, live calls, leads, hot leads, meetings, "
+                           "automation state. Use for 'how many calls today', 'kitni calls hui', 'how is it going'.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pause_my_automation",
+            "description": "Pause this agent's auto-dialer (stop outbound calls) when the colleague asks to stop or pause calling.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "recent_calls",
             "description": "List this agent's latest completed calls with who, direction, duration, result and time. Use for "
                            "'last call', 'how long did the call go', 'who called', 'what happened on the call with X'.",
@@ -467,6 +497,10 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
         return check_credits_tool()
     elif name == "recent_calls":
         return recent_calls_tool(agent_id, int(args.get("limit") or 5), lead=args.get("lead") or args.get("name"))
+    elif name == "today_stats":
+        return today_stats_tool(agent_id)
+    elif name == "pause_my_automation":
+        return pause_agent_automation_tool(agent_id)
     elif name == "update_lead_status":
         return update_lead_status_tool(args.get("lead_id"), args.get("new_status"), agent_id, lead=args.get("lead") or args.get("name"))
     elif name == "check_agent_schedule":
