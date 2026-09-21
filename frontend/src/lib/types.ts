@@ -214,8 +214,12 @@ export interface AnalyticsReport {
 
 export type Board = Record<string, { total: number; items: Lead[] }>
 
+export interface PlaygroundUsage { used: number; limit: number; remaining: number | null; resets_at: string; exempt: boolean }
+
 export interface AgentTurnResult {
   reply: string
+  /** Monthly rehearsal allowance after this turn (team members only). */
+  usage?: PlaygroundUsage
   language: string | null
   intent: string
   qualification: string | null

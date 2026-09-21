@@ -10,7 +10,9 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.api.deps import workspace, require_admin
+from app.core import store
 from app.core.auth import actor
+from app.core.config import settings
 from app.services import agent, agents, analytics, events, scheduler, tts
 from app.services.call_service import within_calling_hours
 from app.services.crm_service import CRMService
@@ -224,9 +226,53 @@ class PlaygroundMessage(BaseModel):
     history: list[dict] = Field(default_factory=list)
 
 
+def _playground_identity(request: Request) -> str | None:
+    """Who the monthly rehearsal budget belongs to; None when it does not apply (admin, API token, auth off)."""
+    user = getattr(request.state, "user", None)
+    if user != "team":
+        return None
+    payload = getattr(request.state, "token_payload", {}) or {}
+    return f"team:{payload.get('team_id')}"
+
+
+def playground_usage(request: Request) -> dict:
+    """Rehearsals started this calendar month against the limit; a rehearsal is the first customer line of a session."""
+    from datetime import datetime, timezone
+
+    limit = int(settings.playground_monthly_limit or 0)
+    now = datetime.now(timezone.utc)
+    resets = (now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+              .replace(year=now.year + (now.month == 12), month=1 if now.month == 12 else now.month + 1))
+    identity = _playground_identity(request)
+    if not identity or not limit:
+        return {"used": 0, "limit": limit, "remaining": None, "resets_at": resets.isoformat(), "exempt": True}
+    used = int(store.get_json(f"playground:{identity}:{now:%Y-%m}", 0) or 0)
+    return {"used": used, "limit": limit, "remaining": max(0, limit - used), "resets_at": resets.isoformat(), "exempt": False}
+
+
+def _count_playground_try(request: Request, usage: dict):
+    identity = _playground_identity(request)
+    if not identity or usage.get("exempt"):
+        return
+    from datetime import datetime, timezone
+
+    key = f"playground:{identity}:{datetime.now(timezone.utc):%Y-%m}"
+    store.set_json(key, usage["used"] + 1, ttl=40 * 24 * 3600)
+
+
+@router.get("/{agent_id}/playground/usage")
+def playground_usage_endpoint(request: Request, agent_id: int = Depends(workspace)):
+    return playground_usage(request)
+
+
 @router.post("/{agent_id}/playground")
-async def playground(body: PlaygroundMessage, agent_id: int = Depends(workspace)):
+async def playground(body: PlaygroundMessage, request: Request, agent_id: int = Depends(workspace)):
     """Talk to this agent in the browser exactly as it behaves on calls (same prompt, knowledge and voice)."""
+    usage = playground_usage(request)
+    new_try = not any(t.get("role") == "customer" for t in body.history)
+    if new_try and not usage["exempt"] and usage["used"] >= usage["limit"]:
+        raise HTTPException(429, f"PLAYGROUND_LIMIT: you have used all {usage['limit']} rehearsals for this month. "
+                                 f"The allowance resets on {usage['resets_at'][:10]}.")
     lead = (CRMService(agent_id).get(body.lead_id) if body.lead_id else None) or {"name": "Test Prospect"}
     goal = agent.call_goal(lead, body.purpose)
     if goal:
@@ -245,6 +291,10 @@ async def playground(body: PlaygroundMessage, agent_id: int = Depends(workspace)
     except TTSError as e:
         res["audio_url"] = ""
         res["audio_error"] = str(e)
+    if new_try:
+        _count_playground_try(request, usage)
+        usage = playground_usage(request)
+    res["usage"] = usage
     return res
 
 

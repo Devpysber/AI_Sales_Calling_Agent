@@ -9,7 +9,7 @@ import { toast } from 'sonner'
 import { QualificationBadge } from '@/components/status'
 import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, PageHeader, Select, Skeleton, Switch, Tabs, Textarea } from '@/components/ui'
 import { api } from '@/lib/api'
-import type { AgentProfile, AgentTurnResult, KnowledgeDoc, Lead, Page, Turn } from '@/lib/types'
+import type { AgentProfile, AgentTurnResult, KnowledgeDoc, Lead, Page, PlaygroundUsage, Turn } from '@/lib/types'
 import { cn, LANGUAGES, titleCase } from '@/lib/utils'
 import { Stagger } from '@/lib/motion'
 import { VoiceOrb, Waveform } from '@/components/VoiceViz'
@@ -466,6 +466,8 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
   // Phones: the transcript covers the avatar, so it stays hidden until asked for. Always shown from sm up.
   const [chatOpen, setChatOpen] = useState(false)
 
+  // Monthly rehearsal allowance (team members): shown as a line under the header and locks the input when spent.
+  const usage = useQuery({ queryKey: ['playground-usage', base], queryFn: () => api<PlaygroundUsage>(`${base}/playground/usage`), staleTime: 30_000 })
   const leads = useQuery({ queryKey: ['leads', 'playground'], queryFn: () => api<Page<Lead>>(`${base}/leads`, { params: { page_size: 100, sort: 'name', order: 'asc' } }) })
   useEffect(() => { if (leads.isError) toast.error('Could not load leads for the prospect list', { description: leads.error.message }) }, [leads.isError, leads.error])
   const lead = leads.data?.items.find((l) => l.id === leadId)
@@ -511,6 +513,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
     onSettled: () => { pending.current = false },
     onSuccess: (res, vars) => {
       if (vars.session !== session.current) return // the rehearsal was restarted or switched while this reply was in flight
+      if (res.usage) qc.setQueryData(['playground-usage', base], res.usage)
       setHistory((h) => { setSelected(h.length); return [...h, { role: 'assistant', text: res.reply, meta: res }] })
       if (speak && res.audio_url) play(res.audio_url)
       else {
@@ -538,6 +541,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
       if (s !== session.current) return
       // Drop the unanswered bubble and keep a persistent, human explanation with a Retry instead of a raw provider dump.
       setHistory((h) => (h.at(-1)?.role === 'customer' && h.at(-1)?.text === message ? h.slice(0, -1) : h))
+      if (/PLAYGROUND_LIMIT/.test(e.message)) { void usage.refetch(); toast.error('Monthly rehearsal limit reached', { description: e.message.replace(/^.*PLAYGROUND_LIMIT:\s*/, '') }); return }
       setFailed({ message, detail: e.message })
       toast.error('The agent could not reply', { description: humanLlmError(e.message) })
     },
@@ -591,7 +595,10 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
   useEffect(() => { if (failed || greeting.isError) setChatOpen(true) }, [failed, greeting.isError])
   useEffect(() => { if (greeting.isError) toast.error('Could not load the opening line', { description: greeting.error.message }) }, [greeting.isError, greeting.error])
   const waitingForGreeting = greeting.isPending && history.length === 0
-  const inputLocked = ended || waitingForGreeting
+  const u = usage.data
+  // A new rehearsal (no customer line yet) is blocked once the month's allowance is spent; a running one may finish.
+  const limitReached = !!u && !u.exempt && u.remaining === 0 && !history.some((t) => t.role === 'customer')
+  const inputLocked = ended || waitingForGreeting || limitReached
   // Restart: refetch may hand back the same (structurally shared) greeting object, so the seeding effect would not re-run — seed directly.
   const reset = async () => {
     clear()
@@ -626,6 +633,12 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                 </span>
                 <span className="truncate">{inbound ? 'Rehearsing an inbound call' : 'Rehearsing an outbound call'} · voice {titleCase(profile.voice_speaker)} · nothing is saved to the CRM</span>
               </div>
+              {u && !u.exempt && (
+                <div className="mt-1.5 flex items-center gap-2 text-[11px] text-white/70" aria-live="polite">
+                  <span className="h-1 w-24 shrink-0 overflow-hidden rounded-full bg-white/15"><span className={cn('block h-full rounded-full', u.remaining === 0 ? 'bg-danger' : u.remaining === 1 ? 'bg-warning' : 'bg-success')} style={{ width: `${Math.min(100, (100 * u.used) / Math.max(1, u.limit))}%` }} /></span>
+                  <span className="truncate">{u.used} of {u.limit} rehearsals used this month · resets {new Date(u.resets_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>
+                </div>
+              )}
             </div>
           </div>
           <Tabs value={direction} onChange={(v) => { setDirection(v); clear() }}
@@ -781,7 +794,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                 <Input
                   value={text} onChange={(e) => setText(e.target.value)}
                   disabled={inputLocked} maxLength={1000}
-                  placeholder={listening ? 'Listening...' : ended ? 'Call ended' : waitingForGreeting ? 'Preparing…' : 'Type reply…'}
+                  placeholder={listening ? 'Listening...' : limitReached ? 'Monthly limit reached' : ended ? 'Call ended' : waitingForGreeting ? 'Preparing…' : 'Type reply…'}
                   aria-label="Your reply"
                   className="h-9 min-w-0 flex-1 border-none bg-transparent text-[13px] text-white shadow-none focus-visible:ring-0 placeholder:text-white/40 px-0"
                 />

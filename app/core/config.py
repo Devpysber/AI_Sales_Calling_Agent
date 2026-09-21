@@ -95,6 +95,8 @@ class Settings(BaseSettings):
     cost_per_10k_tts_chars: float = Field(0, alias="COST_PER_10K_TTS_CHARS")
     cost_per_stt_hour: float = Field(0, alias="COST_PER_STT_HOUR")
     cost_per_llm_request: float = Field(0, alias="COST_PER_LLM_REQUEST")
+    # Playground rehearsals a team member may start per calendar month (0 = unlimited). Admin and API token are exempt.
+    playground_monthly_limit: int = Field(5, alias="PLAYGROUND_MONTHLY_LIMIT")
     # Cost guardrails for a live call (see voice_stream silence_loop): the agent is steered to close
     # near the TTS character budget or the target duration; the persona's max_call_minutes stays the hard cap.
     tts_chars_per_call: int = Field(800, alias="TTS_CHARS_PER_CALL")
