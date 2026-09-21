@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from app.api.deps import workspace
+from app.api.deps import require_admin, workspace
 from app.core.auth import actor
 from app.services import agents, events
 from app.services.call_service import CallError, CallService
@@ -198,7 +198,7 @@ async def import_leads(request: Request, file: UploadFile = File(...), mapping: 
         raise HTTPException(400, str(e))
 
 
-@router.post("/bulk/delete")
+@router.post("/bulk/delete", dependencies=[Depends(require_admin)])
 def bulk_delete(body: Ids, request: Request, agent_id: int = Depends(workspace)):
     return {"deleted": CRMService(agent_id).delete(body.ids, actor=actor(request))}
 
@@ -223,10 +223,14 @@ def bulk_update(body: BulkUpdate, request: Request, agent_id: int = Depends(work
 @router.post("/bulk/queue")
 def bulk_queue(body: QueueRequest, request: Request, agent_id: int = Depends(workspace)):
     """Queue leads: as soon as possible (queue order), or at a chosen time (scheduled call)."""
-    crm, queued = CRMService(agent_id), 0
+    crm, queued, skipped = CRMService(agent_id), 0, 0
     at = scheduled_time(body.at)
     for lead_id in body.ids:
         try:
+            lead = crm.get(lead_id)
+            if not lead or lead.get("do_not_call") or lead.get("phone_valid") is False:
+                skipped += 1  # the dialler filters these out anyway; do not report them as queued
+                continue
             crm.update(lead_id, {"call_status": "Pending", "callback_at": at or ""}, actor="system")
             queued += 1
         except LookupError:
@@ -238,13 +242,13 @@ def bulk_queue(body: QueueRequest, request: Request, agent_id: int = Depends(wor
     if at:
         eta = f"Scheduled: the agent calls at {at[11:16]} on {at[:10]}"
         events.record("callback.scheduled", f"Call scheduled for {at}", f"{queued} lead(s)", agent_id=agent_id, actor=actor(request))
-        return {"queued": queued, "queue_size": size, "eta": eta, "at": at}
+        return {"queued": queued, "skipped": skipped, "queue_size": size, "eta": eta, "at": at}
     if within_calling_hours(cfg):
         eta = "Calling starts within a minute" + (f" ({size} in queue, {cfg['max_concurrent_calls']} at a time)" if size > 1 else "")
     else:
         eta = f"Outside calling hours: calls start at {cfg['calling_hours_start']}:00 IST"
     events.record("lead.queued", f"Queued {queued} lead(s) for calling", eta, agent_id=agent_id, actor=actor(request))
-    return {"queued": queued, "queue_size": size, "eta": eta}
+    return {"queued": queued, "skipped": skipped, "queue_size": size, "eta": eta}
 
 
 @router.get("/queue")
@@ -315,14 +319,23 @@ def get(lead_id: int, agent_id: int = Depends(workspace)):
 @router.patch("/{lead_id}")
 def patch(lead_id: int, body: LeadPatch, request: Request, agent_id: int = Depends(workspace)):
     data = body.model_dump(exclude_unset=True)
+    current = CRMService(agent_id).get(lead_id) if ("callback_at" in data or data.get("meeting_at")) else None
     if "callback_at" in data:
         at = scheduled_time(data["callback_at"])
         data["callback_at"] = at or ""
         if at:  # a scheduled call is dialled by the callback job and keeps the follow-up date in sync
             data.setdefault("follow_up_date", at[:10])
             data.setdefault("call_status", "Pending")
+        elif "call_status" not in data and current and current.get("call_status") == "Pending":
+            # "Clear" on a scheduled call must not leave the lead Pending with no time: that is exactly
+            # what the auto-dialler picks up next, so the customer would be rung right after cancelling.
+            data["call_status"] = None
+            CRMService(agent_id).dequeue([lead_id])
     if data.get("meeting_at"):
-        data["meeting_at"] = meeting_time(data["meeting_at"])
+        # Only a changed time is validated: a lead whose meeting already happened could otherwise never
+        # be edited again (every save re-sent the past time and got "already passed").
+        if not current or data["meeting_at"] != (current.get("meeting_at") or ""):
+            data["meeting_at"] = meeting_time(data["meeting_at"])
     try:
         return CRMService(agent_id).update(lead_id, data, actor=actor(request))
     except LookupError as e:

@@ -41,22 +41,63 @@ def sender(display_name: str | None = None) -> str:
     return formataddr((name, address)) if name else address
 
 
-def _html_template(body: str) -> str:
-    html_body = body.replace('\n', '<br>')
+def _html_template(body: str, sender: str = "") -> str:
+    """
+    Plain-text body -> branded HTML: the first line is the headline, "Key: value" lines become a table,
+    "A · B · C" stat lines become pills, other lines flow as paragraphs. Every template goes through here.
+    """
+    import html as _html
+    lines = [l.rstrip() for l in body.strip().split("\n")]
+    headline = _html.escape(lines[0]) if lines else ""
+    rows: list[tuple[str, str]] = []
+    out: list[str] = []
+
+    def flush_rows():
+        nonlocal rows
+        if rows:
+            out.append('<table style="border-collapse:collapse;width:100%;margin:8px 0 16px">' + "".join(
+                f'<tr><td style="padding:6px 10px 6px 0;color:#6b7280;white-space:nowrap;vertical-align:top">{k}</td>'
+                f'<td style="padding:6px 0;color:#111827;font-weight:600">{v}</td></tr>' for k, v in rows) + "</table>")
+            rows = []
+
+    for line in lines[1:]:
+        if not line.strip():
+            flush_rows()
+            continue
+        if " · " in line and len(line) < 140:
+            flush_rows()
+            pills = "".join(f'<span style="display:inline-block;margin:0 8px 8px 0;padding:6px 12px;border-radius:999px;'
+                            f'background:#f3f4f6;color:#111827;font-weight:600;font-size:14px">{_html.escape(part.strip())}</span>'
+                            for part in line.split(" · "))
+            out.append(f'<div style="margin:6px 0 10px">{pills}</div>')
+            continue
+        if ":" in line and len(line.split(":", 1)[0]) <= 32 and not line.startswith("http"):
+            k, v = line.split(":", 1)
+            rows.append((_html.escape(k.strip()), _html.escape(v.strip())))
+            continue
+        flush_rows()
+        out.append(f'<p style="margin:0 0 12px">{_html.escape(line)}</p>')
+    flush_rows()
+    brand = _html.escape(sender or "Samvaad AI")
     return f"""
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eaeaea; border-radius: 12px; overflow: hidden; background: #ffffff;">
-        <div style="padding: 32px 40px; color: #333333; font-size: 16px; line-height: 1.6;">
-            {html_body}
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;background:#ffffff">
+        <div style="background:linear-gradient(135deg,#5b4bf5,#22d3ee);padding:22px 32px;color:#ffffff">
+            <div style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;opacity:.85">{brand}</div>
+            <div style="font-size:20px;font-weight:700;margin-top:4px">{headline}</div>
         </div>
-        <div style="background: #f9f9f9; padding: 24px 40px; text-align: center; border-top: 1px solid #eaeaea; font-size: 13px; color: #888888;">
-            Sent via Samvaad AI Caller<br>
-            <a href="https://aicaller.psyber.in" style="color: #5b4bf5; text-decoration: none;">aicaller.psyber.in</a>
+        <div style="padding:26px 32px;color:#111827;font-size:15px;line-height:1.6">
+            {"".join(out)}
+        </div>
+        <div style="background:#f9fafb;padding:18px 32px;text-align:center;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280">
+            Sent via Samvaad AI Caller · <a href="https://aicaller.psyber.in" style="color:#5b4bf5;text-decoration:none">aicaller.psyber.in</a>
         </div>
     </div>
     """
 
+
 def _send_resend(to: str, subject: str, body: str, from_: str):
-    payload = {"from": from_, "to": [to], "subject": subject, "text": body, "html": _html_template(body)}
+    payload = {"from": from_, "to": [to], "subject": subject, "text": body,
+               "html": _html_template(body, from_.split("<")[0].strip().strip('"'))}
     if settings.email_reply_to:
         payload["reply_to"] = settings.email_reply_to
     res = httpx.post("https://api.resend.com/emails", json=payload, timeout=20,
@@ -124,6 +165,16 @@ def team_recipients(role: str | None = None) -> list[str]:
         if address and address not in seen:
             seen.append(address)
     return seen
+
+
+def notify_admin(subject: str, body: str, lead_id: int | None = None, agent_id: int | None = None) -> bool:
+    """
+    One message to the account owner only. For operational faults (a provider outage, a dropped call's
+    technical cause): the team gets the caller back through the CRM callback, not an error report.
+    """
+    from app.core.auth import login_email
+    address = (login_email() or "").strip().lower()
+    return bool(address) and email_sent(send_email(address, subject, body, lead_id=lead_id, agent_id=agent_id, actor="ai"))
 
 
 def notify_team(subject: str, body: str, lead_id: int | None = None, agent_id: int | None = None,

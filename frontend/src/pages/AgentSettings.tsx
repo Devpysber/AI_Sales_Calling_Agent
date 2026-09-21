@@ -155,7 +155,7 @@ export default function AgentSettings() {
         </div>
       </Card>
 
-      <Card>
+      {isAdmin && <Card>
         <CardHeader title="Vault password" description="Require team members to enter this password to open this workspace's CRM. Leave empty for open access." />
         <form className="flex flex-wrap items-end gap-3 px-4 py-4 sm:px-5" onSubmit={(e) => {
           e.preventDefault()
@@ -170,7 +170,7 @@ export default function AgentSettings() {
             ? <Button type="button" onClick={() => profileQ.refetch()} loading={profileQ.isFetching}>Retry</Button>
             : <Button type="submit" variant="primary" disabled={!profileQ.data || vaultPassword === savedPassword} loading={saveProfile.isPending}>Save password</Button>}
         </form>
-      </Card>
+      </Card>}
 
       {isAdmin && <Card className="border-danger/30">
         <CardHeader title={<span className="text-danger">Delete agent</span>}

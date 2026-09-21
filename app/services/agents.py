@@ -33,8 +33,8 @@ AUTOMATION_DEFAULTS = {
     "max_calls_per_run": 5,
     "retry_enabled": False,
     "retry_interval_minutes": 15,
-    "retry_min_gap_minutes": 60,
-    "max_retries": 3,
+    "retry_min_gap_minutes": 180,   # an unanswered number is not rung again within three hours
+    "max_retries": 2,               # two more tries, then it waits for the customer or a scheduled call
     "calling_hours_start": 9,
     "calling_hours_end": 21,
     "calling_days": [0, 1, 2, 3, 4, 5],
@@ -47,8 +47,8 @@ AUTOMATION_DEFAULTS = {
     "daily_report_email": "",
     # Website leads: call a new enquiry within seconds of the form being submitted
     "speed_to_lead_enabled": False,
-    "speed_to_lead_min_seconds": 60,   # random delay before the call, so it does not feel robotic
-    "speed_to_lead_max_seconds": 120,
+    "speed_to_lead_min_seconds": 3600,   # a random 1-2 hours after the form: prompt, not pouncing
+    "speed_to_lead_max_seconds": 7200,
     # Nurture: call Interested / Follow Up leads again when nobody has spoken to them for a while
     "nurture_enabled": False,
     "nurture_after_days": 3,
@@ -84,7 +84,7 @@ PROFILE_DEFAULTS = {
     ),
     "qualification_criteria": "Hot: clear need and wants a meeting or proposal. Warm: interested but no commitment. Cold: no need or not interested.",
     "forbidden_topics": "Never promise discounts, delivery dates or features that are not in the knowledge base.",
-    "max_call_minutes": 8,
+    "max_call_minutes": 5,
     # Call routing: a human number to hand callers to
     "transfer_number": "",
     "team_members": [],
@@ -215,6 +215,19 @@ def created_count(created_by: str) -> int:
         return db.scalar(select(func.count(Agent.id)).where(Agent.created_by == created_by)) or 0
 
 
+def _assert_unique(db, meta: dict, exclude_id: int | None = None) -> None:
+    """
+    One name and one number per agent. Two agents called the same thing are indistinguishable in the
+    switcher, reports and emails; two agents on the same number make inbound routing a coin toss.
+    """
+    if meta.get("name"):
+        clash = db.scalar(select(Agent.id).where(func.lower(Agent.name) == meta["name"].lower(), Agent.id != (exclude_id or 0)))
+        if clash:
+            raise ValueError(f'An agent called "{meta["name"]}" already exists. Pick a different name.')
+    # Numbers may be shared: several agents dial out from one line; inbound on it goes to the agent
+    # designated with set_inbound_owner() (see for_inbound).
+
+
 def create(data: dict, actor: str = "admin", created_by: str | None = None) -> dict:
     meta = _clean_meta({"name": data.get("name"), **{k: data[k] for k in META_FIELDS if k in data and k != "name"}})
     profile = coerce(PROFILE_DEFAULTS, {k: v for k, v in (data.get("profile") or {}).items() if v not in (None, "")})
@@ -225,6 +238,7 @@ def create(data: dict, actor: str = "admin", created_by: str | None = None) -> d
         automation = get_automation(int(copy_from))
         automation["auto_dial_enabled"] = automation["retry_enabled"] = False
     with get_db() as db:
+        _assert_unique(db, meta)
         count = db.scalar(select(func.count(Agent.id))) or 0
         agent = Agent(**{"color": COLORS[count % len(COLORS)], "status": "active", **meta},
                       created_by=created_by,
@@ -242,6 +256,7 @@ def update(agent_id: int, data: dict, actor: str = "admin") -> dict:
         agent = db.get(Agent, agent_id)
         if not agent:
             raise AgentNotFound(f"Agent {agent_id} not found.")
+        _assert_unique(db, meta, exclude_id=agent_id)
         changed = [k for k, v in meta.items() if getattr(agent, k) != v]
         for key, value in meta.items():
             setattr(agent, key, value)
@@ -379,6 +394,17 @@ def get_automation(agent_id: int) -> dict:
 
 
 def update_automation(agent_id: int, values: dict, actor: str = "admin") -> dict:
+    # An inverted window (start >= end) or no calling days silently disables every automation; the
+    # Inbound page saves each select on change, so this is the only place that can catch it.
+    merged = {**get_automation(agent_id), **values}
+    start, end = int(merged.get("calling_hours_start", 9)), int(merged.get("calling_hours_end", 21))
+    if not (0 <= start <= 23 and 1 <= end <= 24):
+        raise ValueError("Calling hours must be between 0 and 24.")
+    if start >= end:
+        raise ValueError("The opening hour must be earlier than the closing hour.")
+    days = merged.get("calling_days")
+    if isinstance(days, list) and (not days or any(int(d) not in range(7) for d in days)):
+        raise ValueError("Pick at least one calling day.")
     return _update_group(agent_id, "automation", values, "Automation settings", actor)
 
 
@@ -390,11 +416,48 @@ def caller_id(agent_id: int | None) -> str:
     return "".join(c for c in (number or settings.plivo_phone_number) if c.isdigit())
 
 
+INBOUND_OWNER_KEY = "inbound_owner"   # settings state: {"<digits>": agent_id} - who answers calls to that number
+
+
+def inbound_owner(number: str) -> int | None:
+    from app.services.settings_service import SettingsService
+    number = normalize_number(number) or ""
+    owners = SettingsService().get_state(INBOUND_OWNER_KEY) or {}
+    agent_id = owners.get(number)
+    return int(agent_id) if agent_id and exists(int(agent_id)) else None
+
+
+def set_inbound_owner(number: str, agent_id: int | None, actor: str = "admin") -> dict:
+    """Designate which agent answers calls to `number`; None clears it (first agent on the number answers)."""
+    from app.services.settings_service import SettingsService
+    number = normalize_number(number) or ""
+    if not number:
+        raise ValueError("A number is needed to route inbound calls.")
+    svc = SettingsService()
+    owners = dict(svc.get_state(INBOUND_OWNER_KEY) or {})
+    if agent_id is None:
+        owners.pop(number, None)
+    else:
+        if not exists(agent_id):
+            raise AgentNotFound(f"Agent {agent_id} not found.")
+        owners[number] = int(agent_id)
+    svc.set_state(INBOUND_OWNER_KEY, owners)
+    events.record("settings.updated", "Inbound routing updated", f"+{number} answered by agent {agent_id or '(default)'}",
+                  agent_id=agent_id, actor=actor)
+    return {"number": number, "agent_id": agent_id}
+
+
 def for_inbound(to_number: str, lead_agent_id: int | None = None) -> int | None:
-    """Route an inbound call: the agent owning the dialled number, else the caller's agent, else the first active agent."""
+    """
+    Route an inbound call: the agent designated for the dialled number, else an agent whose number it
+    is, else the caller's agent, else the first active agent.
+    """
     number = normalize_number(to_number)
     with get_db() as db:
         if number:
+            designated = inbound_owner(number)
+            if designated:
+                return designated
             owner = db.scalar(select(Agent.id).where(Agent.phone_number == number).order_by(Agent.id))
             if owner:
                 return owner
@@ -498,7 +561,7 @@ def overview(days: int = 14, unlocked_ids: list[int] | None = None) -> dict:
     names = {a["id"]: a["name"] for a in agents_list}
     for call in live_calls:
         call["agent_name"] = names.get(call["agent_id"])
-    activity = [{**e, "agent_name": names.get(e["agent_id"])} for e in events.list_events(None, limit=15) if e["agent_id"] in names]
+    activity = [{**e, "agent_name": names.get(e["agent_id"])} for e in events.list_events(None, limit=15, agent_ids=list(names))]
     totals = [{"date": d, "calls": sum(series[a][d]["calls"] for a in series), "connected": sum(series[a][d]["connected"] for a in series)}
               for d in dates]
     return {"agents": agents_list, "series": totals, "live_calls": live_calls, "activity": activity, "days": days}

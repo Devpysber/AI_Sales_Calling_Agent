@@ -40,6 +40,10 @@ CACHE_TTL = 7 * 24 * 3600
 _client = httpx.Client(timeout=httpx.Timeout(20, connect=5))
 
 
+class FallbackAudio(bytes):
+    """Audio from the Edge fallback voice: served now, never cached for a week under the Sarvam key."""
+
+
 class TTSError(RuntimeError):
     pass
 
@@ -67,7 +71,7 @@ _EDGE_VOICE_MAP: dict[str, str] = {
 
 def _is_quota_error(err_text: str) -> bool:
     """Return True when Sarvam's response indicates a credits/quota failure."""
-    markers = ("402", "insufficient_quota", "no credits", "credit", "429")
+    markers = ("402", "insufficient_quota", "no credits", "insufficient credit")
     low = err_text.lower()
     return any(m in low for m in markers)
 
@@ -151,7 +155,7 @@ def detect_language(text: str, default: str = "en-IN") -> str:
 def _sarvam_synthesize(text: str, language: str | None = None, speaker: str | None = None) -> bytes:
     if not settings.sarvam_api_key:
         log.warning("SARVAM_API_KEY not set – falling back to Edge TTS")
-        return _edge_synthesize_wav(text, language)
+        return FallbackAudio(_edge_synthesize_wav(text, language))
     body = {
         "text": text[:2500],
         "target_language_code": language or detect_language(text),
@@ -169,7 +173,7 @@ def _sarvam_synthesize(text: str, language: str | None = None, speaker: str | No
                 err_msg = f"Sarvam TTS {res.status_code}: {res.text[:200]}"
                 if _is_quota_error(res.text + str(res.status_code)):
                     log.warning("%s – switching to Edge TTS fallback", err_msg)
-                    return _edge_synthesize_wav(text, language)
+                    return FallbackAudio(_edge_synthesize_wav(text, language))
                 raise TTSError(err_msg)
             return b"".join(base64.b64decode(chunk) for chunk in res.json()["audios"])
         except TTSError as e:
@@ -185,7 +189,7 @@ def _sarvam_synthesize_pcm(text: str, language: str | None = None, speaker: str 
     """Raw 16-bit little-endian mono PCM at 8 kHz, ready for the phone stream."""
     if not settings.sarvam_api_key:
         log.warning("SARVAM_API_KEY not set – falling back to Edge TTS for PCM")
-        return _edge_synthesize_pcm(text, language)
+        return FallbackAudio(_edge_synthesize_pcm(text, language))
     body = {"text": text[:2500], "target_language_code": language or detect_language(text), "model": settings.sarvam_tts_model,
             "speech_sample_rate": 8000, "output_audio_codec": "linear16"}
     if speaker:
@@ -195,7 +199,7 @@ def _sarvam_synthesize_pcm(text: str, language: str | None = None, speaker: str 
         err_msg = f"Sarvam TTS {res.status_code}: {res.text[:200]}"
         if _is_quota_error(res.text + str(res.status_code)):
             log.warning("%s – switching to Edge TTS fallback for PCM", err_msg)
-            return _edge_synthesize_pcm(text, language)
+            return FallbackAudio(_edge_synthesize_pcm(text, language))
         raise TTSError(err_msg)
     pcm = b"".join(base64.b64decode(chunk) for chunk in res.json()["audios"])
     return pcm[44:] if pcm[:4] == b"RIFF" else pcm
@@ -207,8 +211,9 @@ def cached_pcm(text: str, language: str, speaker: str, usage: dict | None = None
     audio = store.get_bytes(key)
     if audio is None:
         audio = synthesize_pcm(text, language, speaker)
-        store.set_bytes(key, audio, ttl=CACHE_TTL)
-        if usage is not None:
+        fallback = isinstance(audio, FallbackAudio)
+        store.set_bytes(key, audio, ttl=AUDIO_TTL if fallback else CACHE_TTL)
+        if usage is not None and not fallback:
             usage["tts_chars"] = usage.get("tts_chars", 0) + len(text)
     return audio
 
@@ -236,23 +241,26 @@ def _render(audio_id: str) -> bytes | None:
     if not params:
         return None
     audio = synthesize(params["text"], params["language"], params["speaker"])
-    store.set_bytes(f"audio:{audio_id}", audio, ttl=CACHE_TTL)
+    store.set_bytes(f"audio:{audio_id}", audio, ttl=AUDIO_TTL if isinstance(audio, FallbackAudio) else CACHE_TTL)
     return audio
 
 
 def _render_shared(audio_id: str) -> Future:
     with _renders_lock:
         fut = _renders.get(audio_id)
-        if fut is None:
+        created = fut is None
+        if created:
             fut = _render_pool.submit(_render, audio_id)
             _renders[audio_id] = fut
-
-            def forget(_f, key=audio_id):
-                with _renders_lock:
-                    if _renders.get(key) is _f:
-                        _renders.pop(key, None)
-            fut.add_done_callback(forget)
-        return fut
+    if created:
+        # Registered outside the lock: a future that already finished runs the callback inline, which
+        # would try to take the same (non-reentrant) lock.
+        def forget(_f, key=audio_id):
+            with _renders_lock:
+                if _renders.get(key) is _f:
+                    _renders.pop(key, None)
+        fut.add_done_callback(forget)
+    return fut
 
 
 def prepare_audio_id(text: str, language: str, speaker: str) -> str:
@@ -267,13 +275,29 @@ def prepare_audio_id(text: str, language: str, speaker: str) -> str:
     return key
 
 
+def cached_audio_id(text: str, language: str, speaker: str) -> str:
+    """
+    Audio id for a line Plivo will fetch by URL moments later (legacy voice mode). The render starts in
+    the background at once; load_audio() joins it if Plivo asks before it is done.
+    """
+    return prepare_audio_id(text, language, speaker)
+
+
 def load_audio(audio_id: str) -> bytes | None:
     audio = store.get_bytes(f"audio:{audio_id}")
     if audio is not None:
         return audio
     if store.get_json(f"tts_job:{audio_id}") is None:
         return None
-    return _render_shared(audio_id).result(timeout=40)
+    try:
+        return _render_shared(audio_id).result(timeout=40)
+    except Exception as e:  # noqa: BLE001 - TTSError, httpx errors, futures.TimeoutError
+        log.warning("Playground audio %s failed: %s", audio_id, e)
+        # A render still running past the wait keeps its job so a later fetch is served from cache;
+        # a hard failure drops it so every replay does not re-synthesise and re-fail.
+        if not isinstance(e, TimeoutError):
+            store.delete(f"tts_job:{audio_id}")
+        return None
 
 
 def audio_url(audio_id: str) -> str:

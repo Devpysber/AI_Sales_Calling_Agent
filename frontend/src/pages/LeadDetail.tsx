@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Ban, Bot, Building2, CalendarClock, Check, ChevronRight, Clock, Copy, Gauge, Lightbulb, ListPlus, Mail, MapPin,
-  MessageSquareQuote, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOutgoing, Play, RefreshCw, ShieldAlert, Sparkles, Target, Trash2, User,
+  Globe, MessageSquareQuote, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOutgoing, Play, RefreshCw, ShieldAlert, Sparkles, Target, Trash2, User,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
@@ -459,6 +459,22 @@ export default function LeadDetail() {
             </div>
           </Card>
 
+          {(l.source ?? '').startsWith('website') && (
+            <Card className="border-brand/30">
+              <CardHeader title={<span className="flex items-center gap-2"><Globe className="size-4 text-brand" />Website enquiry</span>}
+                description={`Came in from ${(l.source ?? '').replace(/^website:?/, '') || 'the website'} · the agent opens the call with this`} />
+              <div className="px-4 pb-4 sm:px-5 sm:pb-5">
+                {(l.notes || '').split('\n').filter((line) => line.trim()).map((line, i) => {
+                  const m = /^([^:]{1,40}):\s*(.+)$/.exec(line)
+                  return m
+                    ? <div key={i} className="flex flex-wrap gap-x-3 gap-y-0.5 border-b border-border/60 py-1.5 text-sm last:border-0"><dt className="w-32 shrink-0 text-muted">{m[1]}</dt><dd className="min-w-0 break-words">{m[2]}</dd></div>
+                    : <p key={i} className="py-1.5 text-sm break-words">{line}</p>
+                })}
+                {!l.notes && <p className="text-sm text-muted">The form carried no message.</p>}
+              </div>
+            </Card>
+          )}
+
           <Card>
             <CardHeader title="Notes for the agent" description="The AI reads these before every call"
               action={notes === null ? <Button size="sm" variant="ghost" onClick={() => setNotes(l.notes ?? '')}><Pencil />Edit</Button> : undefined} />
@@ -521,7 +537,9 @@ function FollowUpScheduler({ lead, saving, onSave }: { lead: Lead; saving: boole
       {lead.callback_at
         ? <div className="flex flex-wrap items-center gap-2 rounded-xl bg-brand-soft px-3 py-2 text-sm text-brand"><CalendarClock className="size-4 shrink-0" /><span className="min-w-0 flex-1 font-semibold break-words">Agent calls at {lead.callback_at} IST</span>
             <button type="button" disabled={saving} className="min-h-10 px-1 text-xs font-semibold hover:underline disabled:opacity-60 sm:min-h-8" onClick={() => onSave({ callback_at: '' })}>Clear</button></div>
-        : <p className="text-xs text-muted">{lead.follow_up_date ? `Follow up due ${lead.follow_up_date}. Pick a time to have the agent call automatically.` : 'Nothing scheduled.'}</p>}
+        : <p className="text-xs text-muted">{lead.call_status === 'Pending'
+            ? <span className="inline-flex items-center gap-1.5 text-success"><span className="size-1.5 animate-pulse rounded-full bg-success" />Queued for auto-dial: the agent rings on its next run inside calling hours. Pick a time below for an exact slot.</span>
+            : lead.follow_up_date ? `Follow up due ${lead.follow_up_date}. Pick a time to have the agent call automatically.` : 'Nothing scheduled.'}</p>}
       <div className="flex flex-wrap gap-1.5">
         {[['In 1 hour', 60], ['Tomorrow 11 AM', -1], ['In 3 days', 3 * 24 * 60]].map(([label, m]) => (
           <button key={label as string} type="button" onClick={() => {

@@ -32,8 +32,8 @@ const LIMITS: Record<NumKey, [label: string, min: number, max: number]> = {
   max_concurrent_calls: ['Max simultaneous calls', 1, 100],
   meeting_reminder_hour: ['Reminder hour', 0, 23],
   daily_report_hour: ['Report hour', 0, 23],
-  speed_to_lead_min_seconds: ['Speed to lead "at least"', 0, 3600],
-  speed_to_lead_max_seconds: ['Speed to lead "at most"', 0, 3600],
+  speed_to_lead_min_seconds: ['Speed to lead "at least"', 0, 14400],
+  speed_to_lead_max_seconds: ['Speed to lead "at most"', 0, 14400],
   nurture_after_days: ['Call again after (days)', 1, 60],
   nurture_max_attempts: ['Max follow-ups per lead', 1, 10],
 }
@@ -168,8 +168,8 @@ export default function Automation() {
         <JobCard icon={<Zap />} title="Speed to lead" description="Calls a website enquiry shortly after the form is sent, while interest is highest."
           enabled={form.speed_to_lead_enabled} onToggle={(v) => toggleNow('speed_to_lead_enabled', v)}
           busy={save.isPending} footer={<span className="min-w-0 break-words text-xs text-muted">A random delay in this range keeps it natural. Outside calling hours the lead waits for auto-dial.</span>}>
-          <Field label="Call after at least (seconds)"><Input type="number" min={0} max={3600} value={form.speed_to_lead_min_seconds} onChange={(e) => set('speed_to_lead_min_seconds', num(e.target.value, form.speed_to_lead_min_seconds))} /></Field>
-          <Field label="and at most (seconds)"><Input type="number" min={form.speed_to_lead_min_seconds === '' ? 0 : form.speed_to_lead_min_seconds} max={3600} value={form.speed_to_lead_max_seconds} onChange={(e) => set('speed_to_lead_max_seconds', num(e.target.value, form.speed_to_lead_max_seconds))} /></Field>
+          <Field label="Call after at least (seconds, 3600 = 1 hour)"><Input type="number" min={0} max={14400} value={form.speed_to_lead_min_seconds} onChange={(e) => set('speed_to_lead_min_seconds', num(e.target.value, form.speed_to_lead_min_seconds))} /></Field>
+          <Field label="and at most (seconds, 7200 = 2 hours)"><Input type="number" min={form.speed_to_lead_min_seconds === '' ? 0 : form.speed_to_lead_min_seconds} max={14400} value={form.speed_to_lead_max_seconds} onChange={(e) => set('speed_to_lead_max_seconds', num(e.target.value, form.speed_to_lead_max_seconds))} /></Field>
         </JobCard>
 
         <JobCard icon={<HeartHandshake />} title="Follow up warm leads" description="Calls Interested and Follow Up leads nobody has spoken to recently, continuing from the last conversation."
@@ -286,7 +286,7 @@ function WebsiteIntake() {
   }
   if (!data) return <Skeleton className="h-64 xl:col-span-2" />
   const snippets = {
-    html: `<form action="${data.url}" method="POST">\n  <input name="name" placeholder="Your name" required>\n  <input name="phone" placeholder="Phone" required>\n  <input name="email" placeholder="Email">\n  <textarea name="message" placeholder="How can we help?"></textarea>\n  <input name="website" style="display:none" tabindex="-1" autocomplete="off">\n  <button>Request a call</button>\n</form>`,
+    html: `<form accept-charset="UTF-8" action="${data.url}" method="POST">\n  <input name="name" placeholder="Your name" required>\n  <input name="phone" placeholder="Phone" required>\n  <input name="email" placeholder="Email">\n  <textarea name="message" placeholder="How can we help?"></textarea>\n  <input name="website" style="display:none" tabindex="-1" autocomplete="off">\n  <button>Request a call</button>\n</form>`,
     js: `await fetch("${data.url}", {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify({ name, phone, email, message, source: "landing-page" }),\n})`,
     curl: `curl -X POST "${data.url}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"name":"Rahul","phone":"9876543210","message":"Interested"}'`,
   }
@@ -315,7 +315,7 @@ function WebsiteIntake() {
             <Button size="sm" variant="ghost" className="sm:ml-auto" onClick={() => copy(snippets[tab])}><Copy />Copy snippet</Button>
           </div>
           <pre className="mt-2 max-h-56 min-w-0 overflow-auto rounded-xl bg-ink p-3 font-mono text-[12px] leading-relaxed break-all whitespace-pre-wrap text-ink-fg">{snippets[tab]}</pre>
-          <p className="mt-2 text-xs break-words text-muted">Fields: name, phone (required), email, company, city, message, source, language (e.g. hi-IN). Repeat enquiries update the same lead. Bots filling the hidden “website” field are ignored.</p>
+          <p className="mt-2 text-xs break-words text-muted">Any form works: phone is required; name, email, company, city, message, source and language (e.g. hi-IN) are recognised under their usual names (your-name, mobile, enquiry…), and every other field the form collects is saved on the lead for the agent to use. Repeat enquiries update the same lead. Bots filling the hidden “website” field are ignored.</p>
         </div>
         <Button size="sm" variant="ghost" className="w-full sm:w-auto" loading={rotate.isPending} onClick={async () => {
           if (rotate.isPending) return

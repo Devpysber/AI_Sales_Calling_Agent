@@ -63,13 +63,24 @@ def usage(rows) -> dict:
     }
     answered = sum((r.status == ANSWERED or (r.status == "Failed" and (r.duration or 0) > 0)) for r in metered) or 0
     total = sum(cost.values())
+    qualified = sum((getattr(r, "qualification", None) == "Hot" or getattr(r, "outcome", None) == "meeting_booked") for r in rows)
+    answered_secs = sum((r.duration or 0) for r in metered if r.status == ANSWERED or (r.status == "Failed" and (r.duration or 0) > 0))
     return {
         "metered_calls": len(metered), "tts_chars": tts, "stt_seconds": round(stt), "llm_requests": llm,
         "call_minutes": round(connected_minutes, 1),
         "cost": {k: round(v, 2) for k, v in cost.items()}, "total_cost": round(total, 2),
         "cost_per_connected_call": round(total / answered, 2) if answered else None,
+        # The numbers to negotiate and tune with: per connected minute.
+        "per_minute": ({"tts_chars": round(tts / connected_minutes), "tts_cost": round(cost["tts"] / connected_minutes, 2),
+                        "total_cost": round(total / connected_minutes, 2)} if connected_minutes >= 1 else None),
         "rates_configured": any((cost_per_call, cost_per_tts, cost_per_stt, cost_per_llm)),
         "currency": currency,
+        "qualified_leads": qualified,
+        "cost_per_qualified_lead": round(total / qualified, 2) if qualified else None,
+        # Per connected call: the pilot targets (TTS_CHARS_PER_CALL, CALL_TARGET_MINUTES) are what these are tuned against.
+        "per_call": ({"tts_chars": round(tts / answered), "tts_cost": round(cost["tts"] / answered, 2),
+                      "duration": round(answered_secs / answered)} if answered else None),
+        "budget": {"tts_chars": settings.tts_chars_per_call, "target_minutes": settings.call_target_minutes},
     }
 
 

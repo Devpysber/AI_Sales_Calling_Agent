@@ -294,7 +294,9 @@ function UsageCard({ usage: u }: { usage: AnalyticsUsage }) {
         description={u.metered_calls ? `Billable usage measured on ${u.metered_calls} call${u.metered_calls === 1 ? '' : 's'} in this period`
           : 'Usage is measured on calls placed from now on.'}
         action={u.rates_configured && <div className="text-right"><div className="text-xl font-extrabold tabular-nums">{money(u.total_cost)}</div>
-          <div className="text-xs text-muted">{u.cost_per_connected_call != null ? `${money(u.cost_per_connected_call)} per connected call` : 'estimated'}</div></div>} />
+          <div className="text-xs text-muted">{u.cost_per_connected_call != null ? `${money(u.cost_per_connected_call)} per connected call` : 'estimated'}</div>
+          {u.per_minute && <div className="mt-1 text-xs font-semibold tabular-nums text-fg-2">{money(u.per_minute.total_cost)}/min · TTS {money(u.per_minute.tts_cost)}/min · {u.per_minute.tts_chars.toLocaleString('en-IN')} chars/min</div>}
+          {u.per_call && <div className="mt-1 text-xs tabular-nums text-muted">{u.per_call.tts_chars.toLocaleString('en-IN')} chars/call{u.budget ? ` (budget ${u.budget.tts_chars})` : ''} · {Math.round(u.per_call.duration / 60)}m{u.per_call.duration % 60}s avg{u.cost_per_qualified_lead != null ? ` · ${money(u.cost_per_qualified_lead)} per qualified lead` : ''}</div>}</div>} />
       <div className="grid gap-3 px-4 pb-4 sm:grid-cols-2 sm:px-5 sm:pb-5 lg:grid-cols-4">
         {rows.map(([label, amount, cost], i) => (
           <div key={label} style={{ animationDelay: `${i * 70}ms` }} className="reveal reveal-in reveal-up glint rounded-xl border border-border p-3 transition hover:-translate-y-0.5 hover:border-border-strong">

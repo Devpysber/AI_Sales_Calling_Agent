@@ -69,9 +69,10 @@ class PlivoService:
             hangup_url=self.webhook("hangup", **params),
             ring_timeout=60,
             time_limit=self.hard_time_limit(max_minutes),
-            # Answering-machine detection gives false positives on Indian networks (caller tunes,
-            # carrier announcements), so it is opt-in from the Agent settings.
-            **({"machine_detection": "hangup", "machine_detection_time": 5000} if detect_voicemail else {}),
+            # Answering-machine detection gives false positives on Indian networks (caller tunes, carrier
+            # announcements): a real person was cut off after 6s as "Machine Detected". Detect only, never
+            # hang up; the stream's own voicemail check on the first transcript decides.
+            **({"machine_detection": "true", "machine_detection_time": 5000} if detect_voicemail else {}),
         )
         return response.request_uuid
 

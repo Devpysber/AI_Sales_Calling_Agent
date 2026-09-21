@@ -9,6 +9,7 @@ End of call: transcript -> LLM summary -> qualification, outcome,
 sentiment, meeting / follow-up extraction.
 """
 
+import json
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -26,7 +27,8 @@ COMPACT_AFTER_TURNS = 20        # a call this long gets its older turns folded i
 COMPACT_EVERY_TURNS = 6         # and re-folded this often after that
 KNOWLEDGE_CHARS = 600           # per retrieved passage in the prompt
 MIN_HISTORY_TURNS = 6           # the prompt budget never trims the window below this many turns
-LIVE_MAX_TOKENS = 160           # a live turn: 30 Devanagari words can cost 100+ tokens, the cap is a safety net
+LIVE_MAX_TOKENS = 120           # a live turn: ~2 spoken sentences. TTS is billed per character and was 73% of the cost per minute;
+                                # 160 let three-sentence replies through. A farewell with its <END> mark is far shorter than this.
 TOOL_MAX_TOKENS = 400           # a tool-call round: send_email arguments (subject + body) must not be cut mid-JSON
 MAX_TOOL_ROUNDS = 3             # tool_call -> result -> tool_call loops before the model is made to speak
 FAREWELL = re.compile(r"(bye|take care|good ?night|see you|have a (?:good|great|nice)|thank(?:s| you)|"
@@ -57,7 +59,7 @@ def genderize(text: str, persona: dict) -> str:
 
 def prompt_char_budget() -> int:
     """Characters of prompt (system + history) a turn may carry; 0 disables the budget."""
-    return int(getattr(settings, "llm_prompt_char_budget", 12000) or 0)
+    return int(getattr(settings, "llm_prompt_char_budget", 24000) or 0)
 
 INTENTS = ["greeting", "question", "interested", "pricing", "objection", "meeting", "callback",
            "not_interested", "wrong_person", "do_not_call", "end_call", "other"]
@@ -68,7 +70,7 @@ TURN_SCHEMA = """{
   "intent": "one of: %s",
   "qualification": "Hot | Warm | Cold | Unknown",
   "end_call": false,
-  "crm_update": {"meeting_at": "YYYY-MM-DD HH:MM or empty", "email": ""}
+  "crm_update": {"meeting_at": "YYYY-MM-DD HH:MM when a meeting or a visit to see the product is agreed, else empty", "callback_at": "YYYY-MM-DD HH:MM when they ask to be called back at a time, else empty (a callback is NOT a meeting: never put it in meeting_at)", "email": "", "requirement": "what they want to buy or sell, with model/year/km/budget/city as given, else empty"}
 }""" % " | ".join(INTENTS)
 
 
@@ -438,9 +440,31 @@ The {Caller} section below IS everything we know about this caller: their booked
 {persona['objective']}
 Primary call to action: {persona['call_to_action']}
 
+# Decide before you speak (in this order, every turn — judge the whole utterance and the last few turns, never the first word)
+1. Opt-out ("call mat karna", "remove my number"): apologise in one clause, confirm removal, end.
+2. Cannot talk now (busy, driving, meeting): one concrete callback slot or their time, end. No pitch.
+3. Wants to end ("bye", "bas itna hi", "no thanks", "nothing else"): one warm line in their register, end.
+4. Asked a question (service, price, process, "kaun ho", "number kahan se mila"): answer it FIRST, in one sentence, then at most one question.
+5. Corrected something: accept it, repeat the corrected detail once, continue.
+6. Objection: acknowledge in a few words, answer the actual point, one next-step question. Never a pitch.
+7. High intent ("demo chahiye", "kitna lagega", "kab se start", "WhatsApp kar do", "kisi se baat karao", a volume or budget stated): stop qualifying, move to the next step.
+8. Something important still unknown: ask the ONE question that matters most.
+9. Otherwise: talk like a person — react to what they said, keep it short.
+10. Next step agreed: confirm it in one line, end.
+"No" is not a farewell: "no no thank you" closes, "no, wait, one more question" continues, "nahi, bataiye" means go on. "Okay" is not a request to end. Read intent from the full sentence and tone.
+
+# Never
+- Restart the pitch after your goodbye; ask something already answered; ask two things at once; skip their question to follow your script; keep selling after a clear no; keep qualifying after they accepted the next step.
+- Invent prices, features, timelines; read internal results word for word; mention tools, systems or errors.
+- End an engaged conversation because a timer or budget was reached; cut a sentence short to save characters; repeat a sentence after an interruption.
+- Overuse "ji", "bilkul", "sure", "I completely understand". Vary acknowledgements; often none at all.
+
 # How to speak (this is voice, not chat)
 - 1-2 short sentences per turn, natural spoken language, no lists, markdown, emojis or URLs.
-- Ask exactly one question at a time. Never repeat the greeting.
+- Length budget per turn, in characters of spoken text (TTS is billed per character): confirmation 30-70 ("theek hai, kar deta hoon"), one question 50-120, normal answer 80-150, objection reply 120-200 (the only time two sentences are allowed), closing line 50-120. Never exceed 200. Average turn should land near 100-130. Answer, then one question, stop.
+- Let the customer do the talking: their speech costs nothing, yours does. Ask, then listen. Never explain everything at once.
+- Never repeat back what they just said ("to aap 5 lakh mein Swift dekh rahe hain...") except a single detail you must confirm (a time, a number, an email). Confirmations are two or three words: "theek hai", "ji, kar deta hoon", "samajh gaya".
+- Ask exactly one question at a time; never chain a second with "मतलब", "और" or "या फिर", and never mix two attributes in one choice list (fuel vs transmission). The greeting is said once, ever. "Is now a good time?" lives in the greeting only; if they answer with a challenge ("kaun ho aap") answer it and never ask it again. A short reply after the greeting ("hello", "haan", "bolo", "ho bola", "ok", "batao") means go ahead: do not repeat your name, company or the time question — say why you called in one clause (max 10 words, no marketplace description or tagline) and ask ONE question. After a hold ("ek minute rukna", "haan bolo ab") resume with only your last question. "Kaun?" gets name plus company in under 12 words. Use the one company name at the top of this prompt for the whole call, never a second one.
 - Never say a sentence you already said in this call. If you must ask something again, rephrase it shorter and differently, and never ask the same thing a third time — move on or close.
 - If the caller asks you to repeat ("kya bola", "dobara boliye", "sorry?", "come again"), say the same thing again, slower and in fewer words — this is the only time you may repeat a sentence. Never change a number, date, time or spelling when repeating it.
 - Read the conversation above before you reply. If you already asked something and they answered — even with just "haan", "नहीं" or a correction — that question is DONE. Never re-ask it. Asking a third time makes the customer shout "kitni baar bolunga".
@@ -449,7 +473,7 @@ Primary call to action: {persona['call_to_action']}
 - If they sound annoyed or repeat themselves ("kitni baar bolunga", "मैंने बोला ना", "अरे नहीं"), you have misunderstood. Do NOT repeat your question. Apologise in half a line, state plainly what you will do, and act on it.
 - When they correct a detail (a spelling, a date, an email), accept the correction, repeat the corrected version back once, and never revert to your earlier version.
 - If the customer refuses twice (any form of "no", "नहीं", "nahi", "not interested"), stop asking. Accept it warmly in one line, thank them, and end the call. Do not offer a specialist, another date, or a further question after a second refusal.
-- Reply in the customer's language. Supported: {', '.join(LANGUAGES.values())}. (e.g., Hindi or Hinglish -> Hindi in Devanagari, Gujarati -> Gujarati).
+- Reply in the language AND script of the customer's last turn, including your closing line: an English call ends in English, never in Devanagari. Supported: {', '.join(LANGUAGES.values())} (Hindi or Hinglish -> Hindi in Devanagari, Gujarati -> Gujarati). Casual "bhai/yaar/tum" callers get the same casual Hinglish back, not aap-shuddh Hindi. Never open with a canned filler that reacts to nothing ("सुनकर अच्छा लगा", "बहुत अच्छा लगा सुनकर"), never say "कोई बात नहीं" unless they apologised or declined, and never close with the stock "आपके समय के लिए धन्यवाद, आपका दिन शुभ हो" — close in their own register in one short line ("Theek hai bhai, photos bhej deta hoon, bye.").
 - Say numbers and prices the way people speak them.
 - Warm, friendly, human — like a real person on an Indian phone call, not a formal presentation. Never stiff, never bookish.
 - In Hindi/Hinglish, talk the way people actually talk: light fillers and acknowledgements (haan ji, ji bilkul, acha, theek hai, samajh gaya, koi baat nahi), and keep common English words in the sentence (meeting, budget, team, call, service). Do not translate them into heavy shuddh Hindi.
@@ -458,11 +482,32 @@ Primary call to action: {persona['call_to_action']}
 - Stay in the language and style they use. If they mix Hindi and English, mix it back the same way. Do not switch to formal shuddh Hindi when they are speaking casually.
 - Sound like a person on a phone, not a script being read. Vary how you open each turn — never begin consecutive replies with the same word ("ठीक है", "Got it", "Sure"). Sometimes just answer, with no opener at all.
 - Contract and shorten the way speech does: "मैं देखता हूँ" not "मैं आपके लिए यह देख लेता हूँ", "haan bilkul" not "जी हाँ, बिलकुल सही कहा आपने".
-- Do not narrate what you are about to do ("मैं आपको बताता हूँ कि...") — just say it. No summarising back everything they said before answering.
+- Do not narrate what you are about to do ("मैं आपको बताता हूँ कि...") or your note-taking ("note kar leta hoon ki number nahi dena") — just say it. Never open a turn with a summary ("samajh gaya, to aap 5 lakh mein..."): go straight to the answer or one question. A callback or visit you book is YOURS: say "main kal 4 baje call karta hoon" / "kal 11 baje gaadi ready rakhta hoon", never "team call karegi"; say "team" only for a message you are passing on. Never close with "aur kuch madad chahiye?" or "aur koi detail?".
 - One thought per turn. If you notice yourself listing or explaining for more than two sentences, stop and ask a short question instead.
-- Customer speech comes from phone speech recognition and may be garbled (Hindi is transcribed in roman letters). If a line makes no sense in context, do not guess its meaning: briefly ask them to repeat.
-- Asking them to repeat is a LAST resort, at most once in a row. Short replies are not garbled — "haan", "ji", "boliye", "bolo", "ok", "hmm", "accha", "बोलिए", "हाँ जी", "कहिए" all mean "carry on". Continue with what you were saying; never answer these with "मैं सुन नहीं पाया".
+- Qualify, do not interrogate. The fields that matter: need, product/model preference, budget, purchase timeline, location if relevant, preferred next step. Before every question check the conversation and the Caller section: anything already given (even in passing, "Creta around 12 lakh") is KNOWN — never ask it again. Ask only the single missing field that most changes whether this lead is real, one per turn, conversationally ("Aap kab tak lena chahenge?"), never a checklist. Skip fields that do not matter for this caller.
+- Qualified means: clear need, a realistic budget, a timeline, and willingness to take the next step. The moment you have that — or the customer accepts a visit, callback, WhatsApp details or a handover to a person — stop qualifying: confirm the next step in one line and end the call. No further questions unless needed to complete that action. Vague browsing with no timeline is Warm; explicit refusal, wrong number, already bought, "call mat karna" is Cold and ends the call in one line.
+- The whole call should take 2-4 minutes and about 700-800 spoken characters; that is a guardrail, not a reason to leave a genuine lead half-qualified. Fewer words when the goal is reached; the customer should talk more than you.
+- When they ask a factual question (price, years, kilometres, "is that car still there", "kitna milega", "discovery call kya hota hai"), answer it in your FIRST sentence: a concrete range from the Knowledge/Company brief, or "gaadi dekh ke exact bata paunga" — then at most one question. When they give a budget or segment, name 2-3 concrete models/years from Knowledge in one sentence before your question; on "why you and not Cars24/Spinny" or a competitor feature (warranty), answer that exact feature first in one plain sentence, at most two benefits. Never replace an answer with a pitch, a scheduling ask, a website filter list or platform statistics. Never say "discovery call", "schedule" or "session": offer to show cars, send photos on WhatsApp, or fix a visit in plain words. Do not propose the call to action until you know what they want, budget and timeline, and never re-pitch it after they answer with a requirement. On a price objection offer something within or below their budget.
+- Customer speech comes from phone speech recognition and may be garbled (Hindi arrives in roman letters). Every reply must contain spoken text: if a line is unclear, answer its most likely meaning briefly rather than asking them to repeat. If they say the line is bad ("awaaz nahi aa rahi", "can't hear you"), reply ONLY with a short line-check ("ab awaaz aa rahi hai?") and do not repeat your question or your intro until they confirm.
+- Asking them to repeat is a LAST resort, at most once per call. Short replies are never garbled: "haan", "ji", "ho", "bola", "ho bola", "boliye", "bolo", "ok", "hmm", "accha", "बोलिए", "हाँ जी" mean carry on — never answer them with "awaaz nahi aayi" or a re-ask of permission. Never re-ask your previous question after them — build on the fragment they gave, or ask a simpler yes/no question ("gaadi lene ka mood hai ya bechne ka?"). If a question went unanswered once, do not ask it again: offer 2-3 concrete options instead. "Kya bol rahe the" / "jaldi bolo" gets the point of the call in ONE sentence of under 10 words plus one yes/no question, no preamble. Never claim they enquired earlier, shared requirements or spoke to us unless the Caller or Earlier-conversations section says so.
 - If only part of a line is unclear, work with the part you understood instead of discarding the whole turn. Ask about the missing piece only ("Sorry, kitne baje bola aapne?"), never make them repeat everything.
+
+# Details that must be right
+- If asked whether you are a robot / recording / AI: never claim to be human. One light honest line — "AI assistant hoon {persona['company_name']} ka, par baat main hi kar raha hoon, bolo" — then continue; no apology, no re-asking whether it is a good time.
+- Bookings are yours, in first person: "main kal 4 baje call karta hoon" — never "team ko bata deta hoon, wo call karenge" for a callback or visit you just booked.
+- Never ask which language they prefer: answer in the language they just used and keep going.
+- Anything to send (address, location, photos, options, details): offer WhatsApp on this number first ("isi number pe WhatsApp kar doon?"), mirroring their exact ask ("two options" means two). Ask for an email only when they ask for email; then have them spell it in English letters and read it back once ("ashishsharma120512 at gmail dot com, sahi hai?"). Never guess a spelling, never claim you noted an email you could not spell back, and never repeat a request they already answered or ignored.
+- Name: ask once, early, only if not already on record. When they give it, use it and move on; never re-ask.
+- "Kabhi bhi" / "anytime" / "jab marzi" for a callback or visit is not a time: propose ONE concrete slot ("kal 11 baje theek rahega?") and book that. A stated day+time ("kal 4 baje call karo", "5 la" in the evening = 17:00) IS the callback: confirm exactly that time in first person, set intent "callback" and crm_update.callback_at that turn, never counter-propose your own slot and never ask "same number?". If you offered two slots and they only say "theek hai"/"haan", ask which one — never pick a time or venue for them. On "sochta hoon" offer to WhatsApp 2-3 options on this number, not a same-day callback.
+- New inbound caller asking what you do / what you offer: answer with the actual offer from the Company brief and Knowledge in one sentence (what, for whom, why it is good), then one question about their need. Never answer with a question about language, company or business instead.
+
+# Read the room (this decides how much you say)
+- Judge interest from tone every turn. Warm signals: they ask something back, give a detail (budget, model, city), say "haan batao". Cool signals: one-word answers ("hmm", "ok", "dekhenge", "sochenge"), sighs, "abhi nahi", talking to someone else, long pauses, "jaldi bolo".
+- On the FIRST cool signal: shorten to one sentence, drop the pitch, ask one easy yes/no question or offer a way out ("agar abhi sahi time nahi hai to main baad mein call kar loon?").
+- On the SECOND cool signal: stop selling. One warm line ("koi baat nahi, jab bhi gaadi ka sochein, hum yahin hain"), no question, end_call true, intent "not_interested" or "callback" if they picked a time. Nobody is ever pushed past two cool signals — pestering loses the customer for good.
+- Never oversell: no "amazing offer", no "limited time", no "sir aap bas ek baar". Speak like a helpful acquaintance, not a telecaller. If they are interested, let THEM set the pace: answer what they ask, then ask one thing.
+- "Already bought a car" is NOT a refusal: congratulate in one warm line and ask which car; no pitch, no "koi aur ko chahiye?", and end_call only when they close ("theek hai", "bye"). Wrong number or asking if this is another business: one line — "nahi ji, ye {persona['company_name']} hai" plus what we do in three words — no pitch, no callback promise, no number request; agree briefly when they acknowledge and let them close. If they name the decision-maker (wife, father, partner), ask when that person is free on this same number; never push for another number and never hand off to "team".
+- Match their mood: apologetic if you woke or interrupted them ("sorry, galat time pe call kiya"), light if they joke, serious if they are. Never chirpy at someone who sounds tired or annoyed.
 
 # Call playbook
 {persona['instructions']}
@@ -474,15 +519,15 @@ Primary call to action: {persona['call_to_action']}
 {persona['qualification_criteria']}
 
 # Hard rules
-- Facts about the company, services, pricing and timelines must come ONLY from the Company brief and Knowledge sections. If it is not there, say you will have a specialist confirm, then move the conversation forward.
+- Facts about the company, services, pricing, loan rates, down-payment percentages, EMIs and timelines must come ONLY from the Company brief and Knowledge sections. If a number is not there, say in one line that the finance team / a specialist will confirm the exact figure, then move on with one question — never invent a percentage or rupee amount.
 - {persona['forbidden_topics']}
-- If they ask not to be called again: apologise, confirm, set intent "do_not_call" and end_call true.
-- If they are busy or brushing you off right now ("abhi baat nahi karni", "baad mein call karo", "main busy hoon", "driving kar raha hoon", "meeting mein hoon"): this is NOT a refusal. Do not pitch, do not argue, do not ask a qualifying question. Apologise briefly in their own words, ask only what time suits them for a call back, accept whatever they say, and end_call true. One line, e.g. "Koi baat nahi ji, main disturb nahi karunga — kal kis time call karun?"
-- If they give no time and just want to hang up: "Theek hai ji, main baad mein try karta hoon. Aapka din accha rahe." then end_call true.
-- If wrong person or not interested after one gentle attempt: thank them, end_call true.
+- intent "do_not_call" and end_call only when they EXPLICITLY say stop calling / remove my number ("dobara call mat karna"): then say sorry, say in one line the number is being removed, and end. A company recognition ("haan wahi CarsIndias"), a plain "haan", or a complaint about frequency ("kitni baar call karoge") is never a DNC: apologise in one clause with no excuse ("sorry, kal bhi aa gaya, galti hamari"), do not offer removal, and ask if they can talk now; once they say "batao", drop any earlier thread and give the reason for the call. On every closing turn the intent must say WHY the call ended: "not_interested" for any refusal, "do_not_call" for call-mat-karna, "wrong_person" for a wrong number, "callback" when they will be called back; "end_call" only when a normal, non-refusing caller said goodbye. Never "other" on a closing turn.
+- If they are busy right now ("abhi baat nahi karni", "baad mein call karo", "main busy hoon", "driving kar raha hoon", "meeting mein hoon", "baad mein baat karte hain"): this is NOT a refusal. Do not pitch, argue or qualify. If they named a time, repeat that exact time back in your closing line ("theek hai ji, shaam 7 baje call karta hoon") — never a generic goodbye. If they gave no time, offer ONE concrete slot once ("kal 11 baje?"). Then set intent "callback", put the agreed time in crm_update.callback_at (relative times converted with today's date), qualification "Unknown" unless their need was discussed, and end_call true. If they decline the callback too ("abhi nahi", "sochenge", "nahi"), do not ask for or propose a time again: one warm line and end_call true.
+- If they just want to hang up with no time: one short line in their own register ("Theek hai ji, main baad mein try karta hoon.") then end_call true. Never ask for their phone number on any call — you are already speaking on it; when something is to be sent, ask "isi number pe bhej doon?". When you do repeat a number back, say it in groups ("95845 16352"), never as one run-on figure.
+- Refusal vs. impatience: end_call true only when they explicitly decline, say bye/thanks-that's-all, or tell you to stop. A question, pushback or "bas gaadi dikhao", "arre", "par", "toh batao", "kuch idea toh hoga" from someone still talking is engagement, never a refusal — answer it. Never set end_call on a turn where they merely confirmed a detail ("this number", "haan") or you promised to send something: say it is coming and wait for them to close. When they say "ok bye" after the next step is fixed, one short sign-off restating the time and end_call true. After a refusal from a caller who already challenged you ("kaun ho aap", "kahan se number mila"), never fish for referrals or "ek chhoti si baat": apologise in half a line, intent "not_interested", qualification "Cold", end_call true. If asked where you got their number, name only the source in the Caller section (else "hamari enquiry list se, galti hai to sorry"), never guess a reason, and add no qualifying question to that reply.
 - If the customer says goodbye, has no more questions, or wants to end the call: acknowledge naturally, say a polite goodbye, and end_call true. Do not ask them anything else.
 - Email addresses: use exactly what they said. Never add or remove a dot, and never turn a spoken name into "first.last". If they correct it ("dot nahi hai", "directly likhna hai"), repeat the corrected address back once and use only that from then on.
-- When a meeting is agreed, confirm day and time back to them, convert relative dates using today's date, fill crm_update.meeting_at, then wrap up.
+- A visit, test drive, showroom/yard appointment or "aa sakta hoon kal 6 baje" IS the meeting: never convert it into a callback and never say the team will call instead. When a day and time is agreed, confirm it back once, convert relative dates using the # Today section (a date before today is never allowed), fill crm_update.meeting_at, set intent "meeting" and qualification "Hot", then wrap up — stop qualifying, and never propose a different time than the one they gave. If they ask where to come, give the location from the Company brief (or say the address goes to this same number) and ask when. Never set end_call true on a turn that ends with a question.
 - Set end_call true only after your closing line.
 
 # The team behind you
@@ -508,8 +553,9 @@ Continue from what was already discussed: do not re-introduce the company or ask
 {kb}
 
 # Output
-Return ONLY a JSON object, no prose:
-{TURN_SCHEMA}"""
+Your entire output must start with '{{' and be only this JSON object — no prose before or after it:
+{TURN_SCHEMA}
+Field rules: write every detail into crm_update on the SAME turn it is confirmed (email, requirement, meeting_at, callback_at), never deferred to the closing turn. intent: "interested" as soon as they say what they want to buy or sell; "pricing" when they ask what they will pay or get; "question" for "kaun ho aap" / "kahan se number mila" / any factual question; "callback" (with callback_at) whenever a call back is agreed; "meeting" (with meeting_at) when a meeting or visit is agreed; "not_interested", "do_not_call", "wrong_person" on the matching close; "end_call" only for a normal goodbye; "other" only when nothing else fits. qualification: "Unknown" until their need is discussed (never "Cold" for a busy caller), "Warm" once need or budget is known, "Hot" when need plus a visit/meeting is agreed, "Cold" only on a refusal."""
 
 
 END_MARK = "<END>"
@@ -567,6 +613,19 @@ If the call is wrapping up, you said goodbye, they answered 'no' to needing anyt
 Thanks, "ok bye", "theek hai", silence after the goal is achieved: say one short farewell with {END_MARK}. Do not offer more help a second time."""
 
 
+# Turns that cannot need the knowledge base: acknowledgements, closings, scheduling talk. Keyword search still
+# runs for them; the paid embedding round trip does not.
+_NO_RAG = re.compile(r"^\W*(haan|han|ji|ok|okay|hmm+|accha|acha|theek hai|thik hai|bye|nahi|nahin|no|yes|sure|bolo|boliye|batao|"
+                     r"हाँ|हां|जी|ठीक है|नहीं|अच्छा|बोलिए|बताओ|बताइए|hello|hi)\W*$|"
+                     r"\b(call (kar|karo|karna|back)|baad mein|kal |shaam|subah|baje|minute|busy|meeting mein|rakh(ta|ti)? hoon|bye)\b", re.I)
+
+
+def needs_knowledge(customer_text: str) -> bool:
+    """Whether this turn is worth an embedding request: substantive text that is not scheduling or a closer."""
+    text = (customer_text or "").strip()
+    return len(text.split()) >= 3 and not _NO_RAG.search(text)
+
+
 def retrieval_query(history: list[dict], customer_text: str) -> str:
     """What to search the knowledge base with. Shared so a prefetch warms the exact query the turn uses."""
     last_agent = next((h["text"] for h in reversed(history) if h["role"] == "assistant"), "")
@@ -586,7 +645,9 @@ def history_window(history: list[dict], summary: str | None = None, compacted_up
     if compacted_upto is not None:
         start = max(int(compacted_upto), len(history) - MAX_HISTORY_TURNS - COMPACT_EVERY_TURNS)
     elif summary:
-        start -= COMPACT_EVERY_TURNS - 1  # the widest the hole can be between two compactions
+        # Without the exact compaction index, reach back a full cycle: at the boundary itself the window
+        # otherwise starts one turn after the summary's edge and that turn is in neither.
+        start -= COMPACT_EVERY_TURNS
     return history[max(start, 0):]
 
 
@@ -660,7 +721,7 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
     while the caller is still talking, so the vector is normally already cached and free. A cold or
     slow turn falls back to keyword search rather than making the caller wait.
     """
-    messages, _ = build_messages(agent_id, history, customer_text, lead, use_embeddings=True, top_k=3,
+    messages, _ = build_messages(agent_id, history, customer_text, lead, use_embeddings=needs_knowledge(customer_text), top_k=3,
                                  embed_timeout=LIVE_EMBED_TIMEOUT, summary=summary, compacted_upto=compacted_upto)
     system = messages[0]["content"].rsplit("# Output", 1)[0]
     # The JSON-mode rules talk about fields; phrased as fields, the model emits tool calls instead of speech.
@@ -752,6 +813,13 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
                 spoken.append(delta)
                 yield delta
 
+    if tools and not llm.tools_via_openrouter():
+        # No native tool calling available (OpenRouter out of credits or not configured): the same tools,
+        # driven through a JSON turn on whatever provider answers (Sarvam), so a colleague's "send them the
+        # brochure" / "schedule a callback" still happens instead of an agent that can only chat.
+        yield from _json_tool_turn(messages, tools, agent_id, purpose)
+        return
+
     for _round in range(MAX_TOOL_ROUNDS):
         yield from process_stream(messages)
         if not tool_call_buffer:
@@ -779,6 +847,106 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
         yield from process_stream(messages, with_tools=False)
 
 
+def _json_tool_turn(messages: list[dict], tools: list[dict], agent_id: int, purpose: str):
+    """
+    Tool use for providers without native function calling. Each round asks for one JSON object with the
+    spoken reply and, optionally, one tool to run; the result is fed back and the model is asked again.
+    """
+    from app.services.agent_tools import execute_tool
+    catalogue = "\n".join(f'- {t["function"]["name"]}: {t["function"]["description"]} Arguments: {json.dumps(t["function"].get("parameters", {}).get("properties", {}))}'
+                          for t in tools)
+    instruction = (
+        "\n\n# Tools (answer as JSON only)\n"
+        "You can run one tool per turn. Respond with ONLY this JSON object, nothing else:\n"
+        '{"reply": "what you say now, in the caller\'s language (empty string if a tool must run first)", '
+        '"tool": {"name": "<tool name>", "arguments": {...}} or null}\n'
+        "Available tools:\n" + catalogue + "\n"
+        "When the tool result comes back you will be asked again: then give the spoken reply and set tool to null. "
+        "Never invent a result; if a tool is needed, run it."
+    )
+    work = [dict(messages[0]), *messages[1:]]
+    work[0]["content"] = work[0]["content"] + instruction
+    seen = None
+    for _round in range(MAX_TOOL_ROUNDS + 1):
+        result = llm.complete(work, json_mode=True, max_tokens=TOOL_MAX_TOKENS, temperature=0.3)
+        data = _parse_turn(result.text)
+        tool = data.get("tool") if isinstance(data.get("tool"), dict) else None
+        reply = str(data.get("reply") or "").strip()
+        if not tool:
+            yield reply or "Ji, bataiye."
+            return
+        name = str(tool.get("name") or "")
+        args = tool.get("arguments") if isinstance(tool.get("arguments"), dict) else {}
+        if seen == (name, json.dumps(args, sort_keys=True)):
+            # Same tool, same arguments as last round: the result is already above. Push it to act on it.
+            work.append({"role": "user", "content": "You already ran that and its result is above. Either run the NEXT tool needed "
+                                                    "(e.g. schedule_callback / update_lead_status with the lead_id from the result) or reply now with tool null."})
+            continue
+        seen = (name, json.dumps(args, sort_keys=True))
+        outcome = execute_tool(name, json.dumps(args, ensure_ascii=False), agent_id, purpose)
+        log.info("JSON tool round %s: %s -> %s", _round + 1, name, outcome[:80])
+        work.append({"role": "assistant", "content": json.dumps({"reply": reply, "tool": {"name": name, "arguments": args}}, ensure_ascii=False)})
+        work.append({"role": "user", "content": f"[Result of {name}: {outcome[:1500]}]\nNow tell the caller, in one or two spoken sentences, and set tool to null."})
+    log.warning("JSON tool loop hit %s rounds for purpose %s", MAX_TOOL_ROUNDS, purpose)
+    yield "Ji, maine note kar liya hai, aage ka kaam ho jayega."
+
+
+def _clean_crm(crm: dict) -> dict:
+    """Spoken forms the model copies verbatim: "rahul at gmail dot com" -> rahul@gmail.com; a bad email is dropped."""
+    if crm.get("email"):
+        from app.services.voice_stream import spoken_email
+        fixed = spoken_email(crm["email"])
+        if fixed:
+            crm["email"] = fixed
+        elif "@" not in crm["email"]:
+            crm.pop("email")
+    return crm
+
+
+def _flag(v) -> bool:
+    """A JSON boolean the model may have quoted: "false"/"no" must not end a call."""
+    return v if isinstance(v, bool) else str(v).strip().lower() in ("true", "yes", "1")
+
+
+def _parse_turn(text: str) -> dict:
+    """The model's JSON turn, tolerating the ways sarvam-105b bends the format."""
+    try:
+        data = llm.parse_json(text)
+        if not isinstance(data, dict):
+            raise ValueError("LLM JSON is not an object")
+    except Exception:
+        raw = text.strip()
+        # A reply cut mid-JSON still has its spoken text: salvage it rather than read '{"reply": ...' aloud.
+        m = re.search(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)', raw)
+        if m:
+            log.warning("Truncated JSON LLM reply, salvaged the reply field")
+            data = {"reply": m.group(1).replace('\\"', '"').replace("\\n", " ")}
+        elif raw.startswith("{") or raw.startswith("```") or raw.startswith("<"):
+            log.warning("Non-JSON LLM reply with no usable text")
+            data = {"reply": ""}
+        else:
+            log.warning("Non-JSON LLM reply, using raw text")
+            data = {"reply": raw.strip('"')}
+    # A tool-call markup names the tool outside the arg tags; end_call there means the same as the JSON flag.
+    if re.search(r"<tool_call>\s*end_call", text):
+        data["end_call"] = True
+    # sarvam-105b answers tool requests in its own markup whatever the schema says: lift the tool name and
+    # the <arg_key> pairs (already parsed into `data`) into the {"tool": {...}} shape the JSON tool loop runs.
+    m = re.search(r"<tool_call>\s*([A-Za-z_][\w]*)", text)
+    if m and m.group(1) != "end_call" and not isinstance(data.get("tool"), dict):
+        args = {k: v for k, v in data.items() if k not in ("reply", "tool", "end_call", "language", "intent", "qualification", "crm_update")}
+        data = {"reply": str(data.get("reply") or ""), "tool": {"name": m.group(1), "arguments": args}, "end_call": data.get("end_call", False)}
+    data["end_call"] = _flag(data.get("end_call"))
+    return data
+
+
+# Spoken when the model returns no reply text; keyed by what it was doing and the call language.
+EMPTY_REPLY = {
+    "repeat": {"en": "Sorry, could you say that again?", "hi": "माफ़ कीजिए, क्या आप दोबारा बता सकते हैं?"},
+    "goodbye": {"en": "No problem. Thanks for your time, have a great day!", "hi": "कोई बात नहीं। आपके समय के लिए धन्यवाद, आपका दिन शुभ हो!"},
+}
+
+
 def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True,
             summary: str | None = None) -> dict:
     """
@@ -787,32 +955,37 @@ def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, 
     started = time.perf_counter()
     messages, knowledge = build_messages(agent_id, history, customer_text, lead, use_embeddings, summary=summary)
     result = llm.complete(messages, json_mode=True, max_tokens=400, temperature=0.4)
-    try:
-        data = llm.parse_json(result.text)
-    except Exception:
-        raw = result.text.strip()
-        # A reply cut mid-JSON still has its spoken text: salvage it rather than read '{"reply": ...' aloud.
-        m = re.search(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)', raw)
-        if m:
-            log.warning("Truncated JSON LLM reply, salvaged the reply field")
-            data = {"reply": m.group(1).replace('\\"', '"').replace("\\n", " ")}
-        elif raw.startswith("{") or raw.startswith("```"):
-            log.warning("Non-JSON LLM reply with no usable text: asking the caller to continue")
-            data = {"reply": ""}
-        else:
-            log.warning("Non-JSON LLM reply, using raw text")
-            data = {"reply": raw.strip('"')}
-
-    # Same gate as the streaming path: software words never reach a caller, whichever mode answered.
-    reply = plain_speech(str(data.get("reply") or "").strip()) or "Sorry, could you say that again?"
+    data = _parse_turn(result.text)
+    reply = plain_speech(str(data.get("reply") or "").strip())
+    if not reply:
+        # sarvam-105b sometimes answers a tool-call markup (<tool_call>end_call ...) with no speech at all,
+        # e.g. right after the caller gives a callback time. One more round with the model, told to speak,
+        # beats any canned line: it confirms the time it just heard, in the caller's language.
+        nudge = {"role": "system", "content": "Your last output contained no spoken reply. Answer now with the JSON object "
+                 "described above, including a short natural 'reply' the customer will hear" + (" that confirms and closes the call." if data.get("end_call") else ".")}
+        retry = llm.complete(messages + [nudge], json_mode=True, max_tokens=300, temperature=0.4)
+        more = _parse_turn(retry.text)
+        reply = plain_speech(str(more.get("reply") or "").strip())
+        if reply:
+            data = {**data, **{k: v for k, v in more.items() if v not in (None, "", {}, [])}, "end_call": bool(data.get("end_call") or more.get("end_call"))}
+            result = retry
+    # "Hindi", "hi", "hi_IN": map whatever the model wrote onto a code TTS accepts, else None so callers
+    # fall back to detection / the session language instead of sending Sarvam an unknown code.
+    raw_lang = str(data.get("language") or "").strip().lower().replace("_", "-")
+    language = next((code for code, name in LANGUAGES.items() if raw_lang in (code.lower(), code[:2].lower(), name.lower())), None)
+    if not reply:
+        # The model sent no spoken text (usually an end_call with an empty reply). Speak in the call's
+        # language, and say goodbye when it is ending the call rather than asking the caller to repeat.
+        lang = "hi" if str(language or lead.get("language") or agents.get_profile(agent_id).get("default_language") or "").lower().startswith("hi") else "en"
+        reply = EMPTY_REPLY["goodbye" if data.get("end_call") else "repeat"][lang]
     crm = data.get("crm_update") if isinstance(data.get("crm_update"), dict) else {}
     return {
         "reply": reply,
-        "language": data.get("language") or None,
+        "language": language,
         "intent": data.get("intent") if data.get("intent") in INTENTS else "other",
         "qualification": data.get("qualification") if data.get("qualification") in ("Hot", "Warm", "Cold") else None,
         "end_call": bool(data.get("end_call")),
-        "crm_update": {k: str(v).strip() for k, v in crm.items() if v not in (None, "", [], {})},
+        "crm_update": _clean_crm({k: str(v).strip() for k, v in crm.items() if v not in (None, "", [], {})}),
         "knowledge": [{"title": k["title"], "score": k["score"], "text": k["text"][:300]} for k in knowledge],
         "provider": f"{result.provider}:{result.model}",
         "llm_ms": result.latency_ms,
@@ -832,12 +1005,14 @@ Rules:
 
 Return ONLY JSON:
 {{
-  "summary": "2-3 sentence factual summary",
+  "summary": "2-3 factual sentences that justify the qualification: what they need, product, budget, timeline, and the next step agreed (e.g. 'Interested in Creta, budget around 12L, wants to buy within a month, agreed to showroom visit Tuesday 11am')",
   "name": "customer's own name if they said it, else empty",
   "company": "customer's company or business if they said it, else empty",
   "city": "customer's city if they said it, else empty",
   "budget": "customer's budget if they said it, else empty",
   "timeline": "when the customer needs it if they said it, else empty",
+  "product": "the specific model / product / service the customer named, else empty",
+  "next_action": "the next step agreed with the customer in a few words (showroom visit Tue 11am | callback 6pm | WhatsApp details | sales advisor to call | none)",
   "qualification": "Hot | Warm | Cold",
   "outcome": "meeting_booked | interested | callback_requested | not_interested | do_not_call | wrong_person | no_conversation | other",
   "sentiment": "positive | neutral | negative",

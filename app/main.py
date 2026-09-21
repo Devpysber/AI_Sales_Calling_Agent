@@ -71,6 +71,33 @@ async def lifespan(app: FastAPI):
         task = asyncio.create_task(scheduler_loop())
     log.info("%s %s started (%s)", settings.app_name, settings.app_version, settings.environment)
     
+    # Uploads and coverage analyses run on daemon threads; a restart mid-way left them "processing" /
+    # "analyzing" forever with the Knowledge page's buttons disabled. Fail the uploads (their text was
+    # never stored) and rerun the analyses.
+    def recover_knowledge_state():
+        from sqlalchemy import update
+        from app.core.database import get_db
+        from app.models.document import Document
+        from app.services import agents as agent_service, knowledge_profile
+        with get_db() as db:
+            db.execute(update(Document).where(Document.status == "processing")
+                       .values(status="failed", error="Interrupted by a server restart. Upload it again."))
+        for agent_id in agent_service.ids():
+            if (knowledge_profile.get(agent_id) or {}).get("status") == "analyzing":
+                knowledge_profile.rebuild_async(agent_id)
+    def migrate_speed_to_lead():
+        # The 1-2 minute default was replaced by 1-2 hours; agents still on the exact old default follow.
+        from app.services import agents as agent_service
+        for agent_id in agent_service.ids():
+            cfg = agent_service.get_automation(agent_id)
+            if cfg.get("speed_to_lead_min_seconds") == 60 and cfg.get("speed_to_lead_max_seconds") == 120:
+                agent_service.update_automation(agent_id, {"speed_to_lead_min_seconds": 3600, "speed_to_lead_max_seconds": 7200}, actor="system")
+    try:
+        await asyncio.to_thread(migrate_speed_to_lead)
+        await asyncio.to_thread(recover_knowledge_state)
+    except Exception as e:  # noqa: BLE001 - housekeeping must never block startup
+        log.warning("Knowledge state recovery skipped: %s", e)
+
     # Warm up TTS in background so startup isn't blocked, but it's ready quickly
     from app.services import tts, llm
     asyncio.create_task(asyncio.to_thread(tts.warmup))

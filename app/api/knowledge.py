@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from app.api.deps import workspace
+from app.api.deps import require_admin, workspace
 from app.core.auth import actor
 from app.services import knowledge_profile, rag
 
@@ -21,17 +21,19 @@ class Query(BaseModel):
 
 @router.get("")
 def list_documents(agent_id: int = Depends(workspace)):
-    return {"documents": rag.list_documents(agent_id), "stats": rag.stats(agent_id), "coverage": knowledge_profile.get(agent_id)}
+    documents = rag.list_documents(agent_id)
+    # The index counts distinct titles of ready chunks; the page lists documents. Report the list's count.
+    return {"documents": documents, "stats": {**rag.stats(agent_id), "documents": len(documents)}, "coverage": knowledge_profile.get(agent_id)}
 
 
-@router.post("/coverage")
+@router.post("/coverage", dependencies=[Depends(require_admin)])
 def refresh_coverage(agent_id: int = Depends(workspace)):
     """Re-read the documents and refill topic coverage (runs in the background)."""
     knowledge_profile.rebuild_async(agent_id)
     return {"status": "analyzing"}
 
 
-@router.post("/upload")
+@router.post("/upload", dependencies=[Depends(require_admin)])
 async def upload(request: Request, file: UploadFile = File(...), title: str = Form(""), agent_id: int = Depends(workspace)):
     content = await file.read()
     if len(content) > MAX_UPLOAD:
@@ -42,7 +44,7 @@ async def upload(request: Request, file: UploadFile = File(...), title: str = Fo
         raise HTTPException(400, str(e))
 
 
-@router.post("/text")
+@router.post("/text", dependencies=[Depends(require_admin)])
 def add_text(body: TextDoc, request: Request, agent_id: int = Depends(workspace)):
     try:
         return rag.add_text(agent_id, body.title, body.text, actor(request))
@@ -63,7 +65,7 @@ def get(doc_id: int, agent_id: int = Depends(workspace)):
     return doc
 
 
-@router.delete("/{doc_id}")
+@router.delete("/{doc_id}", dependencies=[Depends(require_admin)])
 def delete(doc_id: int, request: Request, agent_id: int = Depends(workspace)):
     if not rag.delete_document(agent_id, doc_id, actor(request)):
         raise HTTPException(404, "Document not found.")

@@ -107,6 +107,55 @@ def _fit_to_cap(messages: list[dict], error_text: str, passes: int = 0) -> list[
 _ACCOUNT_HINTS = ("no credits", "insufficient_quota", "exceed your available credits", "invalid api key", "unauthorized")
 
 
+OPENROUTER_DEAD_KEY = "openrouter_dead_until"
+OPENROUTER_DEAD_SECONDS = 600
+
+
+def _openrouter_dead() -> bool:
+    """OpenRouter answered 401/402 recently: no credits / bad key. Not worth a request per turn."""
+    from app.core import store
+    until = store.get_json(OPENROUTER_DEAD_KEY)
+    return bool(until) and float(until) > time.time()
+
+
+def _mark_openrouter_dead(reason: str) -> None:
+    from app.core import store
+    store.set_json(OPENROUTER_DEAD_KEY, time.time() + OPENROUTER_DEAD_SECONDS, ttl=OPENROUTER_DEAD_SECONDS)
+    log.warning("OpenRouter unusable for %ss (%s); live turns go to Sarvam without tools until then", OPENROUTER_DEAD_SECONDS, reason[:120])
+
+
+PREFLIGHT_KEY = "llm_preflight"
+PREFLIGHT_SECONDS = 300
+
+
+def providers_ready(force: bool = False) -> tuple[bool, str]:
+    """
+    Can the agent talk right now? One tiny completion, cached five minutes, checked before an automated
+    call is placed: dialling a customer into an agent whose providers are down is worse than calling
+    later. (ok, detail)
+    """
+    from app.core import store
+    cached = None if force else store.get_json(PREFLIGHT_KEY)
+    if cached and float(cached.get("until", 0)) > time.time():
+        return bool(cached["ok"]), cached.get("detail", "")
+    ok, detail = False, ""
+    try:
+        r = complete([{"role": "user", "content": "Reply with the single word OK."}], max_tokens=5, temperature=0, timeout=8)
+        ok, detail = True, f"{r.provider}/{r.model} answered in {r.latency_ms}ms"
+    except Exception as e:  # noqa: BLE001 - every provider failed: that is the finding
+        detail = str(e)[:300]
+    # A failure is re-checked sooner so a recovered provider is picked up within a minute.
+    store.set_json(PREFLIGHT_KEY, {"ok": ok, "detail": detail, "until": time.time() + (PREFLIGHT_SECONDS if ok else 60)}, ttl=PREFLIGHT_SECONDS)
+    if ok:
+        store.delete("llm_outage_postponed")  # the panel warning clears once the agent can talk again
+    return ok, detail
+
+
+def tools_via_openrouter() -> bool:
+    """Native tool-calling is only available through OpenRouter, and only while the account is usable."""
+    return bool(settings.openrouter_api_key) and not _openrouter_dead()
+
+
 def _is_account_error(text: str) -> bool:
     """A 401/402-class failure: the whole provider account is out, not just this model."""
     lowered = (text or "").lower()
@@ -210,7 +259,8 @@ def _openrouter(messages: list[dict], json_mode: bool, max_tokens: int, temperat
         future.started = time.monotonic()
         pending.add(future)
 
-    launch()
+    if models:
+        launch()
     while pending or launched < len(models):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -313,6 +363,12 @@ def _stream_sse(url: str, headers: dict, body: dict, first_token_timeout: float)
             if tool_calls:
                 got = True
                 yield {"tool_calls": tool_calls}
+            # agent.process_stream appends the hang-up marker to a farewell cut by max_tokens; it can only
+            # do that if the finish reason is forwarded. Not counted as content: a stream that ends with
+            # only a finish frame still falls through to the next provider.
+            fr = choices[0].get("finish_reason") if choices else None
+            if fr:
+                yield {"finish_reason": fr}
         if not got:
             raise LLMError("empty stream")
 
@@ -324,12 +380,15 @@ def _stream_attempts(tools: list[dict] | None) -> list[tuple[str, str]]:
     one model used to end the call outright, even with working models configured behind it.
     """
     attempts: list[tuple[str, str]] = []
+    # Ids the Integrations health check found retired: a stale .env must not cost a wasted request per reply.
+    from app.core import store
+    retired = set(store.get_json("openrouter_unknown_models", []) or [])
     for name in [p.strip() for p in settings.llm_providers.split(",") if p.strip()]:
         if name == "sarvam" and settings.sarvam_api_key and not tools:
             # Sarvam streaming does not emit standard tool_calls deltas.
             attempts.append(("sarvam", settings.sarvam_llm_model))
         elif name == "openrouter" and settings.openrouter_api_key:
-            attempts += [("openrouter", m.strip()) for m in settings.openrouter_models.split(",") if m.strip()]
+            attempts += [("openrouter", m.strip()) for m in settings.openrouter_models.split(",") if m.strip() and m.strip() not in retired]
     if settings.openrouter_api_key:
         primary = {m for n, m in attempts}
         attempts += [("openrouter-fallback", m) for m in _fallback_models() if m not in primary]
@@ -365,6 +424,11 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
     """
     errors = []
     dead: set[str] = set()  # providers that answered 401/402: skip their remaining models
+    if tools and _openrouter_dead() and settings.sarvam_api_key:
+        # Tools need OpenRouter; with the account out of credits every turn walked the whole chain (retired
+        # id, 402, free-tier timeout) and answered 7s late. Speak from Sarvam straight away instead.
+        yield from stream(_without_tools(messages), max_tokens=max_tokens, temperature=temperature, tools=None, deadline=deadline)
+        return
     compact = None
     # One budget for the whole turn, shared with the no-tools retry below.
     deadline = deadline or (time.monotonic() + settings.llm_stream_budget_seconds)
@@ -395,6 +459,10 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
             log.warning("LLM primaries failed (%s); trying fallback %s", " | ".join(errors)[:160], model)
         attempt_messages, trims = (compact if name == "openrouter-fallback" else messages), 0
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining < 1.0:
+                errors.append(f"{name}/{model}: turn budget of {settings.llm_stream_budget_seconds}s spent")
+                break
             body.update(messages=attempt_messages, max_tokens=max_tokens, temperature=temperature)
             produced = False
             try:
@@ -417,6 +485,8 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
                 log.warning("LLM stream %s/%s failed: %s", name, model, e)
                 if _is_account_error(str(e)):
                     dead.add(provider)
+                    if provider == "openrouter":
+                        _mark_openrouter_dead(str(e))
                 break
     if tools:
         # Team/admin calls otherwise depend on OpenRouter alone; answer in speech rather than hang up.
@@ -475,7 +545,7 @@ def embed(texts: list[str], timeout: float = 30) -> list[list[float]] | None:
     """
     Embeddings via OpenRouter; None when unavailable (RAG then uses keyword search only).
     """
-    if not settings.openrouter_api_key or not texts:
+    if not settings.openrouter_api_key or not texts or _openrouter_dead():
         return None
     try:
         res = _client.post(

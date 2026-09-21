@@ -159,10 +159,10 @@ export default function Leads() {
 
   const bulk = useMutation({
     mutationFn: ({ action, ids }: { action: 'delete' | 'queue' | 'call'; ids: number[] }) =>
-      api<{ deleted?: number; queued?: number; placed?: unknown[]; errors?: { error: string }[] }>(`${base}/leads/bulk/${action}`, { method: 'POST', json: { ids } }),
+      api<{ deleted?: number; queued?: number; skipped?: number; placed?: unknown[]; errors?: { error: string }[] }>(`${base}/leads/bulk/${action}`, { method: 'POST', json: { ids } }),
     onSuccess: (res, { action }) => {
       if (action === 'delete') toast.success(`Deleted ${res.deleted} lead(s)`)
-      if (action === 'queue') toast.success(`Queued ${res.queued} lead(s)`, { description: 'Auto-dial will call them within calling hours.' })
+      if (action === 'queue') toast.success(`Queued ${res.queued} lead(s)`, { description: res.skipped ? `${res.skipped} skipped (Do-Not-Call or invalid number). Auto-dial will call the rest within calling hours.` : 'Auto-dial will call them within calling hours.' })
       if (action === 'call') {
         toast.success(`Placed ${res.placed?.length ?? 0} call(s)`)
         if (res.errors?.length) toast.warning(`${res.errors.length} not placed`, { description: res.errors[0]!.error })
@@ -203,7 +203,7 @@ export default function Leads() {
 
   const summary: [typeof Users, string, number | undefined, () => void, boolean][] = [
     [Users, 'All leads', s?.total, clearFilters, activeFilters === 0],
-    [Clock, 'Waiting to call', s?.pending, () => setFilters({ status: 'New', call_status: '', qualification: '', view: '' }), filters.status === 'New'],
+    [Clock, 'Waiting to call', s?.pending, () => setFilters({ status: '', call_status: '', qualification: '', view: 'waiting' }), filters.view === 'waiting'],
     [Flame, 'Hot', s ? s.by_qualification?.Hot ?? 0 : undefined, () => setFilters({ status: '', call_status: '', qualification: 'Hot', view: '' }), filters.qualification === 'Hot'],
     [CalendarCheck, 'Meetings', s?.meetings, () => setFilters({ status: 'Meeting Booked', call_status: '', qualification: '', view: '' }), filters.status === 'Meeting Booked'],
   ]

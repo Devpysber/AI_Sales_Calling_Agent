@@ -40,6 +40,7 @@ Return ONLY JSON: {{"overview": {{"summary": "", "documents": []}}, ...}} with e
 of the documents the summary comes from."""
 
 _running: set[int] = set()
+_pending: set[int] = set()   # a rebuild asked for while one was running: run once more when it ends
 _lock = threading.Lock()
 
 
@@ -103,17 +104,24 @@ def rebuild(agent_id: int) -> dict:
 
 
 def rebuild_async(agent_id: int):
-    """Coalesce: one analysis per agent at a time."""
+    """Coalesce: one analysis per agent at a time; a request made mid-analysis queues exactly one rerun."""
     with _lock:
         if agent_id in _running:
+            _pending.add(agent_id)  # documents that finish during an analysis would otherwise never be read
             return
         _running.add(agent_id)
 
     def run():
-        try:
-            rebuild(agent_id)
-        finally:
+        while True:
+            try:
+                rebuild(agent_id)
+            except Exception as e:  # noqa: BLE001 - rebuild() already records failures in the profile
+                log.warning("Knowledge coverage rerun failed for agent %s: %s", agent_id, e)
             with _lock:
+                if agent_id in _pending:
+                    _pending.discard(agent_id)
+                    continue
                 _running.discard(agent_id)
+                return
 
     threading.Thread(target=run, daemon=True, name=f"kb-coverage-{agent_id}").start()

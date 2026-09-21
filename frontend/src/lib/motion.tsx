@@ -28,8 +28,10 @@ const MOTION_EVENT = 'motion:changed'
 export function getMotionSetting(): MotionSetting {
   try {
     const v = localStorage.getItem(MOTION_KEY)
-    return v === 'full' || v === 'off' ? v : 'system'
-  } catch { return 'system' }
+    // Default is always on: "follow Windows" silently killed every animation on machines with battery
+    // saver or "Show animations" off, and it read as the site being broken. System/off remain opt-in.
+    return v === 'system' || v === 'off' ? v : 'full'
+  } catch { return 'full' }
 }
 
 export function applyMotionSetting(setting: MotionSetting = getMotionSetting()) {

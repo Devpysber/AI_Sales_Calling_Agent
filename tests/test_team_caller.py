@@ -66,12 +66,12 @@ def test_a_colleagues_call_never_becomes_a_lead(client, monkeypatch):
     from app.services import call_service, team_service
     from app.services.crm_service import CRMService
 
-    agent = client.post("/api/agents", json={"name": "Team check", "phone_number": "+91 80 5555 0000"}).json()
+    agent = client.post("/api/agents", json={"name": "Team check", "phone_number": "+91 80 5555 0002"}).json()
     monkeypatch.setattr(team_service, "members",
                         lambda: [{"id": "m1", "name": "Ashish Sharma", "phone": "+919584516352", "email": "a@b.c"}])
 
     before = CRMService(agent["id"]).list_leads()["total"]
-    session = call_service.CallService().create_inbound("919584516352", "918055550000", "uuid-team")
+    session = call_service.CallService().create_inbound("919584516352", "918055550002", "uuid-team")
     assert session is not None
 
     assert CRMService(agent["id"]).list_leads()["total"] == before, "a colleague must not be saved as a lead"

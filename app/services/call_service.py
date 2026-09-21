@@ -147,6 +147,29 @@ def merge_call_context(session_lead: dict, fresh: dict | None) -> dict:
     return lead
 
 
+def spoken_language(history: list[dict]) -> str | None:
+    """Language the caller mostly spoke on this call, from the script of their transcribed lines; None when unclear."""
+    scripts = {"hi-IN": 0, "gu-IN": 0, "ta-IN": 0, "te-IN": 0, "bn-IN": 0, "kn-IN": 0, "mr-IN": 0, "en-IN": 0}
+    ranges = {"hi-IN": (0x0900, 0x097F), "bn-IN": (0x0980, 0x09FF), "gu-IN": (0x0A80, 0x0AFF), "ta-IN": (0x0B80, 0x0BFF),
+              "te-IN": (0x0C00, 0x0C7F), "kn-IN": (0x0C80, 0x0CFF)}
+    for turn in history:
+        if turn.get("role") not in ("customer", "user"):
+            continue
+        for ch in str(turn.get("text") or ""):
+            if ch.isascii() and ch.isalpha():
+                scripts["en-IN"] += 1
+            else:
+                for code, (lo, hi) in ranges.items():
+                    if lo <= ord(ch) <= hi:
+                        scripts[code] += 1
+                        break
+    total = sum(scripts.values())
+    if total < 20:
+        return None
+    code, count = max(scripts.items(), key=lambda kv: kv[1])
+    return code if count / total >= 0.6 else None
+
+
 def _valid_meeting(value) -> str | None:
     """Normalise an LLM-extracted meeting time; drop anything unparsable, in the past, or more than a year out."""
     try:
@@ -167,6 +190,20 @@ def within_calling_hours(cfg: dict, now: datetime | None = None) -> bool:
     start = cfg.get("calling_hours_start", 9)
     end = cfg.get("calling_hours_end", 21)
     return now.weekday() in days and start <= now.hour < end
+
+
+def next_calling_window(cfg: dict, now: datetime | None = None) -> datetime:
+    """The next moment automated calls may go out (IST): now if inside the window, else the next opening."""
+    now = now or datetime.now(IST)
+    if within_calling_hours(cfg, now):
+        return now
+    days = cfg.get("calling_days") or [0, 1, 2, 3, 4, 5]
+    start = int(cfg.get("calling_hours_start", 9))
+    for d in range(0, 8):
+        day = (now + timedelta(days=d)).replace(hour=start, minute=0, second=0, microsecond=0)
+        if day.weekday() in days and day > now:
+            return day
+    return now
 
 
 def _utcnow():
@@ -234,6 +271,15 @@ class CallService:
         if self.has_active(lead_id):
             raise CallError("A call to this lead is already in progress.")
 
+        # An agent whose AI providers are down cannot hold the call. Automated triggers move the slot two
+        # hours on, tell the customer and the admin, and raise a panel alert; a manual attempt gets the reason.
+        from app.services import llm
+        ready, detail = llm.providers_ready()
+        if not ready:
+            if trigger != "manual":
+                self._postpone_for_outage(lead, trigger, detail)
+            raise CallError("The AI providers are not answering right now (" + detail[:120] + "). "
+                            + ("The call was moved two hours on and the customer told." if trigger != "manual" else "Try again in a few minutes."))
         # Plivo fetches the answer XML from PUBLIC_BASE_URL; if it can't, the callee hears a hang-up.
         if not public_url_reachable():
             raise CallError(f"Plivo can't reach {settings.base_url or 'PUBLIC_BASE_URL'}. Start the tunnel "
@@ -416,6 +462,8 @@ class CallService:
         if session:
             call_session.update(session_id, ended=True)
 
+        # Live calls log the caller as "customer", the voicemail path as "user".
+        customer_turns = sum(1 for t in history if t["role"] in ("customer", "user"))
         if lead_id:
             lead = self.crm.get(lead_id) or {}
             updates = {"call_status": status}
@@ -434,14 +482,17 @@ class CallService:
                 updates["retry_count"] = 0
                 if lead.get("status") == "New":
                     updates["status"] = "Contacted"
+                if customer_turns and lead.get("callback_at") and trigger != "internal":
+                    # The conversation happened (a manual "Call now" ahead of the slot counts): the pending
+                    # scheduled call must not ring them again. A new time the customer asks for during the
+                    # call is written by the summary step afterwards. An unanswered or wordless attempt
+                    # keeps the slot, so it is retried like a real caller would.
+                    updates["callback_at"] = ""
             self.crm.update(lead_id, updates, actor="system", touch=True)
 
         events.record("call.ended", f"Call {status.lower()}", f"{duration}s · {cause or ''}".strip(" ·"),
                       agent_id=agent_id, lead_id=lead_id, call_id=call_id, data={"status": status, "duration": duration})
 
-        # Live calls log the caller as "customer", the voicemail path as "user": counting only one of them
-        # used to schedule the summary twice on some calls (double LLM spend, duplicate team alerts).
-        customer_turns = sum(1 for t in history if t["role"] in ("customer", "user"))
         # Colleague test calls get no summary: a role-played customer must not trigger team mails or callbacks.
         if (status == "Completed" or status == "Failed") and customer_turns and trigger != "internal":
             self._submit_summary(call_id, lead_id, history)
@@ -652,10 +703,10 @@ class CallService:
                 merged_text = _merge_text(current.get(key), s.get(key))
                 if merged_text is not None:
                     updates[key] = merged_text
-            # Budget and timeline are restated on most calls: keep one current line each instead of
-            # appending a near-duplicate after every conversation.
+            # Budget, timeline, product and next action are restated on most calls: keep one current line
+            # each instead of appending a near-duplicate after every conversation.
             notes_lines = [ln for ln in (current.get("notes") or "").splitlines() if ln.strip()]
-            for key, label in (("budget", "Budget"), ("timeline", "Timeline")):
+            for key, label in (("budget", "Budget"), ("timeline", "Timeline"), ("product", "Product"), ("next_action", "Next action")):
                 value = str(s.get(key) or "").strip()
                 if not value:
                     continue
@@ -667,7 +718,12 @@ class CallService:
             if merged != (current.get("notes") or ""):
                 updates["notes"] = merged
             callback_at = _valid_callback(s.get("callback_at"))
-            if not callback_at and (s.get("outcome") == "callback_requested" or str(s.get("callback_at") or "").strip()):
+            if meeting_at:
+                # A meeting or visit is booked: the meeting IS the next contact. A callback on top rang the
+                # customer twice ("discovery call at 5 PM" plus a callback an hour later).
+                callback_at = None
+                s["team_action"] = ""
+            if not callback_at and not meeting_at and (s.get("outcome") == "callback_requested" or str(s.get("callback_at") or "").strip()):
                 # A callback was promised but the model's time is unparsable or out of range: book the next slot
                 # inside calling hours rather than silently dropping the promise, and flag it for a person to fix.
                 try:
@@ -688,6 +744,11 @@ class CallService:
             if callback_at:
                 updates["callback_at"] = callback_at
                 updates.setdefault("follow_up_date", callback_at[:10])
+            spoken_lang = spoken_language(history)
+            if spoken_lang and spoken_lang != (self.crm.get(lead_id) or {}).get("language"):
+                # The script the caller actually used beats a seeded or guessed value: the next call's greeting
+                # and speech recognition run in it (an English record on a Hindi caller garbled call two).
+                updates["language"] = spoken_lang
             if qualification:
                 updates["qualification"] = qualification
             if s.get("status"):
@@ -858,9 +919,15 @@ class CallService:
             return
         crm = result["crm_update"]
         updates = {k: crm[k] for k in ("requirements", "objections", "follow_up_date", "email") if crm.get(k)}
+        if crm.get("requirement") and not updates.get("requirements"):
+            updates["requirements"] = str(crm["requirement"])[:500]
         meeting_at = _valid_meeting(crm.get("meeting_at"))
         if meeting_at:
             updates["meeting_at"] = meeting_at
+        callback_at = _valid_meeting(crm.get("callback_at"))  # same shape and sanity rules as a meeting time
+        if callback_at and not meeting_at:
+            updates["callback_at"] = callback_at
+            updates["call_status"] = "Pending"  # the callback job dials it
         if result["qualification"]:
             updates["qualification"] = result["qualification"]
         if result["intent"] == "do_not_call":
@@ -957,11 +1024,40 @@ class CallService:
         with get_db() as db:
             return bool(db.scalar(select(func.count(Call.id)).where(Call.lead_id == lead_id, Call.status.in_(ACTIVE))))
 
+    def _postpone_for_outage(self, lead: dict, trigger: str, detail: str) -> None:
+        """A scheduled call the agent cannot take right now: move it, tell the customer, tell the admin."""
+        from app.services.notification_service import notify_admin, send_email, email_sent
+        from app.core import store
+        later = datetime.now(IST) + timedelta(hours=2)
+        at = later.strftime("%Y-%m-%d %H:%M")
+        self.crm.update(lead["id"], {"callback_at": at, "call_status": "Pending"}, actor="system",
+                        event_type="callback.postponed", title=f"Call moved to {later:%d %b %H:%M}: AI providers unavailable")
+        company = (agents.get_profile(self.agent_id) or {}).get("company_name") or (agents.get(self.agent_id) or {}).get("name") or "our team"
+        if lead.get("email") and not lead.get("do_not_call"):
+            body = (f"Hi {lead.get('name') or ''},\n\nWe were about to call you but our lines are busy right now. "
+                    f"We will call you around {later:%I:%M %p} today ({later:%d %b}).\n\nIf another time suits you better, just reply to this email.\n\n{company}")
+            email_sent(send_email(lead["email"], f"{company}: we will call you a little later", body, lead_id=lead["id"], agent_id=self.agent_id, actor="system"))
+        # One panel alert per outage window, listing the calls it moved.
+        moved = store.get_json("llm_outage_postponed", {"leads": [], "since": time.time()}) or {}
+        moved.setdefault("leads", []).append({"lead_id": lead["id"], "name": lead.get("name") or lead.get("phone"), "agent_id": self.agent_id, "at": at, "trigger": trigger})
+        moved["detail"] = detail[:200]
+        store.set_json("llm_outage_postponed", moved, ttl=6 * 3600)
+        if len(moved["leads"]) == 1:
+            notify_admin("AI providers unavailable: scheduled calls are being moved",
+                         f"The agent could not reach any LLM provider ({detail[:300]}).\n\nScheduled calls are moved two hours on and the "
+                         f"customers with an email address are told. Check credits / keys on Integrations & system.\n\nFirst affected: "
+                         f"{lead.get('name') or lead.get('phone')} -> {at} IST.", lead_id=lead["id"], agent_id=self.agent_id)
+
     def expire_stale(self):
+        """Calls still active 20 minutes after they started never got a hangup callback: close them properly."""
         cutoff = _utcnow() - timedelta(minutes=20)
         with get_db() as db:
-            for call in db.scalars(select(Call).where(Call.status.in_(ACTIVE), Call.created_at < cutoff)):
-                call.status, call.error, call.ended_at = "Failed", "No hangup callback received", _utcnow()
+            stale = [(c.id, c.agent_id, c.call_uuid, c.answered_at is not None)
+                     for c in db.scalars(select(Call).where(Call.status.in_(ACTIVE), Call.created_at < cutoff))]
+        for call_id, agent_id, uuid, answered in stale:
+            with contextlib.suppress(Exception):
+                CallService(agent_id).on_hangup(call_id, "completed" if answered else "no_answer", 0,
+                                                "No hangup callback received", uuid)
 
     def stats(self, days: int = 14) -> dict:
         today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)

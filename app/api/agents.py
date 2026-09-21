@@ -44,8 +44,19 @@ def list_agents(request: Request):
     payload = getattr(request.state, "token_payload", {})
     if user == "team":
         unlocked = payload.get("unlocked", [])
+        reduced = []
         for a in all_a:
-            a["locked"] = a["id"] not in unlocked
+            if a["id"] in unlocked:
+                reduced.append({**a, "locked": False})
+                continue
+            # Locked workspace: name and colour for the switcher, nothing about its numbers or persona.
+            reduced.append({
+                "id": a["id"], "name": a["name"], "color": a.get("color"), "status": a.get("status"), "locked": True,
+                "stats": {k: (None if k == "last_call_at" else 0) for k in (a.get("stats") or {"leads": 0, "hot": 0, "meetings": 0, "calls_today": 0, "connected_today": 0, "live": 0, "documents": 0, "last_call_at": None})},
+                "persona": {k: "" for k in (a.get("persona") or {"agent_name": "", "company_name": "", "voice_speaker": "", "default_language": ""})},
+                "setup": {k: False for k in (a.get("setup") or {})},
+            })
+        all_a = reduced
     return {"agents": all_a, "voices": tts.SPEAKERS, "languages": tts.LANGUAGES}
 
 
@@ -115,7 +126,7 @@ def get_agent(agent_id: int = Depends(workspace)):
     return {**agents.get(agent_id), "profile": agents.get_profile(agent_id)}
 
 
-@router.patch("/{agent_id}")
+@router.patch("/{agent_id}", dependencies=[Depends(require_admin)])
 def update_agent(body: AgentPatch, request: Request, agent_id: int = Depends(workspace)):
     try:
         return agents.update(agent_id, body.model_dump(exclude_unset=True), actor=actor(request))
@@ -164,9 +175,11 @@ def delete_agent(request: Request, agent_id: int = Depends(workspace)):
 # ---------------- profile & playground ----------------
 
 @router.get("/{agent_id}/profile")
-def get_profile(agent_id: int = Depends(workspace)):
+def get_profile(request: Request, agent_id: int = Depends(workspace)):
     from app.services import team_service
-    profile = agents.get_profile(agent_id)
+    profile = dict(agents.get_profile(agent_id))
+    if getattr(request.state, "user", "") not in ("admin", "api"):
+        profile.pop("agent_password", None)  # the vault password gates team members; they never see it
     # Who the transfer number actually reaches. The names live in Sales Team Accounts, so a routing
     # page reading the profile alone could only ever show a bare number, or an empty row.
     contacts = []
@@ -178,8 +191,10 @@ def get_profile(agent_id: int = Depends(workspace)):
             "voices": tts.SPEAKERS, "languages": tts.LANGUAGES}
 
 
-@router.put("/{agent_id}/profile")
+@router.put("/{agent_id}/profile", dependencies=[Depends(require_admin)])
 def update_profile(values: dict, request: Request, agent_id: int = Depends(workspace)):
+    if "agent_password" in values and getattr(request.state, "user", "") not in ("admin", "api"):
+        raise HTTPException(403, "Administrator access required.")
     try:
         return agents.update_profile(agent_id, values, actor=actor(request))
     except (ValueError, TypeError) as e:
@@ -223,7 +238,9 @@ async def playground(body: PlaygroundMessage, agent_id: int = Depends(workspace)
         raise HTTPException(502, str(e))
     # A voice outage (quota, network) must not hide the text reply: return it without audio and say why.
     try:
-        audio_id = await asyncio.to_thread(tts.prepare_audio_id, res["reply"], res.get("language") or "en-IN", agents.get_profile(agent_id)["voice_speaker"])
+        profile = agents.get_profile(agent_id)
+        language = res.get("language") or tts.detect_language(res["reply"], profile.get("default_language") or "en-IN")
+        audio_id = await asyncio.to_thread(tts.prepare_audio_id, res["reply"], language, profile["voice_speaker"])
         res["audio_url"] = tts.audio_url(audio_id) if audio_id else ""
     except TTSError as e:
         res["audio_url"] = ""
@@ -235,6 +252,8 @@ async def playground(body: PlaygroundMessage, agent_id: int = Depends(workspace)
 def greeting_preview(lead_id: int | None = None, language: str = "en-IN", purpose: str | None = None,
                      agent_id: int = Depends(workspace)):
     lead = (CRMService(agent_id).get(lead_id) if lead_id else None) or ({} if purpose == "inbound" else {"name": "Rahul"})
+    if purpose == "confirm_meeting" and not lead.get("meeting_at"):
+        purpose = "follow_up"  # same rule as dialling: nothing to confirm without a meeting time
     if purpose in ("inbound", "confirm_meeting", "follow_up"):
         lead = {**lead, "call_purpose": purpose}
     return {"text": agent.greeting(agent_id, lead, language)}
@@ -248,7 +267,26 @@ def automation(agent_id: int = Depends(workspace)):
     return {"settings": cfg, "jobs": scheduler.job_status(agent_id), "within_calling_hours": within_calling_hours(cfg)}
 
 
-@router.put("/{agent_id}/automation")
+@router.get("/{agent_id}/inbound-owner")
+def get_inbound_owner(agent_id: int = Depends(workspace)):
+    """Which agent answers calls to this agent's line (shared numbers: many dial out, one answers)."""
+    number = agents.caller_id(agent_id)
+    owner = agents.inbound_owner(number) if number else None
+    sharing = [a for a in agents.list_agents() if "".join(c for c in (a.get("phone_number") or "") if c.isdigit()) in (number, "")]
+    return {"number": number, "owner_id": owner, "sharing": [{"id": a["id"], "name": a["name"]} for a in sharing]}
+
+
+@router.put("/{agent_id}/inbound-owner", dependencies=[Depends(require_admin)])
+def put_inbound_owner(request: Request, agent_id: int = Depends(workspace)):
+    """Make this agent the one that answers inbound calls on its line."""
+    number = agents.caller_id(agent_id)
+    try:
+        return agents.set_inbound_owner(number, agent_id, actor=actor(request))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.put("/{agent_id}/automation", dependencies=[Depends(require_admin)])
 def update_automation(values: dict, request: Request, agent_id: int = Depends(workspace)):
     try:
         return agents.update_automation(agent_id, values, actor=actor(request))
@@ -256,7 +294,7 @@ def update_automation(values: dict, request: Request, agent_id: int = Depends(wo
         raise HTTPException(400, str(e))
 
 
-@router.post("/{agent_id}/automation/run/{job}")
+@router.post("/{agent_id}/automation/run/{job}", dependencies=[Depends(require_admin)])
 async def run_job(job: str, request: Request, agent_id: int = Depends(workspace)):
     if job not in scheduler.JOBS:
         raise HTTPException(404, "Unknown job")

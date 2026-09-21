@@ -64,6 +64,7 @@ ECHO_MEMORY = 6                    # how many recent agent utterances to compare
 FAREWELL = re.compile(
     r"take care|have a (great|good|nice) day|see you (at|then|soon|there)|goodbye|bye for now|"
     r"thanks for your time|thank you for (calling|your time)|"
+    r"\bbye\b|bye bye|good night|all the best|namaste|खयाल रखना|ख्याल रखना|ध्यान रखिए|ध्यान रखें|नमस्ते|शुक्रिया|धन्यवाद|थैंक यू|thank you\W*$|thanks\W*$|"
     r"समय के लिए धन्यवाद|बात करने के लिए धन्यवाद|शुभ दिन|अच्छा दिन|फिर मिलते|अलविदा|ध्यान रखना|दिन शुभ हो", re.I)
 # A reply that still asks the caller for something is not a farewell, whatever its last words are.
 REQUEST_WORDS = re.compile(r"email|e-mail|number|नंबर|बताइए|बताइये|बता दीजिए|बता दो|\bkab\b|कब|kitne|कितने|which|when|what|कौन", re.I)
@@ -73,10 +74,13 @@ CALLER_GOODBYE = re.compile(
     r"theek hai bye|thik hai bye)\b|अलविदा|रखता हूँ|रखती हूँ|रखता हूं|रखती हूं|रख दो|फ़ोन रखो|फोन रखो|कॉल काटो|फिर मिलते", re.I)
 # Acknowledgements that only count as a closing when they are the caller's whole short utterance:
 # "ठीक है, कर दीजिए" is agreement, "ठीक है" alone after a goodbye is a goodbye.
+# "No no thank you" is also a closing: repeated refusal words are allowed before the closing phrase.
 CALLER_CLOSING = re.compile(
-    r"^\W*(ok|okay|ji|haan|haan ji|acha|accha)?\W*(thanks|thank you|thank u|no thanks|that'?s all|nothing else|"
-    r"theek hai|thik hai|thik|chalo|chalo theek hai|chalo thik hai|"
-    r"धन्यवाद|शुक्रिया|ठीक है|बस इतना|और कुछ नहीं|चलो)( ji| जी| bhai| sir| madam)?\W*$", re.I)
+    r"^\W*(?:(?:no|nahi|nahin|nope|ok|okay|ji|haan|acha|accha|नहीं|ना|नो)\W*)*(?:(?:thanks|thank you|thank u|no thanks|that'?s all|nothing else|"
+    r"take care|theek hai|thik hai|thik|chalo|chalo theek hai|chalo thik hai|"
+    r"धन्यवाद|शुक्रिया|ठीक है|बस इतना|और कुछ नहीं|चलो)(?: ji| जी| bhai| sir| madam)?\W*)+$", re.I)
+# "don't hang up" / "phone mat rakho" contains a goodbye token but means the opposite.
+KEEP_LINE = re.compile(r"(don'?t|do not|never|mat|नहीं|मत)\W+(?:\w+\W+)?(hang up|cut|rakh|रख|काट|kaat)|(rakh|रख|काट|kaat)\w*\W+(mat|नहीं|मत)\b", re.I)
 # Short acknowledgements a listener makes while the agent talks ("haan", "ji", "hmm"): never a barge-in.
 BACKCHANNEL = re.compile(r"^(hmm+|h+m+|haan( ji)?|haa|han|ji( haan)?|ha|ok(ay)?|accha|acha|achha|theek( hai)?|thik( hai)?|"
                          r"right|yes|yeah|yep|sure|hello|हाँ|हां|जी( हाँ| हां)?|हम्म+|ठीक( है)?|अच्छा|ओके|सही)[.!]?$", re.I)
@@ -114,8 +118,21 @@ FILLER_AFTER_SECONDS = 2.5
 WRAP_UP_LEAD_SECONDS = 45
 WRAP_UP_GUIDANCE = ("You are almost out of time for this call. In one or two short sentences, sum up what was agreed "
                     "or offer a callback, thank the caller and say goodbye. End your reply with <END>.")
+STEER_GUIDANCE = ("About three minutes / most of the talk budget is used. Do not end abruptly. Decide silently: is this "
+                  "lead qualified (need, budget, timeline, next step known)? If yes, move to the call to action in one "
+                  "short sentence. If exactly one critical field is missing, ask only that one question. If they are "
+                  "still actively discussing, continue naturally but say less: acknowledge in a few words, then one "
+                  "question. Every reply under 120 characters.")
+BUDGET_GUIDANCE = ("The talk budget for this call is spent. Do not hang up mid-topic. If the lead is qualified: propose or "
+                   "confirm ONE concrete visit or callback slot, confirm it back, and end the call with <END>. If not "
+                   "qualified: ask the single most important missing question, then offer a callback or WhatsApp details "
+                   "and close. No new topics, no pitch, no recap. Every reply under 100 characters.")
 QUIET_GUIDANCE = ("The caller has gone quiet. In a few words check they are still there and repeat your last "
                   "question, shorter. Do not start a new topic.")
+POST_FAREWELL_GUIDANCE = ("You already said goodbye. If the caller is only checking the line or acknowledging (\"hello?\", "
+                          "\"are you there\", \"haan ji\"), answer in two or three words and say goodbye again with <END>. "
+                          "Only if they raise a genuine new question or request, answer it briefly and continue. Never "
+                          "restart the introduction or the pitch.")
 FAREWELL_SILENCE_SECONDS = 3.0     # after the agent said goodbye, this much quiet ends the call without another word
 STT_RETRY_BASE = 0.3               # reconnect backoff for Sarvam STT: 0.3s doubling to STT_RETRY_CAP, with jitter
 STT_RETRY_CAP = 5.0
@@ -175,18 +192,22 @@ def requested_language(text: str) -> str | None:
 NAME_PATTERNS = [
     re.compile(r"(?:my name is|i am|i'm|this is|name's)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)"),
     re.compile(r"(?:मेरा नाम|मेरा नाम है)\s+([\u0900-\u097F]+(?:\s+[\u0900-\u097F]+)?)"),
-    re.compile(r"(?:मैं)\s+([\u0900-\u097F]{2,}(?:\s+[\u0900-\u097F]{2,})?)\s+(?:बोल रहा|बोल रही)"),
+    re.compile(r"(?:मैं)\s+([\u0900-\u097F]{2,}(?:\s+[\u0900-\u097F]{2,})?)\s+(?:बोल रहा हूँ|बोल रही हूँ|बोल रहा हूं|बोल रही हूं)(?!\s*(?:से|से बोल))"),
 ]
-NOT_NAMES = {"है", "हूँ", "हूं", "interested", "busy", "fine", "good", "calling", "looking"}
+NOT_NAMES = {"है", "हूँ", "हूं", "interested", "busy", "fine", "good", "calling", "looking", "से", "यहाँ", "यहां", "अभी", "sir", "madam", "ji", "जी"}
+# "मैं भोपाल से बोल रहा हूँ" names a place, not a person.
+_PLACE_CUE = re.compile(r"\b(?:से|from)\s+(?:बोल|call|calling|speaking)|(?:से बोल रह)")
 
 
 def spoken_name(text: str) -> str | None:
     """A name the caller states about themselves ("my name is Neha", "मेरा नाम नेहा है"); None when unsure."""
+    if _PLACE_CUE.search(text):
+        return None
     for pattern in NAME_PATTERNS:
         m = pattern.search(text)
         if m:
             name = " ".join(w for w in m.group(1).split() if w.lower() not in NOT_NAMES and w not in NOT_NAMES).strip()
-            if 2 <= len(name) <= 40:
+            if 2 <= len(name) <= 40 and not any(ch.isdigit() for ch in name):
                 return name
     return None
 
@@ -199,6 +220,9 @@ def spoken_email(text: str) -> str | None:
     m = EMAIL.search(text)
     if not m:
         return None
+    before = text[:m.start()].rstrip()
+    if re.search(r"[\u0900-\u097F]\s*$", before) or re.search(r"[\u0900-\u097F]", m.group(0)):
+        return None  # part of the address was heard in Devanagari: ask them to spell it, never guess
     email = re.sub(r"\s*(?:\bat the rate\b|\bat\b)\s*", "@", m.group(0), count=1, flags=re.I)
     email = re.sub(r"\s*\bdot\b\s*", ".", email, flags=re.I).replace(" ", "").lower()
     return email if re.fullmatch(r"[\w.+-]+@[\w-]+(\.[a-z]{2,})+", email) else None
@@ -232,20 +256,32 @@ def split_sentences(text: str) -> list[str]:
 
 
 def is_farewell(reply: str) -> bool:
-    """The agent's reply ends the conversation: its last sentence says goodbye and nothing in it asks for anything."""
-    if not reply or "?" in reply or REQUEST_WORDS.search(reply):
+    """The agent's reply ends the conversation: its last sentence says goodbye and asks for nothing there."""
+    if not reply or "?" in reply:
         return False
-    return bool(FAREWELL.search(split_sentences(reply)[-1]))
+    last = split_sentences(reply)[-1]
+    if REQUEST_WORDS.search(last):
+        return False
+    return bool(FAREWELL.search(last))
 
 
 def is_caller_closing(text: str) -> bool:
     """The caller is saying goodbye: an explicit goodbye anywhere, or a short acknowledgement that is all they said."""
     text = (text or "").strip()
-    if not text:
+    if not text or KEEP_LINE.search(text):
         return False
     if CALLER_GOODBYE.search(text):
         return True
-    return len(text.split()) <= 4 and bool(CALLER_CLOSING.match(text))
+    return len(text.split()) <= 6 and bool(CALLER_CLOSING.match(text))
+
+
+def is_post_farewell_noise(text: str) -> bool:
+    """After the agent's goodbye, a greeting or acknowledgement ("hello", "haan ji", "ok sir") means the
+    caller has nothing more: the call should end, not restart."""
+    words = re.findall(r"[\wऀ-ॿ']+", (text or "").lower())
+    if not words or len(words) > 4:
+        return False
+    return all(BACKCHANNEL.match(w) or w in ("sir", "madam", "ji", "bhai", "haanji", "yes", "hello", "hi", "हेलो", "हैलो") for w in words)
 
 
 def turn_grace_ms(text: str) -> int:
@@ -379,7 +415,9 @@ class SarvamTTS:
     async def _open(self):
         ws = await websockets.connect(self.url, additional_headers={"Api-Subscription-Key": settings.sarvam_api_key},
                                       open_timeout=5, ping_interval=20, max_queue=512)
+        # pace/loudness slightly under 1: the default delivery is brisk and announcer-like on a phone line.
         config = {"target_language_code": self.language, "speech_sample_rate": "8000", "output_audio_codec": "mulaw",
+                  "pace": 0.95, "loudness": 1.0,
                   "min_buffer_size": 30, "max_chunk_length": 150}
         if self.speaker:
             config["speaker"] = self.speaker
@@ -653,6 +691,7 @@ class CallStream:
         self.closed = False
         self.spoken_recent: list[str] = []   # what the agent actually played, to recognise its own echo
         self.pending_bargein = False         # speech detected while we speak, not yet confirmed to be human
+        self.backchannel: str | None = None  # a short "haan"/"ok" heard over our last words: answered once we are quiet
         self.agent_quiet_at = 0.0            # when the last audio finished playing at Plivo
         self.usage = {"tts_chars": 0, "stt_seconds": 0.0, "llm_requests": 0, **((self.session or {}).get("usage") or {})}
         self.speech_ended_at: float | None = None
@@ -667,6 +706,9 @@ class CallStream:
         self.mode = "ai"                   # "ai" answers the caller; "human" = supervisor speaks, AI stays silent
         self.guidance: str | None = None   # one-shot instruction for the next AI reply
         self.wrap_up_asked = False          # the time-budget wrap-up nudge has been given
+        self.close_asked = False   # the cost-budget close nudge (STEER_GUIDANCE) has been given
+        self.budget_asked = False   # BUDGET_GUIDANCE (budget spent) has been given
+        self.cost_guidance: str | None = None   # persistent steer once the budget is nearly spent
         self.direction: str | None = None  # standing instruction for every AI reply until cleared
         self.monitors: dict[asyncio.Queue, dict] = {}
         from app.services.live_bridge import CallBridge
@@ -831,6 +873,7 @@ class CallStream:
 
     async def clear_audio(self):
         self.agent_speaking = False
+        self.backchannel = None
         self.agent_quiet_at = time.monotonic()
         # The reply that was just cut off may have armed a hangup/transfer on its checkpoint. A late
         # playedStream for that mark must not end the call in the middle of the next answer.
@@ -892,6 +935,26 @@ class CallStream:
         except Exception as e:  # noqa: BLE001 - keep the AI on the line if Plivo refuses
             self.transferred = False
             log.error("Transfer failed for %s: %s", self.session_id[:8], e)
+
+    async def finalize_if_unreported(self, delay: float = 15.0):
+        await asyncio.sleep(delay)
+        call_id = self.session.get("call_id")
+        if not call_id:
+            return
+        with contextlib.suppress(Exception):
+            # on_hangup is idempotent: a callback that did arrive already closed the call and this is a no-op.
+            await asyncio.to_thread(CallService().on_hangup, int(call_id), "completed", 0,
+                                    "Stream ended; no hangup callback", self.call_uuid)
+
+    async def wait_for_end(self):
+        """
+        Stay alive until plivo_loop acts on an armed hangup/transfer checkpoint, or the caller hangs up.
+
+        A helper loop that returns tears run() down, and run()'s cleanup hangs up at once: the goodbye
+        or hand-off line it just queued would be cut off, and an armed transfer would never run.
+        """
+        while not self.closed:
+            await asyncio.sleep(0.5)
 
     async def hangup(self):
         if self.call_uuid:
@@ -971,6 +1034,10 @@ class CallStream:
             # the call is ended here. After a transfer Plivo owns the call, so it is left alone.
             if not self.transferred:
                 await self.hangup()
+                # Plivo's hangup callback normally lands within seconds and finalises the record (status,
+                # duration, summary). When it is lost (public URL changed, tunnel restart) the call sat
+                # "In Progress" until a sweeper marked it Failed 20 minutes later, transcript unsummarised.
+                asyncio.get_running_loop().create_task(self.finalize_if_unreported())
             with contextlib.suppress(Exception):
                 await self.ws.close()
             log.info("Stream closed for session %s", self.session_id[:8])
@@ -1000,13 +1067,27 @@ class CallStream:
                         self.agent_speaking = False
                         self.agent_quiet_at = time.monotonic()
                         self.quiet_since = time.monotonic()
+                        self.pending_bargein = False
                         self.publish_state()
+                        if (self.backchannel and self.mode == "ai" and not self.heard
+                                and not (self.reply_task and not self.reply_task.done())):
+                            # "haan" said over our final word was the answer to the question we just asked.
+                            self.heard.append(self.backchannel)
+                            self.commit_task = asyncio.create_task(self.commit_turn())
+                        self.backchannel = None
                     if msg.get("name") and msg.get("name") == self.hangup_on_mark:
                         await self.hangup()
                         return
                     if msg.get("name") and msg.get("name") == self.transfer_on_mark:
+                        self.transfer_on_mark = None
                         await self.transfer_call()
-                        return
+                        if self.transferred:
+                            return
+                        # Plivo refused the transfer: the caller was just told "connecting you". Say so
+                        # and end on a spoken line rather than dropping them from run()'s cleanup.
+                        from app.api.plivo import PROMPTS
+                        await self.say_recorded(PROMPTS["error"][self.lang_key()], hangup=True)
+                        continue
                 elif event == "stop":
                     return
         except (WebSocketDisconnect, RuntimeError):
@@ -1033,6 +1114,7 @@ class CallStream:
                     log.error("Sarvam STT unavailable after %s attempts on session %s: %s",
                               self.stt_failures, self.session_id[:8], e)
                     await self.fail_turn(f"speech recognition unavailable: {e}")
+                    await self.wait_for_end()
                     return
                 delay = min(STT_RETRY_CAP, STT_RETRY_BASE * 2 ** (self.stt_failures - 1)) * random.uniform(0.7, 1.3)
                 log.warning("Sarvam STT stream dropped (%s), reconnecting in %.1fs", e, delay)
@@ -1053,6 +1135,21 @@ class CallStream:
             elapsed = time.monotonic() - self.started_at
             budget = self.persona.get("max_call_minutes")
             soft_limit = max(60, int(budget) * 60) if budget else float("inf")  # mirrors PlivoService.soft_time_limit
+            # Cost budget: steer at ~75% / a minute before target, prioritise completion at the budget, hard
+            # wrap-up only at the persona limit.
+            spent = int(self.usage.get("tts_chars") or 0)
+            char_budget = int(settings.tts_chars_per_call or 0)
+            target = float(settings.call_target_minutes or 0) * 60
+            over_budget = (char_budget and spent >= char_budget) or (target and elapsed >= target)
+            near_budget = (char_budget and spent >= 0.75 * char_budget) or (target and elapsed >= target - 60)
+            if self.mode == "ai" and not self.close_asked and near_budget:
+                self.close_asked = True
+                self.cost_guidance = STEER_GUIDANCE
+                log.info("Cost budget nearly spent on session %s (%s chars, %ss)", self.session_id[:8], spent, int(elapsed))
+            if self.mode == "ai" and not self.budget_asked and over_budget:
+                self.budget_asked = True
+                self.cost_guidance = BUDGET_GUIDANCE
+                log.info("Cost budget spent on session %s (%s chars, %ss)", self.session_id[:8], spent, int(elapsed))
             if self.mode == "ai" and not self.wrap_up_asked and elapsed >= soft_limit - WRAP_UP_LEAD_SECONDS:
                 self.wrap_up_asked = True
                 self.guidance = WRAP_UP_GUIDANCE
@@ -1064,6 +1161,7 @@ class CallStream:
                 from app.api.plivo import PROMPTS
                 log.info("Call time budget reached on session %s, saying goodbye", self.session_id[:8])
                 await self.say_recorded(PROMPTS["goodbye"][self.lang_key()], hangup=True)
+                await self.wait_for_end()
                 return
             # A barge-in that never produced a transcript (noise, a cough, a false VAD trigger) cancels
             # the reply, which puts the caller's words back in self.heard with nothing left to commit
@@ -1097,6 +1195,7 @@ class CallStream:
                 caller_spoke = self.customer_spoke()
                 if self.silent_prompts > (MAX_SILENT_PROMPTS if caller_spoke else 1):
                     await self.say_recorded(PROMPTS["goodbye"][self.lang_key()], hangup=True)
+                    await self.wait_for_end()
                     return
                 if caller_spoke:
                     # A person would check the line and repeat their question, not ask the caller to
@@ -1188,11 +1287,14 @@ class CallStream:
                 return
             if text and self.pending_bargein:
                 self.pending_bargein = False
-                if len(text.split()) <= 2 and BACKCHANNEL.match(text):
+                if self.agent_speaking and len(text.split()) <= 2 and BACKCHANNEL.match(text):
                     # "haan", "ji", "hmm", "ok": the caller is listening along, not taking the floor.
                     # Cutting the agent off and answering "haan" as a new turn is what made it stutter.
+                    # Kept aside: if it turns out to be the last thing said before we go quiet, it was
+                    # the answer to our question and playedStream commits it.
                     log.info("Backchannel on session %s: %s", self.session_id[:8], text)
                     self.publish({"type": "heard", "text": text})
+                    self.backchannel = text
                     return
                 if not await self.interrupt(text=text):
                     return  # the hand-off or goodbye being played is left to finish
@@ -1219,7 +1321,8 @@ class CallStream:
                 self.heard.append(text)
                 # Retrieve for what we have heard so far while the caller finishes their sentence, so
                 # the embedding is cached by the time the reply is actually built.
-                rag.prefetch(self.agent_id, agent.retrieval_query(self.session["history"], " ".join(self.heard)))
+                if agent.needs_knowledge(" ".join(self.heard)):
+                    rag.prefetch(self.agent_id, agent.retrieval_query(self.session["history"], " ".join(self.heard)))
                 if self.commit_task and not self.commit_task.done():
                     self.commit_task.cancel()
                 self.commit_task = asyncio.create_task(self.commit_turn())
@@ -1244,12 +1347,15 @@ class CallStream:
                 soon = (datetime.now(IST) + timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M")
                 CallService(self.agent_id).crm.update(lead_id, {"callback_at": soon}, actor="system",
                                                       event_type="lead.updated", title="Callback after a dropped call")
+        # The admin alone hears what broke; the team sees the caller through the booked callback, never
+        # an error report, and the caller heard only the hand-over / callback line.
         with contextlib.suppress(Exception):
-            from app.services.notification_service import notify_team
-            notify_team(f"Call dropped: {who} needs a call back",
-                        f"The call with {who} ({lead.get('phone') or 'unknown number'}) ended early because the agent "
-                        f"could not continue.\n\nPlease call them back.\n\nWhat went wrong: {error[:300]}",
-                        lead_id=lead_id, agent_id=self.agent_id)
+            from app.services.notification_service import notify_admin
+            notify_admin(f"Agent fault on a call with {who}",
+                         f"The call with {who} ({lead.get('phone') or 'unknown number'}) could not continue and was "
+                         f"handed over / booked for a callback in 10 minutes.\n\nWhat went wrong: {error[:300]}\n\n"
+                         f"Agent #{self.agent_id}, session {self.session_id[:8]}.",
+                         lead_id=lead_id, agent_id=self.agent_id)
 
     async def interrupt(self, force: bool = False, text: str | None = None) -> bool:
         """
@@ -1269,10 +1375,14 @@ class CallStream:
             await self.clear_audio()
             await self.hangup()
             return False
-        if self.reply_task and not self.reply_task.done():
+        cancelled = bool(self.reply_task and not self.reply_task.done())
+        if cancelled:
             self.reply_task.cancel()
-        if self.agent_speaking or force:
+        if self.agent_speaking:
             await self.clear_audio()
+        if cancelled or self.agent_speaking or force:
+            # A reply cancelled before its first audio has already pushed text (maybe a flush) into the
+            # socket; reusing it would speak the abandoned words ahead of the next answer.
             await self.tts.reset()
             log.info("Barge-in on session %s", self.session_id[:8])
         return True
@@ -1306,6 +1416,8 @@ class CallStream:
         updates = {}
         if not lead.get("name") and (name := spoken_name(text)):
             updates["name"] = name
+        elif lead.get("name") and re.search(r"मेरा नाम|my name is", text, re.I) and (name := spoken_name(text)):
+            updates["name"] = name  # they corrected or stated their name explicitly: that wins over a guess
         if not lead.get("email") and (email := spoken_email(text)):
             updates["email"] = email
         if not updates:
@@ -1330,7 +1442,21 @@ class CallStream:
             # a streaming reply would instead surface as a socket error and trip the failure path.
             self.reply_task.cancel()
             await asyncio.wait([self.reply_task])
+            await self.tts.reset()
         text = " ".join(self.heard)
+        if self.last_reply_farewell and (is_caller_closing(text) or is_post_farewell_noise(text)):
+            # We already said goodbye; "hello" / "ok thank you" back is the caller signing off, not a new
+            # question. Record it and hang up instead of starting another reply.
+            log.info("Caller signed off after farewell, hanging up session %s", self.session_id[:8])
+            self.heard = []
+            self.turn("customer", text)
+            self.save_session(silent_prompts=0)
+            await self.hangup()
+            return
+        elif self.last_reply_farewell:
+            # Something more than a sign-off after our goodbye ("wait, one more question", "are you there?"):
+            # let the model answer, but from the post-farewell state, not the top of the script.
+            self.guidance = " ".join(g for g in (self.guidance, POST_FAREWELL_GUIDANCE) if g)
         if HOLD.search(text):
             self.hold_until = time.monotonic() + HOLD_SECONDS
             self.hold_acked = False
@@ -1398,7 +1524,7 @@ class CallStream:
         log.info("Customer said (%s): %s", self.session_id[:8], text)
         language = self.session.get("language") or "en-IN"
         supervised = bool(self.direction or self.guidance)
-        guidance = " ".join(g for g in (self.direction, self.guidance) if g) or None
+        guidance = " ".join(g for g in (self.direction, self.guidance, self.cost_guidance) if g) or None
         self.guidance = None
         self.publish_state()
         prompt_text = text if text is not None else "(The customer is listening. Continue the call now, following the supervisor instruction.)"
@@ -1532,8 +1658,8 @@ class CallStream:
             if feeder:
                 feeder.cancel()
             from app.services.llm import LLMError
-            if isinstance(e, websockets.ConnectionClosed) or (isinstance(e, RuntimeError) and not isinstance(e, LLMError)
-                                                              and str(e).startswith("Sarvam TTS")):
+            if (isinstance(e, (websockets.ConnectionClosed, websockets.InvalidHandshake, OSError, TimeoutError))
+                    or (isinstance(e, RuntimeError) and not isinstance(e, LLMError) and str(e).startswith("Sarvam TTS"))):
                 # The voice socket hiccuped, not the model: the words exist, so finish saying them below
                 # with one-shot synthesis instead of booking a callback and dropping the caller.
                 tts_fault = e
@@ -1605,10 +1731,16 @@ class CallStream:
                 spoken.append(reply)
                 await self.say_fixed(reply)
             self.note_spoken(reply)
+            if cleaner.end_call and reply.rstrip().endswith("?") and not (text and is_caller_closing(text)):
+                # The model put its end marker on a question ("anything else I can help with?"): hanging up
+                # there cuts the caller off mid-conversation. Let them answer; the next turn can close.
+                log.info("End marker on a question ignored, session=%s", self.session_id[:8])
+                cleaner.end_call = False
             farewell = is_farewell(reply)
-            if not cleaner.end_call and text and farewell and is_caller_closing(text):
-                # Both sides said goodbye but the model left out the end marker: hang up anyway, so the
-                # caller never has to ask us to cut the call.
+            caller_bye = bool(text and CALLER_GOODBYE.search(text) and not KEEP_LINE.search(text))
+            if not cleaner.end_call and text and ((farewell and is_caller_closing(text)) or (caller_bye and "?" not in reply)):
+                # Both sides said goodbye, or the caller said bye and we did not ask anything: hang up even
+                # without the end marker.
                 log.info("Ending call on mutual farewell without end marker, session=%s", self.session_id[:8])
                 cleaner.end_call = True
             # A goodbye without a closing from the caller: if they now stay quiet, silence_loop ends the

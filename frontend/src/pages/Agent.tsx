@@ -31,7 +31,10 @@ export default function Agent() {
   const { agent, base } = useAgent()
   const qc = useQueryClient()
   const [params, setParams] = useSearchParams()
-  const tab = (['playground', 'persona', 'playbook'].includes(params.get('tab') ?? '') ? params.get('tab') : 'playground') as Section
+  const meQ = useQuery({ queryKey: ['me'], queryFn: () => api<{ user: string | null }>('/api/auth/me'), staleTime: 60_000 })
+  const isAdmin = meQ.data ? meQ.data.user !== 'team' : false
+  const requested = params.get('tab') ?? ''
+  const tab = (['playground', 'persona', 'playbook'].includes(requested) && (isAdmin || requested === 'playground') ? requested : 'playground') as Section
   const setTab = (t: Section) => setParams((p) => { p.set('tab', t); return p }, { replace: true })
 
   const { data, isError, error, refetch, isFetching } = useQuery({ queryKey: ['agent'], queryFn: () => api<ProfileResponse>(`${base}/profile`) })
@@ -90,7 +93,7 @@ export default function Agent() {
     <div>
       <PageHeader eyebrow={<>{agent?.name} · Build</>} title="Persona & playground"
         description="Shape how this agent introduces itself, what it asks and how it handles pushback, then rehearse a call in the browser with its own voice and knowledge before it dials anyone."
-        actions={<Tabs value={tab} onChange={setTab} items={[
+        actions={isAdmin && <Tabs value={tab} onChange={setTab} items={[
           { value: 'playground', label: 'Playground' },
           { value: 'persona', label: <span className="flex items-center gap-1.5"><span className="sm:hidden">Persona</span><span className="hidden sm:inline">Persona & voice</span>{dirty && <span className="size-1.5 rounded-full bg-warning" />}</span> },
           { value: 'playbook', label: <><span className="sm:hidden">Playbook</span><span className="hidden sm:inline">Call playbook</span></> },
@@ -380,6 +383,7 @@ function ProfileEditor({ section, draft, setDraft, data }: {
 
 interface SpeechRecognitionLike { lang: string; interimResults: boolean; onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void; onend: () => void; onerror: (e: { error: string }) => void; start: () => void; stop: () => void }
 type ChatTurn = Turn & { meta?: AgentTurnResult }
+const VISIBLE_TURNS = 4  // turns shown when the transcript is collapsed
 
 /** Turns a raw provider error dump into one line a person can act on. */
 function humanLlmError(detail: string) {
@@ -408,6 +412,8 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
   const [selected, setSelected] = useState<number | null>(null)
   const [ended, setEnded] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
+  // 0..1 through the current reply's audio: the latest bubble lights its words up as they are spoken.
+  const [spokenFrac, setSpokenFrac] = useState(0)
   const mouthTimer = useRef<number>(0)
   // Voice loudness sampled from the playing audio, read by the avatar every frame to move the mouth in time.
   const level = useRef(0)
@@ -427,6 +433,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
         let sum = 0
         for (const v of buf) { const d = (v - 128) / 128; sum += d * d }
         level.current = Math.sqrt(sum / buf.length)
+        if (a.duration > 0 && !a.paused) setSpokenFrac(Math.min(1, a.currentTime / a.duration))
         analyser.current!.raf = requestAnimationFrame(tick)
       }
       analyser.current = { ctx, node, source, raf: requestAnimationFrame(tick) }
@@ -434,6 +441,18 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
   }
   const bottom = useRef<HTMLDivElement>(null)
   const recog = useRef<SpeechRecognitionLike | null>(null)
+  // stop() still finalises captured audio and fires onresult; drop the handlers first so speech captured
+  // before a Restart / language switch cannot land in the new session.
+  const stopMic = () => {
+    const r = recog.current
+    if (!r) return
+    recog.current = null
+    r.onresult = () => {}
+    r.onerror = () => {}
+    r.onend = () => {}
+    try { r.stop() } catch { /* already stopped */ }
+    setListening(false)
+  }
   const audio = useRef<HTMLAudioElement | null>(null)
   const historyRef = useRef(history)
   useEffect(() => { historyRef.current = history }, [history])
@@ -461,7 +480,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
     setHistory((h) => (h[0]?.role === 'assistant' ? h : [{ role: 'assistant', text: greeting.data.text }, ...h]))
   }, [greeting.data])
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }) }, [history])
-  useEffect(() => () => { audio.current?.pause(); recog.current?.stop(); window.clearTimeout(mouthTimer.current); if (analyser.current) { cancelAnimationFrame(analyser.current.raf); analyser.current.source?.disconnect(); analyser.current.node?.disconnect(); void analyser.current.ctx.close() } }, [])
+  useEffect(() => () => { audio.current?.pause(); stopMic(); window.clearTimeout(mouthTimer.current); if (analyser.current) { cancelAnimationFrame(analyser.current.raf); analyser.current.source?.disconnect(); analyser.current.node?.disconnect(); void analyser.current.ctx.close() } }, [])
 
   const play = (url: string) => {
     audio.current?.pause();
@@ -474,10 +493,11 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
     // 'play' fires as soon as play() is called, seconds before a deferred TTS file has downloaded, so the
     // mouth used to move in silence. 'playing' means audio is actually coming out; 'waiting' means it stalled.
     audio.current.onplaying = () => setIsSpeaking(true);
+    setSpokenFrac(0)
     audio.current.onwaiting = () => setIsSpeaking(false);
     audio.current.crossOrigin = 'anonymous'
     meter(audio.current)
-    audio.current.onended = () => { setIsSpeaking(false); level.current = 0 };
+    audio.current.onended = () => { setIsSpeaking(false); level.current = 0; setSpokenFrac(1) };
     audio.current.onerror = () => setIsSpeaking(false);
     audio.current.onpause = () => setIsSpeaking(false);
     // pause() from the next reply / Restart, or blocked autoplay, rejects play(): swallow it and reset the speaking state.
@@ -495,10 +515,21 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
       if (speak && res.audio_url) play(res.audio_url)
       else {
         // Voice off or TTS fallback active: mouth the reply for roughly as long as it would take.
-        audio.current?.pause()
+        // Detach the old element's handlers before pausing: its 'pause' event lands a task later and
+        // would switch the speaking state straight back off.
+        if (audio.current) { audio.current.onpause = null; audio.current.onended = null; audio.current.onerror = null; audio.current.onwaiting = null; audio.current.pause() }
         setIsSpeaking(true)
         window.clearTimeout(mouthTimer.current)
-        mouthTimer.current = window.setTimeout(() => setIsSpeaking(false), Math.min(12000, 600 + res.reply.length * 55))
+        const dur = Math.min(12000, 600 + res.reply.length * 55)
+        const t0 = performance.now()
+        setSpokenFrac(0)
+        const step = () => {
+          const f = Math.min(1, (performance.now() - t0) / dur)
+          setSpokenFrac(f)
+          if (f < 1) mouthTimer.current = window.setTimeout(step, 80)
+          else setIsSpeaking(false)
+        }
+        mouthTimer.current = window.setTimeout(step, 80)
       }
       // audio_error is suppressed: Edge TTS fallback handles it silently on the server side.
       if (res.end_call) setEnded(true)
@@ -528,12 +559,12 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
     const W = window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike; webkitSpeechRecognition?: new () => SpeechRecognitionLike }
     const Ctor = W.SpeechRecognition ?? W.webkitSpeechRecognition
     if (!Ctor) return void toast.error('Voice input needs Chrome or Edge')
-    if (listening) { recog.current?.stop(); return }
+    if (listening) { stopMic(); return }
     const r = new Ctor()
     r.lang = lang
     r.interimResults = false
-    r.onresult = (e) => submit(e.results[0]![0]!.transcript)
-    r.onend = () => setListening(false)
+    r.onresult = (e) => { if (recog.current === r) submit(e.results[0]![0]!.transcript) }
+    r.onend = () => { if (recog.current === r) { recog.current = null; setListening(false) } }
     r.onerror = (e: { error: string }) => {
       setListening(false);
       if (e.error === 'no-speech') {
@@ -553,9 +584,12 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
 
   const clear = () => {
     session.current++; pending.current = false
-    audio.current?.pause(); recog.current?.stop(); window.clearTimeout(mouthTimer.current); setIsSpeaking(false); level.current = 0
-    setHistory([]); setSelected(null); setEnded(false); setFailed(null); setText('')
+    audio.current?.pause(); stopMic(); window.clearTimeout(mouthTimer.current); setIsSpeaking(false); level.current = 0
+    setHistory([]); setSelected(null); setEnded(false); setFailed(null); setText(''); setShowAll(false)
   }
+  // Error states carry their only Retry inside the transcript; on phones it must not stay display:none.
+  useEffect(() => { if (failed || greeting.isError) setChatOpen(true) }, [failed, greeting.isError])
+  useEffect(() => { if (greeting.isError) toast.error('Could not load the opening line', { description: greeting.error.message }) }, [greeting.isError, greeting.error])
   const waitingForGreeting = greeting.isPending && history.length === 0
   const inputLocked = ended || waitingForGreeting
   // Restart: refetch may hand back the same (structurally shared) greeting object, so the seeding effect would not re-run — seed directly.
@@ -574,7 +608,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
   return (
     <div className="grid gap-4 grid-cols-1">
       {/* ===== Main playground card ===== */}
-      <Card className="relative flex h-[calc(100dvh-180px)] min-h-[520px] flex-col overflow-hidden sm:h-[calc(100dvh-280px)] sm:min-h-[680px]">
+      <Card className="dark relative flex h-[calc(100dvh-180px)] min-h-[520px] flex-col overflow-hidden border-white/10 bg-[#080810] sm:h-[calc(100dvh-280px)] sm:min-h-[680px]">
 
         {/* ── Toolbar ──────────────────────────────────────────── */}
         <div className="relative z-20 flex flex-wrap items-center gap-2 border-b border-white/10 bg-black/60 px-3 py-2 backdrop-blur-xl shrink-0 sm:px-4 sm:py-3">
@@ -596,7 +630,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
           </div>
           <Tabs value={direction} onChange={(v) => { setDirection(v); clear() }}
             items={[{ value: 'outbound', label: 'Outbound' }, { value: 'inbound', label: 'Inbound' }]} />
-          <Select value={leadId} onChange={(e) => { setLeadId(e.target.value ? Number(e.target.value) : ''); clear() }} className="h-9 w-auto max-w-40 text-[13px]" aria-label="Prospect">
+          <Select value={leadId} onChange={(e) => { setLeadId(e.target.value ? Number(e.target.value) : ''); clear() }} className="h-9 w-auto max-w-56 text-[13px]" aria-label="Prospect">
             <option value="">Sample {caller}</option>
             {leads.isPending && <option value="" disabled>Loading leads…</option>}
             {leads.data?.items.map((l) => <option key={l.id} value={l.id}>{l.name || l.phone}</option>)}
@@ -639,22 +673,26 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
           {/* ── Floating Overlay: Chat on left, Input on right ── */}
           <div className="absolute inset-x-3 bottom-3 z-20 flex flex-col items-stretch gap-3 pointer-events-none sm:inset-x-6 sm:bottom-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
             
-            {/* Chat bubbles */}
+            {/* Chat column: toggle above, bubbles below. The toggle lives outside the clipped/scrolling
+                box so it is always reachable, on phones too, whichever mode the transcript is in. */}
+            <div className={cn('w-full min-w-0 flex-col gap-2 sm:flex sm:w-auto sm:max-w-[60%] sm:min-w-[320px]', chatOpen ? 'flex' : 'hidden')}>
+            {history.length > VISIBLE_TURNS && (
+              <div className="pointer-events-auto self-start">
+                <button type="button" onClick={() => setShowAll((v) => !v)}
+                  className="min-h-8 rounded-full border border-white/10 bg-black/60 px-4 py-1.5 text-[11px] font-semibold text-white/85 transition hover:bg-white/15">
+                  {showAll ? `Show last ${VISIBLE_TURNS} turns` : `Show full transcript (${history.length} turns)`}
+                </button>
+              </div>
+            )}
             <div
               className={cn(
-                'w-full min-w-0 flex-col gap-2 sm:flex sm:w-auto sm:max-w-[60%] sm:min-w-[320px]',
-                chatOpen ? 'flex' : 'hidden',
+                'flex w-full min-w-0 flex-col gap-2',
                 showAll
-                  ? 'pointer-events-auto max-h-[50vh] overflow-y-auto bg-black/40 backdrop-blur-md p-3 rounded-2xl sm:max-h-[60vh] sm:p-5 sm:rounded-3xl'
-                  : 'pointer-events-none max-h-[34vh] justify-end overflow-hidden [scrollbar-width:none] sm:max-h-[42vh]',
+                  // Solid panel: a backdrop blur here smeared the avatar into a grey slab behind the text.
+                  ? 'pointer-events-auto max-h-[50vh] overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0c12]/92 p-3 sm:max-h-[60vh] sm:p-5 sm:rounded-3xl'
+                  : 'pointer-events-none max-h-[38vh] justify-end overflow-hidden [scrollbar-width:none] sm:max-h-[42vh] pt-2 [mask-image:linear-gradient(to_bottom,transparent,black_6%)]',
               )}
             >
-              {history.length > 4 && (
-                <button type="button" onClick={() => setShowAll((v) => !v)}
-                  className="pointer-events-auto sticky top-0 z-10 mb-1 min-h-8 self-start rounded-full border border-white/10 bg-black/50 px-4 py-1.5 text-[11px] font-semibold text-white/85 shadow-lg backdrop-blur-xl transition hover:bg-white/15 border border-white/10 transition-colors">
-                  {showAll ? 'Show last 4 turns' : `Show full transcript (${history.length} turns)`}
-                </button>
-              )}
               {greeting.isError && history.length === 0 && (
                 <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-danger/40 bg-danger-soft/90 px-4 py-2.5 text-[13px] text-danger backdrop-blur-md shadow-xl">
                   <AlertTriangle className="size-4 shrink-0" /><span className="min-w-0 break-words">Could not load the opening line: {greeting.error.message}</span>
@@ -664,7 +702,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
               {greeting.isPending && history.length === 0 && (
                 <div className="self-start rounded-2xl bg-black/60 px-4 py-2.5 text-[13px] text-white/70 backdrop-blur-md border border-white/10 shadow-xl">Preparing the opening line…</div>
               )}
-              {(showAll ? history : history.slice(-3)).map((t, i, arr) => (
+              {(showAll ? history : history.slice(-VISIBLE_TURNS)).map((t, i, arr) => (
                 <div key={history.length - arr.length + i}
                   className={cn('reveal reveal-in reveal-up pointer-events-auto flex max-w-[88%] flex-col gap-1 sm:max-w-[80%]',
                     t.role === 'assistant' ? 'self-start items-start' : 'self-end items-end')}>
@@ -683,14 +721,15 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                     )}
                   </div>
                   <div className={cn(
-                    'relative rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed break-words shadow-[0_8px_30px_-8px_rgba(0,0,0,.7)]',
+                    'relative rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed break-words',
                     t.role === 'assistant'
-                      ? 'rounded-tl-md border border-white/12 bg-gradient-to-br from-[#2a2d38] to-[#1a1c24] text-white'
-                      : 'rounded-tr-md bg-gradient-to-br from-white to-white/85 font-medium text-black',
-                    // One outline only: border + inset ring + a 1px shadow stacked into a doubled bottom edge.
-                    i === arr.length - 1 && t.role === 'assistant' && 'border-brand/40 shadow-[0_12px_40px_-10px_color-mix(in_srgb,var(--brand)_60%,transparent)]',
+                      ? 'rounded-tl-md border border-white/10 bg-[#20222b] text-white'
+                      : 'rounded-tr-md bg-white font-medium text-black',
+                    i === arr.length - 1 && t.role === 'assistant' && 'border-brand/50',
                   )}>
-                    {t.text}
+                    {i === arr.length - 1 && t.role === 'assistant' && isSpeaking
+                      ? <SpokenText text={t.text} frac={spokenFrac} />
+                      : t.text}
                   </div>
                 </div>
               ))}
@@ -714,11 +753,14 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                 </div>
               )}
               {ended && (
-                <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start rounded-2xl border border-warning/40 bg-warning-soft/90 px-4 py-2.5 text-[13px] text-warning backdrop-blur-md shadow-xl">
-                  <AlertTriangle className="size-4 shrink-0" />The agent ended the call.<Button size="sm" variant="ghost" onClick={() => void reset()}><RotateCcw />Start again</Button>
+                <div className="reveal reveal-in reveal-up pointer-events-auto flex flex-wrap items-center gap-3 self-start rounded-2xl border border-white/10 bg-[#1a1c24] px-4 py-2.5 text-[13px] text-white/80 shadow-xl">
+                  <span className="flex size-6 items-center justify-center rounded-full bg-white/10"><Square className="size-3" /></span>
+                  <span className="font-medium">Call ended</span><span className="text-white/45">by the agent</span>
+                  <Button size="sm" variant="ghost" className="ml-auto text-white/90" onClick={() => void reset()}><RotateCcw />Start again</Button>
                 </div>
               )}
               <div ref={bottom} />
+            </div>
             </div>
 
             {/* Input area */}
@@ -827,6 +869,22 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
         )}
       </div>
     </div>
+  )
+}
+
+/** The reply as it is being spoken: words already said are bright, the rest wait dimmed. */
+function SpokenText({ text, frac }: { text: string; frac: number }) {
+  const words = text.split(/(\s+)/)
+  const said = Math.round(words.filter((w) => w.trim()).length * frac)
+  let n = 0
+  return (
+    <>
+      {words.map((w, i) => {
+        if (!w.trim()) return w
+        n += 1
+        return <span key={i} className={cn('transition-opacity duration-150', n <= said ? 'opacity-100' : 'opacity-35')}>{w}</span>
+      })}
+    </>
   )
 }
 

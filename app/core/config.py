@@ -63,8 +63,12 @@ class Settings(BaseSettings):
     fallback_prompt_char_budget: int = Field(6000, alias="FALLBACK_PROMPT_CHAR_BUDGET")
     openrouter_embedding_model: str = Field("openai/text-embedding-3-small", alias="OPENROUTER_EMBEDDING_MODEL")
     # Post-call summaries are not latency-sensitive: try free/cheap models first, paid Sarvam as fallback.
-    summary_llm_providers: str = Field("openrouter,sarvam", alias="SUMMARY_LLM_PROVIDERS")
+    # Sarvam first: a summary is one request (~Rs 0.02) against ~Rs 0.15-0.20 of Gemini tokens; OpenRouter is the fallback.
+    summary_llm_providers: str = Field("sarvam,openrouter", alias="SUMMARY_LLM_PROVIDERS")
     llm_timeout_seconds: float = Field(4.5, alias="LLM_TIMEOUT_SECONDS")
+    # Characters of system prompt + history a live turn may carry (agent.build_messages trims knowledge first).
+    # The rendered system prompt alone is ~27k chars, so a smaller budget silently drops every Knowledge passage.
+    llm_prompt_char_budget: int = Field(32000, alias="LLM_PROMPT_CHAR_BUDGET")
     # Wall clock for one live turn across every provider and model in LLM_PROVIDERS. Without it a dead
     # provider set walks the whole chain (13.5s per model, then again without tools) past the 45s reply
     # deadline, and the caller hears nothing at all. Inside this budget the turn falls back to a spoken line.
@@ -91,6 +95,10 @@ class Settings(BaseSettings):
     cost_per_10k_tts_chars: float = Field(0, alias="COST_PER_10K_TTS_CHARS")
     cost_per_stt_hour: float = Field(0, alias="COST_PER_STT_HOUR")
     cost_per_llm_request: float = Field(0, alias="COST_PER_LLM_REQUEST")
+    # Cost guardrails for a live call (see voice_stream silence_loop): the agent is steered to close
+    # near the TTS character budget or the target duration; the persona's max_call_minutes stays the hard cap.
+    tts_chars_per_call: int = Field(800, alias="TTS_CHARS_PER_CALL")
+    call_target_minutes: float = Field(4, alias="CALL_TARGET_MINUTES")
     turn_end_grace_ms: int = Field(150, alias="TURN_END_GRACE_MS")
     # Speech-to-text is billed per second of audio sent: skip long silences (keeps pre-roll and a silent tail for VAD)
     stt_silence_gate: bool = Field(True, alias="STT_SILENCE_GATE")

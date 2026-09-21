@@ -163,13 +163,14 @@ def _state_key(agent_id: int, job: str) -> str:
 
 
 QUIET_RESULTS = ("outside calling hours", "no pending leads", "no leads to retry", "no callbacks due",
-                 "queue empty", "all call slots busy", "nothing to do", "no leads due", "0 reminder")
+                 "queue empty", "all call slots busy", "nothing to do", "no leads due")
 
 
 def _did_nothing(result: str) -> bool:
     """True for a routine run with no outcome: kept out of the history feed, still shown as "Last run"."""
     text = (result or "").lower()
-    return any(text.startswith(q) or q in text for q in QUIET_RESULTS)
+    # "0 reminder(s) sent" only at the start: a substring match also hid runs that sent 10 or 20.
+    return text.startswith("0 reminder") or any(text.startswith(q) or q in text for q in QUIET_RESULTS)
 
 
 def run_job(agent_id: int, name: str, force: bool = False, actor: str = "scheduler") -> str:

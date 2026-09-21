@@ -22,6 +22,12 @@ const KEYS: (keyof Routing)[] = ['transfer_number', 'team_members', 'inbound_mod
 
 export default function Inbound() {
   const { agent, base, path } = useAgent()
+  const ownerQ = useQuery({ queryKey: ['inbound-owner', base], queryFn: () => api<{ number: string; owner_id: number | null; sharing: { id: number; name: string }[] }>(`${base}/inbound-owner`) })
+  const setOwner = useMutation({
+    mutationFn: () => api(`${base}/inbound-owner`, { method: 'PUT' }),
+    onSuccess: () => { toast.success(`${agent?.name} now answers inbound calls on this line`); void qc.invalidateQueries({ queryKey: ['inbound-owner'] }) },
+    onError: (e) => toast.error('Could not change who answers', { description: e.message }),
+  })
   const navigate = useNavigate()
   // Same cache as the app-wide incoming-call banner: no extra polling for this page.
   const liveFeed = useQuery({
@@ -162,6 +168,29 @@ export default function Inbound() {
     <>
       <PageHeader eyebrow={<><PhoneIncoming className="size-3.5" />{agent?.name} · Call routing</>} title="Inbound & transfer"
         description="Choose who answers when customers call, and where the AI sends callers who need a person." />
+
+      <Card className="mb-4">
+        <CardHeader title="Who answers this line" description="Several agents can dial out from one number; exactly one of them answers when a customer calls it back. Change it any time - and give an agent its own number under Agent settings when you get one." />
+        <div className="flex flex-wrap items-center gap-3 px-4 pb-4 text-sm sm:px-5 sm:pb-5">
+          {ownerQ.data ? (
+            <>
+              <span className="font-mono">+{ownerQ.data.number || '—'}</span>
+              <span className="text-muted">·</span>
+              {ownerQ.data.owner_id === agent?.id
+                ? <Badge tone="success">This agent answers</Badge>
+                : ownerQ.data.owner_id
+                  ? <span>Answered by <strong>{ownerQ.data.sharing.find((a) => a.id === ownerQ.data!.owner_id)?.name ?? `agent #${ownerQ.data.owner_id}`}</strong></span>
+                  : <span className="text-muted">No agent designated: the first agent on this number answers</span>}
+              {ownerQ.data.owner_id !== agent?.id && (
+                <Button size="sm" variant="primary" className="ml-auto" loading={setOwner.isPending} onClick={() => setOwner.mutate()}>
+                  <PhoneIncoming />Make {agent?.name} answer
+                </Button>
+              )}
+              {ownerQ.data.sharing.length > 1 && <span className="basis-full text-xs text-muted">Sharing this line: {ownerQ.data.sharing.map((a) => a.name).join(', ')}</span>}
+            </>
+          ) : <Skeleton className="h-6 w-64" />}
+        </div>
+      </Card>
 
       <Card className={cn('glint mb-4 transition-colors', liveInbound && 'beam beam-on beam-live is-live-card')}>
         {liveInbound && (
@@ -308,11 +337,11 @@ export default function Inbound() {
                   <Clock className="size-3.5" />Open
                   {cfg && (
                     <div className="flex items-center gap-1 font-normal normal-case sm:ml-2">
-                      <select value={cfg.calling_hours_start} disabled={saveHours.isPending} aria-label="Opening hour" onChange={(e) => saveHours.mutate({ calling_hours_start: +e.target.value, calling_hours_end: cfg.calling_hours_end })} className="min-h-10 rounded-md border border-border bg-bg px-2 py-1 text-xs text-fg disabled:opacity-50">
+                      <select value={cfg.calling_hours_start} disabled={saveHours.isPending} aria-label="Opening hour" onChange={(e) => { const start = +e.target.value; saveHours.mutate({ calling_hours_start: start, calling_hours_end: Math.max(cfg.calling_hours_end, start + 1) }) }} className="min-h-10 rounded-md border border-border bg-bg px-2 py-1 text-xs text-fg disabled:opacity-50">
                         {HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
                       </select>
                       <span>to</span>
-                      <select value={cfg.calling_hours_end} disabled={saveHours.isPending} aria-label="Closing hour" onChange={(e) => saveHours.mutate({ calling_hours_start: cfg.calling_hours_start, calling_hours_end: +e.target.value })} className="min-h-10 rounded-md border border-border bg-bg px-2 py-1 text-xs text-fg disabled:opacity-50">
+                      <select value={cfg.calling_hours_end} disabled={saveHours.isPending} aria-label="Closing hour" onChange={(e) => { const end = +e.target.value; saveHours.mutate({ calling_hours_start: Math.min(cfg.calling_hours_start, end - 1), calling_hours_end: end }) }} className="min-h-10 rounded-md border border-border bg-bg px-2 py-1 text-xs text-fg disabled:opacity-50">
                         {HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
                       </select>
                     </div>

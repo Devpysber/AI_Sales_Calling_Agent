@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import {
   AlertTriangle, ArrowUpRight, AudioWaveform, ChartBar, BookOpen, CalendarCheck, CalendarClock, Cpu, Flame, LayoutGrid, List, ListOrdered, Mail, MessageSquareText, Pause, Phone,
-  PhoneCall, PhoneIncoming, Play, Plus, Radio, Search, Settings, Sparkles, TrendingUp, Upload, Users,
+  Lock, PhoneCall, PhoneIncoming, Play, Plus, Radio, Search, Settings, Sparkles, TrendingUp, Upload, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type CSSProperties } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { AgentMark, LiveDot } from '@/components/AppShell'
@@ -57,7 +57,7 @@ function setupScore(a: AgentOverviewItem) {
   return values.filter(Boolean).length / values.length
 }
 
-function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?: string; className?: string }) {
+function AgentCard({ agent, role, className, style }: { agent: AgentOverviewItem; role?: string; className?: string; style?: CSSProperties }) {
   const s = agent.stats
   const p = agent.period
   const o = agent.ops
@@ -72,7 +72,7 @@ function AgentCard({ agent, role, className }: { agent: AgentOverviewItem; role?
   const base = `/a/${agent.id}`
   return (
     <Card className={cn('beam group relative flex min-w-0 flex-col overflow-hidden transition duration-300 hover:-translate-y-1 hover:shadow-pop',
-      paused && 'opacity-90', s.live > 0 && !paused && 'is-live-card beam-on beam-live', className)}>
+      paused && 'opacity-90', s.live > 0 && !paused && 'is-live-card beam-on beam-live', className)} style={style}>
       <Link to={base} className="absolute inset-0 z-[1]" aria-label={`Open ${agent.name}`} />
 
       <div className="relative p-5 pb-0">
@@ -329,6 +329,13 @@ export default function Home() {
     )
   }
 
+  if (!agents.length && role === 'team') {
+    return (
+      <Card><EmptyState icon={<Lock />} title="No agent unlocked yet"
+        description="Pick an agent in the sidebar and enter its password to open it." /></Card>
+    )
+  }
+
   if (!agents.length) {
     return (
       <>
@@ -462,7 +469,7 @@ export default function Home() {
                     <XAxis dataKey="name" tick={{ fill: 'var(--muted)', fontSize: 12 }} axisLine={false} tickLine={false} />
                     <YAxis allowDecimals={false} tick={{ fill: 'var(--muted)', fontSize: 12 }} axisLine={false} tickLine={false} />
                     <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'var(--surface-2)' }} />
-                    <Bar dataKey="connected" name="Connected" stackId="c" fill="var(--fg)" radius={[0, 0, 4, 4]} isAnimationActive={false} />
+                    <Bar dataKey="connected" name="Connected" stackId="c" fill="var(--brand)" radius={[0, 0, 4, 4]} isAnimationActive={false} />
                     <Bar dataKey="other" name="Not connected" stackId="c" fill="var(--border-strong)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
                   </BarChart>
                 </ResponsiveContainer>

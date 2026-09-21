@@ -92,6 +92,19 @@ def _openrouter() -> dict | None:
     }
 
 
+def sarvam_usage_cost_since(ts: float) -> float:
+    """Measured Sarvam spend (TTS chars, STT seconds, LLM replies at the configured prices) since a unix time."""
+    secrets = SettingsService().get_state("secrets") or {}
+    cost_per_tts = float(secrets.get("cost_per_10k_tts_chars") or settings.cost_per_10k_tts_chars)
+    cost_per_stt = float(secrets.get("cost_per_stt_hour") or settings.cost_per_stt_hour)
+    cost_per_llm = float(secrets.get("cost_per_llm_request") or settings.cost_per_llm_request)
+    since = datetime.utcfromtimestamp(float(ts))
+    with get_db() as db:
+        t = db.execute(select(func.coalesce(func.sum(Call.tts_chars), 0), func.coalesce(func.sum(Call.stt_seconds), 0),
+                              func.coalesce(func.sum(Call.llm_requests), 0)).where(Call.created_at >= since)).one()
+    return (t[0] / 10000 * cost_per_tts) + (t[1] / 3600 * cost_per_stt) + (t[2] * cost_per_llm)
+
+
 def _sarvam() -> dict | None:
     if not settings.sarvam_api_key:
         return None
@@ -188,15 +201,21 @@ def credits(force: bool = False) -> dict:
 
 # ---------------- reminders ----------------
 
-def _snoozed() -> dict:
+def _snoozed(scope: str = "admin") -> dict:
+    """Snoozes are kept per principal ("admin" or "team:<id>"): one person's snooze must not hide another's reminders."""
     state = SettingsService().get_state("alerts_snoozed") or {}
+    # Legacy flat layout (key -> expiry) is read as the admin's.
+    mine = state.get(scope) if isinstance(state.get(scope), dict) else ({k: v for k, v in state.items() if not isinstance(v, dict)} if scope == "admin" else {})
     now = time.time()
-    return {k: v for k, v in state.items() if v > now}
+    return {k: v for k, v in (mine or {}).items() if isinstance(v, (int, float)) and v > now}
 
 
-def snooze(key: str, hours: float) -> None:
-    state = _snoozed()
-    state[key] = time.time() + max(0.25, min(hours, 24 * 7)) * 3600
+def snooze(key: str, hours: float, scope: str = "admin") -> None:
+    state = SettingsService().get_state("alerts_snoozed") or {}
+    state = {k: v for k, v in state.items() if isinstance(v, dict)}  # drop the legacy flat entries
+    mine = _snoozed(scope)
+    mine[key] = time.time() + max(0.25, min(hours, 24 * 7)) * 3600
+    state[scope] = mine
     SettingsService().set_state("alerts_snoozed", state)
 
 
@@ -249,6 +268,13 @@ def reminders() -> list[dict]:
             add(agent_id, "slow_replies", "warning", n,
                 f"Replies are slow: p95 {round(p95 / 1000, 1)}s to first audio over {n} calls",
                 "/analytics", "See latency")
+    from app.core import store
+    moved = store.get_json("llm_outage_postponed")
+    if moved and moved.get("leads"):
+        n = len(moved["leads"])
+        items.insert(0, {"key": f"llm_outage:{today}", "agent_id": None, "agent": None, "kind": "llm_outage", "level": "danger", "count": n,
+                         "text": f"AI providers unavailable: {n} scheduled call{'s' if n != 1 else ''} moved two hours on, customers emailed. {moved.get('detail', '')[:80]}",
+                         "to": "/settings", "action": "Check providers", "when": None})
     order = {"danger": 0, "warning": 1, "success": 2, "info": 3}
     return sorted(items, key=lambda i: (order[i["level"]], i.get("when") or ""))
 
@@ -289,7 +315,7 @@ def _routing() -> list[dict]:
     return cached
 
 
-def summary(force: bool = False, unlocked: list[int] | None = None) -> dict:
+def summary(force: bool = False, unlocked: list[int] | None = None, scope: str = "admin") -> dict:
     if unlocked is not None:
         balances = {"providers": [], "checked_at": int(time.time())}
         items = [i for i in reminders() if i["agent_id"] in unlocked]
@@ -302,7 +328,7 @@ def summary(force: bool = False, unlocked: list[int] | None = None) -> dict:
                                  "level": "danger" if p["level"] == "critical" else "warning", "count": 1, "to": p["action"]["url"] if p.get("action") else "/settings",
                                  "external": True, "action": p["action"]["label"] if p.get("action") else None, "when": None,
                                  "text": f"{p['provider']}: {p['value']} · {p['detail']}"})
-    snoozed = _snoozed()
+    snoozed = _snoozed(scope)
     visible = [i for i in items if i["key"] not in snoozed]
     popup = next((p for p in balances["providers"] if p["level"] == "critical" and f"popup:{p['provider']}" not in snoozed), None)
     return {

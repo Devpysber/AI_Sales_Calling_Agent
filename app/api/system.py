@@ -82,11 +82,13 @@ def _openrouter():
         result = {"ok": not unknown, "key": _mask(settings.openrouter_api_key), "free_tier": data.get("is_free_tier"),
                   "usage": data.get("usage"), "limit_remaining": data.get("limit_remaining"),
                   "models": models, "unknown_models": unknown}
+        from app.core import store
+        store.set_json("openrouter_unknown_models", unknown, ttl=6 * 3600)
         if unknown:
-            # A retired model id fails every live turn before the next model is tried: that was
-            # the "not a valid model ID" behind dropped calls, and nothing on this page showed it.
-            result["detail"] = (f"OpenRouter no longer has {', '.join(unknown)}. Replace it in OPENROUTER_MODELS "
-                                "— every live reply wastes a request on it first.")
+            # A retired model id used to fail every live turn before the next model was tried (the
+            # "not a valid model ID" behind dropped calls). Live turns now skip ids recorded here.
+            result["detail"] = (f"OpenRouter no longer has {', '.join(unknown)}. Live calls skip it; remove it from "
+                                "OPENROUTER_MODELS to clear this.")
         return result
     except Exception as e:
         return {"ok": False, "detail": str(e)}
@@ -161,13 +163,13 @@ async def inbound_status():
     return await asyncio.to_thread(_plivo_action, "inbound_status")
 
 
-@router.post("/system/inbound/connect")
+@router.post("/system/inbound/connect", dependencies=[Depends(require_admin)])
 async def inbound_connect():
     """Route inbound calls on PLIVO_PHONE_NUMBER to this app (previous application is remembered)."""
     return await asyncio.to_thread(_plivo_action, "connect_inbound")
 
 
-@router.post("/system/inbound/restore")
+@router.post("/system/inbound/restore", dependencies=[Depends(require_admin)])
 async def inbound_restore():
     return await asyncio.to_thread(_plivo_action, "restore_inbound")
 
@@ -179,17 +181,21 @@ async def alerts(request: Request, refresh: bool = False):
     payload = getattr(request.state, "token_payload", {})
     unlocked = payload.get("unlocked", []) if user == "team" else None
     from app.services import alerts as alert_service
-    return await asyncio.to_thread(alert_service.summary, refresh, unlocked)
+    scope = f"team:{payload.get('team_id')}" if user == "team" else "admin"
+    return await asyncio.to_thread(alert_service.summary, refresh, unlocked, scope)
 
 
 @router.post("/system/alerts/snooze")
-async def snooze_alert(body: dict):
-    """Hide one reminder (or a low-credit popup, key 'popup:<Provider>') for a number of hours."""
+async def snooze_alert(body: dict, request: Request):
+    """Hide one reminder (or a low-credit popup, key 'popup:<Provider>') for a number of hours, for this user only."""
     from app.services import alerts as alert_service
     key = str(body.get("key") or "")
     if not key:
         raise HTTPException(400, "key is required")
-    await asyncio.to_thread(alert_service.snooze, key, float(body.get("hours") or 4))
+    user = getattr(request.state, "user", "admin")
+    payload = getattr(request.state, "token_payload", {})
+    scope = f"team:{payload.get('team_id')}" if user == "team" else "admin"
+    await asyncio.to_thread(alert_service.snooze, key, float(body.get("hours") or 4), scope)
     return {"ok": True}
 # ---------------- team members ----------------
 
@@ -255,13 +261,14 @@ async def get_secrets():
     sarvam_credits_updated_at = secrets.get("sarvam_credits_updated_at")
     
     if sarvam_credits is not None and sarvam_credits_updated_at:
+        # The stored value stays the baseline the admin typed (re-saving must not re-baseline on an
+        # estimate); the estimate of what is left goes out separately for the form to display.
         try:
-            from app.services.analytics import get_sarvam_usage_since
-            usage_cost = get_sarvam_usage_since(sarvam_credits_updated_at)
-            reduced = float(sarvam_credits) - usage_cost
-            secrets["sarvam_credits"] = f"{reduced:.2f}" if reduced > 0 else "0.00"
-        except Exception:
-            pass
+            from app.services.alerts import sarvam_usage_cost_since
+            left = float(sarvam_credits) - sarvam_usage_cost_since(float(sarvam_credits_updated_at))
+            secrets["sarvam_credits_estimate"] = f"{left:.2f}" if left > 0 else "0.00"
+        except Exception:  # noqa: BLE001 - an estimate must never break the secrets form
+            secrets["sarvam_credits_estimate"] = None
             
     return secrets
 
@@ -313,7 +320,10 @@ async def get_team_members():
 @router.post("/system/team-members", dependencies=[Depends(require_admin)])
 async def add_team_member(body: TeamMemberUpdate):
     members = SettingsService().get_state("team_members") or []
-    if any(m.get("email") == body.email for m in members):
+    email = (body.email or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "Email is required.")
+    if any((m.get("email") or "").strip().lower() == email for m in members):
         raise HTTPException(400, "A team member with this email already exists.")
         
     salt = uuid.uuid4().hex
@@ -391,5 +401,6 @@ async def update_team_member_password(member_id: str, body: TeamMemberPasswordUp
     pwd = body.password
     h = hashlib.pbkdf2_hmac("sha256", pwd.encode(), salt.encode(), 240_000).hex()
     member["password_hash"] = f"{salt}${h}"
+    member["password_changed_at"] = int(time.time())
     SettingsService().set_state("team_members", members)
     return {"ok": True}

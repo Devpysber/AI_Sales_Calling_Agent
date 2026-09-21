@@ -189,9 +189,6 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
     let teeth: THREE.Mesh | undefined
     let head: THREE.Object3D | undefined
     let headRestX = 0                 // the rig's own head pitch; the render loop offsets from it, never from zero
-    let teethMat: THREE.MeshStandardMaterial | null = null
-    let teethBase: THREE.Color | null = null
-    const cavityColour = new THREE.Color(0x1a0b0c)
     let blinkAction: THREE.AnimationAction | null = null
 
     // Dispose every geometry/material/texture under a subtree. Used both on teardown and when the GLB
@@ -239,17 +236,9 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
       })
 
       face = model.getObjectByName(nodeName('Face.002')) as THREE.Mesh | null
-      if (face?.isMesh) jawIndex = addJawMorph(face, 12.55, 0.9, 0.55)
+      if (face?.isMesh) jawIndex = addJawMorph(face, 12.55, 0.9, 0.45)
       // Teeth are one block; dropping its lower half reads as the mouth opening between the rows.
       teeth = model.getObjectByName(nodeName('Teeth.001')) as THREE.Mesh | undefined
-      if (teeth?.isMesh) {
-        // Closed = white grin, open = dark mouth: the slab's colour fades toward cavity colour with the jaw.
-        // Cloned so no other mesh sharing Teeth_Material changes.
-        const mat = (Array.isArray(teeth.material) ? teeth.material[0] : teeth.material) as THREE.MeshStandardMaterial
-        teethMat = mat.clone()
-        teeth.material = teethMat
-        teethBase = teethMat.color.clone()
-      }
       head = model.getObjectByName(nodeName('spine.006'))
       headRestX = head?.rotation.x ?? 0
       lowerArm(model, 'L')
@@ -334,7 +323,9 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
         : Math.max(0, 0.6 + 0.5 * Math.sin(t * 14) * Math.sin(t * 5.3 + 1) + 0.3 * Math.sin(t * 23))
       mouth = THREE.MathUtils.lerp(mouth, target, target > mouth ? 0.5 : 0.25)
       if (face && jawIndex !== null && face.morphTargetInfluences) face.morphTargetInfluences[jawIndex] = mouth
-      if (teethMat && teethBase) teethMat.color.copy(teethBase).lerp(cavityColour, Math.min(1, mouth * 1.4))
+      // Original grin at rest. While speaking the teeth drop out whenever the mouth is open, so the jaw
+      // drop reads as a dark open mouth; they return the instant it closes.
+      if (teeth) teeth.visible = mouth < 0.18
 
       camera.lookAt(0, EYE_LINE, 0)
       renderer.render(scene, camera)

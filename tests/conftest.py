@@ -1,5 +1,6 @@
 import os
 import tempfile
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -43,6 +44,10 @@ def base(client):
     return f"/api/agents/{agent['id']}"
 
 
+# A booked time must still be in the future when the summary is applied: tomorrow, fixed hour.
+MEETING_AT = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d 15:00")
+
+
 @pytest.fixture(autouse=True)
 def fake_ai(monkeypatch):
     """Deterministic LLM, TTS and Plivo."""
@@ -52,7 +57,7 @@ def fake_ai(monkeypatch):
         user = messages[-1]["content"]
         if messages[0]["content"].startswith("You are a CRM analyst"):
             text = ('{"summary":"Prospect wants a demo.","qualification":"Hot","outcome":"meeting_booked",'
-                    '"sentiment":"positive","status":"Meeting Booked","meeting_at":"2026-09-20 15:00"}')
+                    '"sentiment":"positive","status":"Meeting Booked","meeting_at":"' + MEETING_AT + '"}')
         else:
             grounded = "Growth plan" in messages[0]["content"]
             text = ('{"reply":"%s","language":"en-IN","intent":"pricing","qualification":"Warm","sentiment":"positive",'
