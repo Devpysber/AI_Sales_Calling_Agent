@@ -398,6 +398,7 @@ function humanLlmError(detail: string) {
 
 function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: AgentProfile; unsaved: boolean; invalid: string[]; onSave: () => void; saving: boolean }) {
   const { base } = useAgent()
+  const qc = useQueryClient()
   // Rehearsing a call should use the agent's own word for the person on the line.
   const caller = (profile.customer_noun || 'customer').trim()
   const [history, setHistory] = useState<ChatTurn[]>([])
