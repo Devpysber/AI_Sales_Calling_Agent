@@ -166,8 +166,8 @@ def test_caller_known_to_two_agents_is_asked_which_desk(client, base, monkeypatc
     b = client.post("/api/agents", json={"name": "Homes desk"}).json()
     client.put(f"/api/agents/{a['id']}/profile", json={"company_name": "Acme Cars"})
     client.put(f"/api/agents/{b['id']}/profile", json={"company_name": "Blue Homes"})
-    for aid in (a["id"], b["id"]):
-        client.post(f"/api/agents/{aid}/leads", json={"name": "Two Desks", "phone": "9812300111"})
+    client.post(f"/api/agents/{a['id']}/leads", json={"name": "Two Desks", "phone": "9812300111"})
+    client.post(f"/api/agents/{b['id']}/leads", json={"name": "Two Desks", "phone": "9812300111", "language": "hi-IN"})
     monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
 
     choices = agents.inbound_choices([a["id"], b["id"]])
@@ -179,6 +179,7 @@ def test_caller_known_to_two_agents_is_asked_which_desk(client, base, monkeypatc
 
     session = CallService(None).create_inbound("919812300111", "918000000000", "two-1")
     assert session["agent_id"] == a["id"] and session["lead"]["call_purpose"] == "inbound_choose"
+    assert session["language"] == "hi-IN"  # last spoken language wins, whichever desk it was recorded on
     assert call_session.get(session["id"])["lead"]["choices"] == choices
     text = agent.greeting(a["id"], session["lead"], "en-IN")
     assert "Acme Cars or Blue Homes" in text and "Two Desks" in text

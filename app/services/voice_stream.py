@@ -1017,6 +1017,12 @@ class CallStream:
         crm = CallService(agent_id).crm
         phone = (self.session.get("lead") or {}).get("phone") or self.session.get("from_number")
         lead = crm.find_by_phone(phone) if phone else None
+        # The call carries on in the language already being spoken; remember it on this desk's lead so the
+        # next call from this number opens in it directly.
+        language = self.session.get("language")
+        if lead and language and not lead.get("language"):
+            with contextlib.suppress(Exception):
+                lead = crm.update(lead["id"], {"language": language}, actor="ai") or lead
         context = agent.inbound_context(self.persona, lead, phone or "")
         self.session["agent_id"] = agent_id
         self.session["lead_id"] = lead and lead["id"]

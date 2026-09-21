@@ -386,7 +386,10 @@ class CallService:
             with contextlib.suppress(ValueError):
                 lead = crm.create({**seed, "phone": from_number, "source": "inbound call", "status": "New"}, actor="system")
         persona = agents.get_profile(agent_id)
-        language = (lead or {}).get("language") or persona["default_language"]
+        # Speak the language the caller used last time, on whichever agent that conversation happened.
+        spoken_before = [l["language"] for l in sorted(known_per_agent, key=lambda l: (l.get("updated_at") or "", l["id"]), reverse=True)
+                         if l.get("language")]
+        language = (spoken_before[0] if spoken_before else None) or (lead or {}).get("language") or persona["default_language"]
         # A colleague ringing their own agent gets a walkthrough, not a sales call.
         if internal:
             purpose = "admin" if is_admin else "team"
