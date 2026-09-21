@@ -960,7 +960,10 @@ def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, 
     Generate the next turn for one agent (its persona and its own knowledge base). `history` excludes `customer_text`.
     """
     started = time.perf_counter()
-    messages, knowledge = build_messages(agent_id, history, customer_text, lead, use_embeddings, summary=summary)
+    # Same gate as a live turn: "hi", "ha", "ok" never wait on a paid embedding round trip (up to 1s serial
+    # here, since the playground has no prefetch during speech); BM25 still runs for them.
+    use_embeddings = use_embeddings and needs_knowledge(customer_text)
+    messages, knowledge = build_messages(agent_id, history, customer_text, lead, use_embeddings, embed_timeout=0.6, summary=summary)
     result = llm.complete(messages, json_mode=True, max_tokens=400, temperature=0.4)
     data = _parse_turn(result.text)
     reply = plain_speech(str(data.get("reply") or "").strip())
