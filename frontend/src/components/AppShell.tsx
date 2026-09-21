@@ -19,7 +19,7 @@ import { AgentProvider, useAgents } from '@/lib/agent'
 import type { AgentSummary } from '@/lib/types'
 import { cn, initials } from '@/lib/utils'
 
-type NavItem = { to: string; label: string; icon: typeof Users; key: string; adminOnly?: boolean; count?: (a: AgentSummary) => ReactNode }
+type NavItem = { to: string; label: string; icon: typeof Users; key: string; count?: (a: AgentSummary) => ReactNode }
 
 const AGENT_NAV: { section: string; items: NavItem[] }[] = [
   {
@@ -42,8 +42,8 @@ const AGENT_NAV: { section: string; items: NavItem[] }[] = [
     section: 'Build', items: [
       { to: '/agent', label: 'Persona & playground', icon: Bot, key: 'g' },
       { to: '/knowledge', label: 'Knowledge base', icon: BookOpen, key: 'k', count: (a) => a.stats.documents || null },
-      { to: '/automation', label: 'Automation', icon: CalendarClock, key: 'u', adminOnly: true, count: (a) => a.automation_on ? <span className="text-success">On</span> : null },
-      { to: '/settings', label: 'Agent settings', icon: SlidersHorizontal, key: 's', adminOnly: true },
+      { to: '/automation', label: 'Automation', icon: CalendarClock, key: 'u', count: (a) => a.automation_on ? <span className="text-success">On</span> : null },
+      { to: '/settings', label: 'Agent settings', icon: SlidersHorizontal, key: 's' },
     ],
   },
 ]
@@ -310,8 +310,8 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
           )}
 
           {AGENT_NAV.map((group) => {
-            // Team members operate the agent (leads, calls, playground, knowledge search); configuring it is the admin's.
-            const items = group.items.filter((i) => !i.adminOnly || role !== 'team')
+            // Team members see the full agent menu; admin-only actions (e.g. deleting an agent) are gated on the backend.
+            const items = group.items
             if (!items.length) return null
             return (
               <div key={group.section} className="mb-4">
