@@ -128,7 +128,7 @@ def get_agent(agent_id: int = Depends(workspace)):
     return {**agents.get(agent_id), "profile": agents.get_profile(agent_id)}
 
 
-@router.patch("/{agent_id}", dependencies=[Depends(require_admin)])
+@router.patch("/{agent_id}")
 def update_agent(body: AgentPatch, request: Request, agent_id: int = Depends(workspace)):
     try:
         return agents.update(agent_id, body.model_dump(exclude_unset=True), actor=actor(request))
@@ -193,7 +193,7 @@ def get_profile(request: Request, agent_id: int = Depends(workspace)):
             "voices": tts.SPEAKERS, "languages": tts.LANGUAGES}
 
 
-@router.put("/{agent_id}/profile", dependencies=[Depends(require_admin)])
+@router.put("/{agent_id}/profile")
 def update_profile(values: dict, request: Request, agent_id: int = Depends(workspace)):
     if "agent_password" in values and getattr(request.state, "user", "") not in ("admin", "api"):
         raise HTTPException(403, "Administrator access required.")
@@ -345,7 +345,7 @@ def get_inbound_owner(agent_id: int = Depends(workspace)):
     return {"number": number, "owner_id": owner, "sharing": [{"id": a["id"], "name": a["name"]} for a in sharing]}
 
 
-@router.put("/{agent_id}/inbound-owner", dependencies=[Depends(require_admin)])
+@router.put("/{agent_id}/inbound-owner")
 def put_inbound_owner(request: Request, agent_id: int = Depends(workspace)):
     """Make this agent the one that answers inbound calls on its line."""
     number = agents.caller_id(agent_id)
@@ -355,7 +355,7 @@ def put_inbound_owner(request: Request, agent_id: int = Depends(workspace)):
         raise HTTPException(400, str(e))
 
 
-@router.put("/{agent_id}/automation", dependencies=[Depends(require_admin)])
+@router.put("/{agent_id}/automation")
 def update_automation(values: dict, request: Request, agent_id: int = Depends(workspace)):
     try:
         return agents.update_automation(agent_id, values, actor=actor(request))
@@ -363,7 +363,7 @@ def update_automation(values: dict, request: Request, agent_id: int = Depends(wo
         raise HTTPException(400, str(e))
 
 
-@router.post("/{agent_id}/automation/run/{job}", dependencies=[Depends(require_admin)])
+@router.post("/{agent_id}/automation/run/{job}")
 async def run_job(job: str, request: Request, agent_id: int = Depends(workspace)):
     if job not in scheduler.JOBS:
         raise HTTPException(404, "Unknown job")
