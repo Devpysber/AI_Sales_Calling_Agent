@@ -25,8 +25,10 @@ def test_extract_text_corrupt_docx_raises_valueerror():
 
 
 def test_partial_embed_failure_keeps_completed_vectors(client, monkeypatch):
-    chunks = [f"chunk number {i} has enough characters to survive filtering." for i in range(70)]
+    chunks = [f"chunk number {i} " + "padding text to fill the batch budget. " * 8 for i in range(70)]
     monkeypatch.setattr(rag, "chunk_text", lambda text: chunks)
+    first_batch = len(rag._embed_batches(chunks)[0])
+    assert first_batch < len(chunks)  # the document must span more than one request
 
     calls = []
 
@@ -58,8 +60,8 @@ def test_partial_embed_failure_keeps_completed_vectors(client, monkeypatch):
 
         stored = db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).order_by(DocumentChunk.position).all()
         assert len(stored) == 70
-        assert all(c.embedding is not None for c in stored[:64])
-        assert all(c.embedding is None for c in stored[64:])
+        assert all(c.embedding is not None for c in stored[:first_batch])
+        assert all(c.embedding is None for c in stored[first_batch:])
 
 
 def test_prefetch_skips_embed_when_no_embedded_chunks(monkeypatch):
