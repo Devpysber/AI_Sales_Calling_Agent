@@ -5,7 +5,7 @@ import {
   SlidersHorizontal, Sparkles, Sun, Upload, UserPlus, Users, X,
 } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate, useNavigationType, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import AlertsBell from '@/components/AlertsBell'
 import IncomingCall, { PREVIEW_EVENT } from '@/components/IncomingCall'
@@ -440,6 +440,13 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
   const navigate = useNavigate()
   const qc = useQueryClient()
   const pending = useRef<{ key: string; at: number } | null>(null)
+  // The window is the scroll container (the sidebar is sticky), so a section opened from the sidebar
+  // used to keep the previous page's scroll offset and land mid-page. Back/forward keep the browser's own restore.
+  const navType = useNavigationType()
+  useEffect(() => {
+    if (navType === 'POP') return
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' as ScrollBehavior })
+  }, [location.pathname, navType])
   const { agentId } = useParams()
   const agentsQuery = useAgents()
   const agents = useMemo(() => agentsQuery.data?.agents ?? [], [agentsQuery.data])

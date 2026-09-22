@@ -713,7 +713,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
             
             {/* Chat column: toggle above, bubbles below. The toggle lives outside the clipped/scrolling
                 box so it is always reachable, on phones too, whichever mode the transcript is in. */}
-            <div className={cn('w-full min-w-0 flex-col gap-2 sm:flex sm:w-auto sm:max-w-[60%] sm:min-w-[320px]', chatOpen ? 'flex' : 'hidden')}>
+            <div className={cn('w-full min-w-0 flex-col gap-2 sm:flex sm:w-auto sm:max-w-[40%] lg:max-w-[36%] sm:min-w-[300px]', chatOpen ? 'flex' : 'hidden')}>
             {history.length > VISIBLE_TURNS && (
               <div className="pointer-events-auto self-start">
                 <button type="button" onClick={() => setShowAll((v) => !v)}

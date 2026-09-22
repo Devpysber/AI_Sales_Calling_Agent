@@ -297,7 +297,9 @@ async def playground(body: PlaygroundMessage, request: Request, agent_id: int = 
     elif char_budget and spoken >= 0.75 * char_budget:
         guidance = STEER_GUIDANCE
     try:
-        res = await asyncio.to_thread(agent.respond, agent_id, history, body.message, lead, guidance=guidance)
+        # Same knowledge path as a live turn (keyword search, no embedding round-trip): the rehearsal shows the
+        # latency and answers a real call gets, and a turn is not held up to a second for a paid embedding.
+        res = await asyncio.to_thread(agent.respond, agent_id, history, body.message, lead, use_embeddings=False, guidance=guidance)
     except LLMError as e:
         raise HTTPException(502, str(e))
     res["spoken_chars"] = spoken + len(res.get("reply") or "")
