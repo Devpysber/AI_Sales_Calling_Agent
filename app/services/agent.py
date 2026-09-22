@@ -442,10 +442,58 @@ def team_brief(agent_id: int) -> str:
     return _cached(("team", agent_id), build)
 
 
+def _team_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: int | None, now: datetime) -> str:
+    """
+    A colleague's check-in is not a sales call: no playbook, objections, qualification, other desks or earlier
+    conversations. A quarter of the customer prompt, so a team call costs a quarter per turn, and the agent
+    talks like a colleague reporting in, not like a script.
+    """
+    purpose = lead.get("call_purpose") or "team"
+    status = team_brief(agent_id) if agent_id else ""
+    brief = (company_brief(agent_id) if agent_id else "").strip()
+    kb = "\n\n".join(f"[{i + 1}] ({k['title']}) {k['text'][:KNOWLEDGE_CHARS]}" for i, k in enumerate(knowledge[:2]))
+    hours = ""
+    if agent_id:
+        with contextlib.suppress(Exception):
+            cfg = agents.get_automation(agent_id)
+            hours = f"Calling window {int(cfg.get('calling_hours_start', 9))}:00–{int(cfg.get('calling_hours_end', 21))}:00 IST."
+    female = gender(persona) == "female"
+    gender_line = (f"You are a {'woman' if female else 'man'}; in Hindi use {'feminine' if female else 'masculine'} verb forms.")
+    return f"""You are {persona['agent_name']}, the AI calling agent of {persona['company_name']}, on a live PHONE CALL with one of your own colleagues{' (an administrator)' if purpose == 'admin' else ''}.
+{gender_line}
+
+# This call
+{lead.get('call_goal') or ''}
+
+# How to speak
+- Like a colleague reporting in: one fact or one action per reply, 30-150 characters, in the language and script they use (Hindi/Hinglish -> Devanagari). No greeting again, no pitch, no lists.
+- When they ask for an action, run the tool and then say only what the result says. Never claim something is on, off, sent, booked or saved unless a tool result in this conversation says so; if a tool failed, say so in one line.
+- When they ask a number or a status, give the figure from the brief below, not an estimate. If you do not have it, say so.
+- If they ask what you would say to a customer, answer in one or two spoken sentences as you would on that call.
+- End when they say bye or that's all: one short line.
+
+# How this agent is doing right now (read these out if asked; they are live)
+{status or '- No live figures available.'}
+{hours}
+
+# What this agent is set up to sell (the company brief)
+{brief or '- Not available'}
+{('# Knowledge matching their question' + chr(10) + kb + chr(10)) if kb else ''}
+# Today
+{now:%A, %d %B %Y, %H:%M} IST
+
+# Output
+Your entire output must start with '{{' and be only this JSON object — no prose before or after it:
+{TURN_SCHEMA}
+Field rules: intent "end_call" only when they said goodbye or that's all; otherwise "other". qualification "Unknown". crm_update stays empty: this is a colleague, not a lead."""
+
+
 def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: int | None = None,
                    brief_lines: int | None = None, calls_lines: int | None = None) -> str:
     """brief_lines / calls_lines: keep only that many lines of the company brief / earlier calls (prompt budget)."""
     now = datetime.now(IST)
+    if lead.get("call_purpose") in ("team", "admin"):
+        return _team_prompt(persona, lead, knowledge, agent_id, now)
     handover = can_transfer(persona)
     brief = company_brief(agent_id) if agent_id else ""
     history = past_conversations(agent_id, lead) if agent_id else ""
