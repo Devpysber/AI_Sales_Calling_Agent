@@ -104,7 +104,7 @@ class Settings(BaseSettings):
     playground_monthly_limit: int = Field(5, alias="PLAYGROUND_MONTHLY_LIMIT")
     # Cost guardrails for a live call (see voice_stream silence_loop): the agent is steered to close
     # near the TTS character budget or the target duration; the persona's max_call_minutes stays the hard cap.
-    tts_chars_per_call: int = Field(800, alias="TTS_CHARS_PER_CALL")
+    tts_chars_per_call: int = Field(650, alias="TTS_CHARS_PER_CALL")   # ~2.5 min of speech; the prompt steers at 75% and wraps at 100%
     call_target_minutes: float = Field(4, alias="CALL_TARGET_MINUTES")
     turn_end_grace_ms: int = Field(150, alias="TURN_END_GRACE_MS")
     # Speech-to-text is billed per second of audio sent: skip long silences (keeps pre-roll and a silent tail for VAD)
