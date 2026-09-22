@@ -470,3 +470,21 @@ def test_colleague_switch_commands_run_without_the_model(client, base):
     assert agent_tools.team_quick_action(agent_id, "auto dial kyun band hai?") is None       # a question goes to the model
     assert agent_tools.team_quick_action(agent_id, "aaj kitni calls hui") is None           # not a switch command
     assert agent_tools.team_quick_action(agent_id, "retry band karo agar koi issue ho") is None  # conditional
+
+
+def test_colleague_sets_reminder_hour_calling_days_and_report_email(client, base):
+    from app.services import agent_tools, agents
+    agent_id = int(base.rsplit("/", 1)[1])
+    run = lambda args: agent_tools.execute_tool("set_schedule", args, agent_id, role="team")
+    assert "meeting reminders at 10:00" in run('{"job": "meeting_reminder", "time": "10 ए एम"}')
+    assert agents.get_automation(agent_id)["meeting_reminder_hour"] == 10
+    assert "daily report at 21:00" in run('{"job": "daily_report", "time": "9 pm"}')
+    out = run('{"job": "daily_report", "recipient": "ashish sharma one two zero five one two at the rate gmail dot com"}')
+    assert "daily report to ashishsharma120512@gmail.com" in out, out
+    assert agents.get_automation(agent_id)["daily_report_email"] == "ashishsharma120512@gmail.com"
+    agents.update_automation(agent_id, {"calling_days": [0, 1, 2, 3, 4, 5]}, actor="test")
+    assert "Sun" in run('{"job": "calling_days", "days": "Sunday ke liye on kar do"}')
+    assert agents.get_automation(agent_id)["calling_days"] == [0, 1, 2, 3, 4, 5, 6]
+    assert "Sat" not in run('{"job": "calling_days", "days": "Saturday band karo"}')
+    assert 5 not in agents.get_automation(agent_id)["calling_days"]
+    assert "Failed" in run('{"job": "calling_days", "days": "kal"}')

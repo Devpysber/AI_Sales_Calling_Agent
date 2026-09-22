@@ -22,7 +22,7 @@ from app.services.settings_service import SettingsService
 log = get_logger(__name__)
 
 ISSUES_KEY = "issues"
-MAX_ISSUES = 200
+MAX_ISSUES = 1000
 SCHEDULER_TICK_KEY = "scheduler_last_tick"
 
 # kind -> (title, what heal does; None = no automatic remedy, escalate)

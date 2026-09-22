@@ -409,8 +409,7 @@ def update_lead_details_tool(agent_id: int, lead_id, lead: str | None = None, **
     if not data:
         return "Failed: say which detail to change (name, email, city, company or requirement)."
     if "email" in data:
-        from app.services.voice_stream import spoken_email
-        data["email"] = spoken_email(data["email"]) or data["email"]
+        data["email"] = spoken_address(data["email"]) or data["email"]
         if "@" not in data["email"]:
             return f"Failed: '{data['email']}' does not look like an email. Spell it letter by letter."
     try:
@@ -501,6 +500,114 @@ def set_calling_hours_tool(agent_id: int, start: int | None, end: int | None) ->
         return f"Failed: {e}"
     new = get_automation(agent_id)
     return f"Calling hours now {new['calling_hours_start']}:00 to {new['calling_hours_end']}:00 IST."
+
+
+_DAY_WORDS = [("mon", r"mon|somvar|सोम"), ("tue", r"tue|mangal|मंगल"), ("wed", r"wed|budh|बुध"), ("thu", r"thu|guru|गुरु"),
+              ("fri", r"fri|shukra|शुक्र"), ("sat", r"sat|shani|शनि"), ("sun", r"sun|ravi|itwar|रवि|इतवार")]
+
+
+def _hour_of(value, default: int | None = None) -> int | None:
+    """'10 AM', '10 ए एम', '7 pm', '19:00', 10 -> hour on the 24h clock."""
+    text = str(value if value is not None else "").lower()
+    m = re.search(r"(\d{1,2})(?::(\d{2}))?", text)
+    if not m:
+        return default
+    hour = int(m.group(1))
+    if hour < 12 and re.search(r"pm|shaam|sham|evening|raat|night|शाम|रात|पी ?एम", text):
+        hour += 12
+    if hour == 12 and re.search(r"am|subah|morning|सुबह|ए ?एम", text):
+        hour = 0
+    return hour if 0 <= hour <= 23 else default
+
+
+_NUM_WORDS = {"zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+              "shunya": "0", "ek": "1", "do": "2", "teen": "3", "char": "4", "paanch": "5", "panch": "5", "chhe": "6", "che": "6", "saat": "7", "aath": "8", "nau": "9"}
+_ADDRESS_STOP = {"is", "id", "email", "mail", "to", "on", "mera", "meri", "hai", "par", "pe", "ko", "send", "bhejo", "bhej", "change", "karo", "kar", "the", "my", "and", "aur", "ka", "ki", "wala"}
+
+
+def spoken_address(text: str | None) -> str | None:
+    """
+    An email dictated on a call, including digits said as words and a name said in two words:
+    "ashish sharma one two zero five one two at the rate gmail dot com" -> ashishsharma120512@gmail.com.
+    Everything up to a stop word before the "at" joins the local part; None when it still is not an address.
+    """
+    from app.services.voice_stream import spoken_email
+    raw = str(text or "").strip().lower()
+    if not raw:
+        return None
+    if "@" in raw and " " not in raw.strip():
+        return spoken_email(raw) or raw
+    tokens = [_NUM_WORDS.get(t, t) for t in re.split(r"\s+", raw)]
+    joined = " ".join(tokens)
+    m = re.search(r"\s*(?:@|\bat the rate\b|\bat\b)\s*", joined)
+    if not m:
+        return spoken_email(joined)
+    before, after = joined[:m.start()].split(), joined[m.end():]
+    local = []
+    for t in reversed(before):
+        if t in _ADDRESS_STOP or not re.fullmatch(r"[a-z0-9._+-]+", t):
+            break
+        local.append(t)
+    if not local:
+        return spoken_email(joined)
+    domain = re.sub(r"\s*\bdot\b\s*", ".", after).replace(" ", "")
+    candidate = "".join(reversed(local)).replace("dot", ".") + "@" + domain
+    return candidate if re.fullmatch(r"[\w.+-]+@[\w-]+(\.[a-z]{2,})+", candidate) else spoken_email(joined)
+
+
+def set_schedule_tool(agent_id: int, job: str, time: str | None = None, days: str | list | None = None,
+                      recipient: str | None = None) -> str:
+    """When a scheduled job runs and who gets it: meeting reminders / daily report hour, calling days, report email."""
+    from app.services.agents import get_automation, update_automation
+    job = re.sub(r"[^a-z]", "", str(job or "").lower())
+    cfg = get_automation(agent_id)
+    values, said = {}, []
+    if job in ("meetingreminder", "reminder", "reminders"):
+        hour = _hour_of(time)
+        if hour is None:
+            return "Failed: say the hour for the meeting reminders, e.g. 10 AM."
+        values["meeting_reminder_hour"] = hour
+        values["meeting_reminder_enabled"] = True
+        said.append(f"meeting reminders at {hour}:00 IST")
+    elif job in ("dailyreport", "report"):
+        if time is not None and str(time).strip():
+            hour = _hour_of(time)
+            if hour is None:
+                return "Failed: say the hour for the daily report, e.g. 9 PM."
+            values["daily_report_hour"] = hour
+            values["daily_report_enabled"] = True
+            said.append(f"daily report at {hour}:00 IST")
+        if recipient:
+            email = spoken_address(str(recipient)) or str(recipient).strip()
+            if "@" not in email or "." not in email.split("@")[-1]:
+                return f"Failed: '{email}' does not look like an email address. Spell it letter by letter."
+            values["daily_report_email"] = email
+            said.append(f"daily report to {email}")
+        if not values:
+            return "Failed: say the hour and/or the email for the daily report."
+    elif job in ("callingdays", "callingwindow", "days", "window"):
+        raw = " ".join(days) if isinstance(days, list) else str(days or "")
+        if not raw.strip():
+            return "Failed: say which days, e.g. 'Sunday bhi' or 'Monday to Saturday'."
+        current = set(int(d) for d in (cfg.get("calling_days") or [0, 1, 2, 3, 4, 5]))
+        named = {i for i, (_k, rx) in enumerate(_DAY_WORDS) if re.search(rx, raw, re.I)}
+        if re.search(r"\b(all|every|saare|sab|roz|daily)\b|सब|सारे|रोज़|रोज", raw, re.I):
+            named = set(range(7))
+        if not named:
+            return "Failed: I did not catch the day. Say it like 'Sunday' or 'Monday to Friday'."
+        remove = bool(re.search(r"\b(off|band|hata|remove|nahi|mat|except|chhod)\b|बंद|हटा|नहीं|छोड़", raw, re.I))
+        new_days = sorted((current - named) if remove else (current | named))
+        if not new_days:
+            return "Failed: at least one calling day must stay on."
+        values["calling_days"] = new_days
+        said.append("calling days now " + ", ".join(_DAY_WORDS[d][0].title() for d in new_days))
+    else:
+        return "Failed: which schedule — meeting reminders, daily report, or calling days?"
+    try:
+        update_automation(agent_id, values, actor="team")
+    except Exception as e:  # noqa: BLE001
+        return f"Failed: {e}"
+    return "Done: " + "; ".join(said) + "."
 
 
 def pending_work_tool(agent_id: int) -> str:
@@ -712,6 +819,13 @@ TOOLS += [
         "parameters": {"type": "object", "properties": {"lead": {"type": "string"}, "now": {"type": "boolean"}}, "required": ["lead"]}}},
     {"type": "function", "function": {"name": "set_meeting", "description": "Book or move a meeting / showroom visit for a lead at a day and time (IST).",
         "parameters": {"type": "object", "properties": {"lead": {"type": "string"}, "date_time": {"type": "string", "description": "YYYY-MM-DD HH:MM IST"}}, "required": ["lead", "date_time"]}}},
+    {"type": "function", "function": {"name": "set_schedule", "description": "When a scheduled job runs / who gets it: job 'meeting_reminder' with time ('reminder 10 AM pe set karo'), "
+                                                                             "job 'daily_report' with time and/or recipient email ('report 9 baje bhejo', 'report ki email badlo'), "
+                                                                             "job 'calling_days' with days to add or remove ('Sunday bhi on karo', 'Saturday band karo').",
+        "parameters": {"type": "object", "properties": {"job": {"type": "string", "enum": ["meeting_reminder", "daily_report", "calling_days"]},
+                                                        "time": {"type": "string", "description": "Hour like '10 AM' or '21:00'"},
+                                                        "days": {"type": "string", "description": "Days named, with 'off'/'band' to remove"},
+                                                        "recipient": {"type": "string", "description": "Email address as spoken"}}, "required": ["job"]}}},
     {"type": "function", "function": {"name": "set_calling_hours", "description": "Change the calling window: start and/or end hour on the 24h clock, IST ('10 se 7 tak call karo').",
         "parameters": {"type": "object", "properties": {"start": {"type": "integer"}, "end": {"type": "integer"}}}}},
     {"type": "function", "function": {"name": "pending_work", "description": "What is waiting: call queue size, callbacks due today, meetings today. Use for 'kya pending hai', 'aaj kya hai'.",
@@ -951,6 +1065,9 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
         return set_meeting_tool(target, args.get("lead_id"), args.get("date_time") or args.get("time") or "", lead=args.get("lead") or args.get("name"))
     elif name == "set_calling_hours":
         return set_calling_hours_tool(target, args.get("start"), args.get("end"))
+    elif name == "set_schedule":
+        return set_schedule_tool(target, args.get("job") or "", args.get("time") or args.get("hour"), args.get("days") or args.get("day"),
+                                 args.get("recipient") or args.get("email"))
     elif name == "pending_work":
         return pending_work_tool(target)
     elif name == "set_agent_paused":
