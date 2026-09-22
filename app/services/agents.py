@@ -14,12 +14,15 @@ from sqlalchemy import or_, func, select
 from app.core import store
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.logging import get_logger
 from app.models.agent import Agent
 from app.models.call import Call
 from app.models.document import Document, DocumentChunk
 from app.models.event import Event
 from app.models.lead import Lead
 from app.services import events
+
+log = get_logger(__name__)
 from app.services.settings_service import SettingsService, coerce
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -247,6 +250,37 @@ def _assert_unique(db, meta: dict, exclude_id: int | None = None) -> None:
     # designated with set_inbound_owner() (see for_inbound).
 
 
+def _wire_own_number(agent_id: int, number: str | None, actor: str) -> None:
+    """
+    An agent given its own Plivo number must actually receive calls on it: check the number is in the
+    account, then point it at this app's webhooks (the previous application is remembered, as for the
+    default line). Never blocks saving on a Plivo outage: the failure is recorded and Health & heal
+    flags the line until it is connected.
+    """
+    digits = "".join(c for c in (number or "") if c.isdigit())
+    if not digits or digits == "".join(c for c in (settings.plivo_phone_number or "") if c.isdigit()):
+        return
+    from app.services.plivo_service import PlivoService
+    from app.services.heal_service import INBOUND_CHECK_KEY, report
+    try:
+        svc = PlivoService()
+        if not hasattr(svc, "inbound_status"):
+            return
+        status = svc.inbound_status(digits)
+        if not status.get("connected"):
+            status = svc.connect_inbound(digits)
+        store.delete(INBOUND_CHECK_KEY)
+        events.record("inbound.connected" if status.get("connected") else "inbound.not_connected",
+                      f"+{digits} {'now sends incoming calls to this agent' if status.get('connected') else 'is not receiving calls on this app yet'}",
+                      agent_id=agent_id, actor=actor)
+        if not status.get("connected"):
+            report("inbound_disconnected", f"+{digits}: Plivo still points this number elsewhere.", agent_id=agent_id, data={"number": "+" + digits})
+    except Exception as e:  # noqa: BLE001 - a Plivo error must not lose the agent
+        log.warning("Could not wire +%s for agent %s: %s", digits, agent_id, e)
+        report("inbound_disconnected", f"+{digits}: could not be connected on Plivo ({str(e)[:160]}). Is the number in this Plivo account?",
+               agent_id=agent_id, data={"number": "+" + digits})
+
+
 def create(data: dict, actor: str = "admin", created_by: str | None = None) -> dict:
     meta = _clean_meta({"name": data.get("name"), **{k: data[k] for k in META_FIELDS if k in data and k != "name"}})
     profile = coerce(PROFILE_DEFAULTS, {k: v for k, v in (data.get("profile") or {}).items() if v not in (None, "")})
@@ -267,6 +301,8 @@ def create(data: dict, actor: str = "admin", created_by: str | None = None) -> d
         result = agent.to_dict()
     store.delete(DESKS_KEY)
     events.record("agent.created", f"Agent created: {result['name']}", agent_id=result["id"], actor=actor)
+    if result.get("phone_number"):
+        _wire_own_number(result["id"], result["phone_number"], actor)
     return result
 
 
@@ -284,6 +320,8 @@ def update(agent_id: int, data: dict, actor: str = "admin") -> dict:
     if changed:
         store.delete(DESKS_KEY)
         events.record("settings.updated", "Agent details updated", ", ".join(changed), agent_id=agent_id, actor=actor)
+        if "phone_number" in changed and result.get("phone_number"):
+            _wire_own_number(agent_id, result["phone_number"], actor)
     return result
 
 

@@ -160,11 +160,11 @@ async def status():
 
 # ---------------- inbound calls on the Plivo number ----------------
 
-def _plivo_action(action: str):
+def _plivo_action(action: str, number: str | None = None):
     from app.services.plivo_service import PlivoService
     try:
         service = PlivoService()
-        result = getattr(service, action)()
+        result = getattr(service, action)(number) if number else getattr(service, action)()
         if action != "inbound_status":
             from app.services.heal_service import INBOUND_CHECK_KEY
             store.delete(INBOUND_CHECK_KEY)   # Health & heal re-reads Plivo on the next check
@@ -176,19 +176,20 @@ def _plivo_action(action: str):
 
 
 @router.get("/system/inbound")
-async def inbound_status():
-    return await asyncio.to_thread(_plivo_action, "inbound_status")
+async def inbound_status(number: str | None = None):
+    """Inbound status of one line: the default number, or `number` (an agent's own)."""
+    return await asyncio.to_thread(_plivo_action, "inbound_status", number)
 
 
 @router.post("/system/inbound/connect")
-async def inbound_connect():
-    """Route inbound calls on PLIVO_PHONE_NUMBER to this app (previous application is remembered)."""
-    return await asyncio.to_thread(_plivo_action, "connect_inbound")
+async def inbound_connect(number: str | None = None):
+    """Route inbound calls on the line to this app (previous application is remembered)."""
+    return await asyncio.to_thread(_plivo_action, "connect_inbound", number)
 
 
 @router.post("/system/inbound/restore")
-async def inbound_restore():
-    return await asyncio.to_thread(_plivo_action, "restore_inbound")
+async def inbound_restore(number: str | None = None):
+    return await asyncio.to_thread(_plivo_action, "restore_inbound", number)
 
 
 @router.get("/system/alerts")

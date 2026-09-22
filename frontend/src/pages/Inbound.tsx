@@ -234,7 +234,7 @@ export default function Inbound() {
         <Stagger className="min-w-0 space-y-4" step={60}>
           <Card>
             <CardHeader title="1 · Phone number" description="Plivo must send calls on this number to the app." />
-            <div className="px-4 pb-5 text-sm sm:px-5"><InboundSetup /></div>
+            <div className="px-4 pb-5 text-sm sm:px-5"><InboundSetup number={ownerQ.data?.own_number ? ownerQ.data.number : undefined} /></div>
           </Card>
 
           <Card>

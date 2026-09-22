@@ -8,14 +8,16 @@ type Inbound = { number: string; voice_enabled: boolean | null; app_id: string |
   connected: boolean; expected_answer_url: string; previous_app: { app_id: string; app_name: string | null } | null }
 
 /** Whether the Plivo number sends incoming calls to this app, with connect / restore actions. */
-export default function InboundSetup() {
+export default function InboundSetup({ number }: { number?: string } = {}) {
   const qc = useQueryClient()
   const confirm = useConfirm()
-  const { data: s, isLoading, error, refetch, isFetching } = useQuery({ queryKey: ['system', 'inbound'], queryFn: () => api<Inbound>('/api/system/inbound'), staleTime: 0, refetchOnMount: 'always', refetchInterval: 30_000, retry: false })
+  // `number`: an agent's own line (digits); omitted = the default Plivo number.
+  const params = number ? { number } : undefined
+  const { data: s, isLoading, error, refetch, isFetching } = useQuery({ queryKey: ['system', 'inbound', number ?? ''], queryFn: () => api<Inbound>('/api/system/inbound', { params }), staleTime: 0, refetchOnMount: 'always', refetchInterval: 30_000, retry: false })
   const act = useMutation({
-    mutationFn: (action: 'connect' | 'restore') => api<Inbound>(`/api/system/inbound/${action}`, { method: 'POST' }),
+    mutationFn: (action: 'connect' | 'restore') => api<Inbound>(`/api/system/inbound/${action}`, { method: 'POST', params }),
     onSuccess: (data, action) => {
-      qc.setQueryData(['system', 'inbound'], data)
+      qc.setQueryData(['system', 'inbound', number ?? ''], data)
       toast.success(action === 'connect' ? `Inbound calls on ${data.number} now reach your agent` : `Restored ${data.app_name ?? 'the previous application'}`)
     },
     onError: (e) => toast.error('Plivo update failed', { description: e.message }),

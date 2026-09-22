@@ -426,3 +426,32 @@ def test_inbound_owner_card_follows_the_agents_own_number(client, base):
         assert own["id"] not in [a["id"] for a in theirs["sharing"]] and shared["id"] in [a["id"] for a in theirs["sharing"]]
     finally:
         agents.delete(own["id"], actor="admin"); agents.delete(shared["id"], actor="admin")
+
+
+def test_a_new_agent_with_its_own_number_is_wired_on_plivo(client, monkeypatch):
+    from app.services import agents, plivo_service
+    from app.core import store
+    from app.services import heal_service
+    wired = []
+    class Plivo:
+        def __init__(self): pass
+        def inbound_status(self, number=None):
+            return {"number": "+" + number, "connected": number in wired, "app_name": "old_flow", "app_id": "x", "previous_app": None}
+        def connect_inbound(self, number=None):
+            wired.append(number); return self.inbound_status(number)
+    monkeypatch.setattr(plivo_service, "PlivoService", Plivo)
+    made = client.post("/api/agents", json={"name": "Own number wire", "phone_number": "+918122222222"}).json()
+    try:
+        assert wired == ["918122222222"]
+        events = client.get(f"/api/agents/{made['id']}/activity", params={"limit": 5}).json()
+        assert any(e["type"] == "inbound.connected" for e in events)
+        assert client.get("/api/system/inbound", params={"number": "918122222222"}).json()["connected"]
+        # A Plivo failure never loses the agent: it is saved and Health & heal carries the line.
+        class Broken(Plivo):
+            def inbound_status(self, number=None): raise RuntimeError("404 number not found")
+        monkeypatch.setattr(plivo_service, "PlivoService", Broken)
+        client.patch(f"/api/agents/{made['id']}", json={"phone_number": "+918133333333"})
+        assert agents.get(made["id"])["phone_number"].endswith("8133333333")
+        assert any(i["kind"] == "inbound_disconnected" and "8133333333" in i["detail"] for i in heal_service.list_issues())
+    finally:
+        agents.delete(made["id"], actor="admin")
