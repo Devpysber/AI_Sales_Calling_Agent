@@ -136,3 +136,31 @@ def test_usage_bills_llm_by_tokens_when_measured(monkeypatch):
     assert u["per_call"]["llm_requests"] == 10 and u["per_call"]["llm_input_tokens"] == 70_000
     assert u["per_call"]["llm_input_tokens_per_request"] == 7_000
     assert u["per_call"]["total_cost"] == u["cost_per_connected_call"]
+
+
+def test_stop_calling_message_never_books_a_callback(client, base, monkeypatch):
+    """A caller whose whole message is 'turn off the calls' was rung back an hour later by the team_action slot."""
+    from app.services import llm
+    from app.services.call_service import CallService
+    monkeypatch.setattr(llm, "complete", lambda *a, **k: llm.LLMResult(
+        '{"summary":"Customer asked us to turn off auto dialing and remove their number.","qualification":"Cold",'
+        '"outcome":"other","sentiment":"neutral","team_action":"Turn off auto dialing for new leads and remove the number",'
+        '"requirements":"Turn off auto dialing for new leads","urgent":false}', "fake", "m", 5))
+    agent_id = int(base.rsplit("/", 1)[1])
+    lead = client.post(f"{base}/leads", json={"name": "Stop", "phone": "9455555555"}).json()
+    CallService(agent_id)._summarize_inner(0, lead["id"], [{"role": "customer", "text": "Please turn off auto dial new leads"},
+                                                            {"role": "assistant", "text": "Got it, I will pass this to the team."}])
+    after = client.get(f"{base}/leads/{lead['id']}").json()
+    assert not after.get("callback_at"), after.get("callback_at")
+
+
+def test_team_action_for_an_interested_caller_still_gets_a_slot(client, base, monkeypatch):
+    from app.services import llm
+    from app.services.call_service import CallService
+    monkeypatch.setattr(llm, "complete", lambda *a, **k: llm.LLMResult(
+        '{"summary":"Wants the finance team to confirm the EMI.","qualification":"Warm","outcome":"interested",'
+        '"sentiment":"positive","team_action":"Confirm the EMI on the Swift and tell him","urgent":false}', "fake", "m", 5))
+    agent_id = int(base.rsplit("/", 1)[1])
+    lead = client.post(f"{base}/leads", json={"name": "EMI", "phone": "9455555556"}).json()
+    CallService(agent_id)._summarize_inner(0, lead["id"], [{"role": "customer", "text": "EMI kitni banegi?"}])
+    assert client.get(f"{base}/leads/{lead['id']}").json().get("callback_at")

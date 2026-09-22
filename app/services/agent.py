@@ -93,11 +93,12 @@ def call_goal(lead: dict, purpose: str | None) -> str | None:
         if not wanted:
             return ("The caller's details are complete. Help them from the knowledge base and move to the call to action. "
                     "Replies under 150 characters.")
-        return ("A new caller not yet in our CRM. Before going deep, you MUST collect these details naturally, ONE question per turn, "
-                f"in this order: Language Preference (ask which language they prefer to speak in), {', '.join(wanted)}. "
-                "Acknowledge each answer in a few words (whole reply under 100 characters). If they ask something first, answer it "
-                "very briefly, then immediately ask the next detail. "
-                "You must not skip asking for their Name. Once collected, help them and move to the primary call to action.")
+        return ("A new caller not yet in our CRM. Reply in the language they speak (never ask which they prefer). "
+                "If their first words are a request or complaint (stop calling, a message for the team, a problem), handle that "
+                "first in one line and do not collect details from someone who wants no more calls. Otherwise collect, naturally, "
+                f"ONE question per turn, in this order: {', '.join(wanted)}. Acknowledge each answer in a few words (whole reply "
+                "under 100 characters). If they ask something first, answer it very briefly, then ask the next detail. "
+                "Do not skip their Name. Once collected, help them and move to the primary call to action.")
     if purpose == "inbound_choose":
         options = "; ".join(f"{c['label']}" + (f" — {c['about']}" if c.get("about") else "") for c in lead.get("choices") or [])
         return ("This caller is known to more than one of our desks and we do not yet know which one this call is about: "

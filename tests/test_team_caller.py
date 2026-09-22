@@ -30,7 +30,7 @@ def test_the_brief_tells_the_agent_to_explain_rather_than_sell():
 
 def test_a_customer_brief_is_unchanged():
     goal = agent.call_goal({"collect": ["name", "city"]}, "inbound_new")
-    assert "MUST collect these details" in goal
+    assert "A new caller not yet in our CRM" in goal
     assert "colleague" not in goal.lower()
 
 

@@ -754,9 +754,13 @@ class CallService:
                 events.record("callback.unclear", f"Callback time unclear — scheduled for {callback_at}",
                               f"Model gave: {str(s.get('callback_at') or '')[:60] or 'no time'}",
                               agent_id=self.agent_id, lead_id=lead_id, call_id=call_id, actor="ai")
-            if not callback_at and str(s.get("team_action") or "").strip():
+            wants_no_call = s.get("outcome") in ("not_interested", "do_not_call", "wrong_person", "no_conversation") or \
+                re.search(r"(stop|turn off|switch off|remove|band|mat)\b.*\b(call|dial|number|list|automation)|do not call|dnc",
+                          f"{s.get('team_action') or ''} {s.get('requirements') or ''}", re.I)
+            if not callback_at and str(s.get("team_action") or "").strip() and not wants_no_call:
                 # They asked the team to act and to be told the outcome, but named no time. Without a
-                # slot nothing dials them back and the promise is silently dropped.
+                # slot nothing dials them back and the promise is silently dropped. Never for someone whose
+                # message IS "stop calling me": ringing them an hour later is the opposite of what they asked.
                 soon = 15 if str(s.get("urgent") or "").lower() in ("true", "yes", "1") else 60
                 callback_at = (datetime.now(IST) + timedelta(minutes=soon)).strftime("%Y-%m-%d %H:%M")
                 if soon == 15 and str(s.get("team_action") or "").strip():
