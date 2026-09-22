@@ -92,8 +92,14 @@ async def lifespan(app: FastAPI):
             cfg = agent_service.get_automation(agent_id)
             if cfg.get("speed_to_lead_min_seconds") == 60 and cfg.get("speed_to_lead_max_seconds") == 120:
                 agent_service.update_automation(agent_id, {"speed_to_lead_min_seconds": 3600, "speed_to_lead_max_seconds": 7200}, actor="system")
+    def migrate_team_members():
+        # Agents made before the creator was seeded list nobody, so a caller asking for a person
+        # reaches no one and the routing page reads "Not set".
+        from app.services import agents as agent_service
+        agent_service.backfill_team_members()
     try:
         await asyncio.to_thread(migrate_speed_to_lead)
+        await asyncio.to_thread(migrate_team_members)
         await asyncio.to_thread(recover_knowledge_state)
     except Exception as e:  # noqa: BLE001 - housekeeping must never block startup
         log.warning("Knowledge state recovery skipped: %s", e)

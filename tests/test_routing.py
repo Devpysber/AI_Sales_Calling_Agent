@@ -671,3 +671,37 @@ def test_the_brief_for_a_new_caller_does_not_claim_we_know_them():
     assert "new to us" in new and "known to more than one" not in new
     known = agent_service.call_goal({"choices": choices}, "inbound_choose")
     assert "known to more than one of our desks" in known
+
+
+def test_every_agent_ends_up_with_someone_to_hand_a_caller_to(client, monkeypatch):
+    """Agents made before the creator was seeded are given their first colleague once, at startup."""
+    from app.services import agents, team_service
+
+    monkeypatch.setattr(team_service, "members",
+                        lambda: [{"id": "old", "name": "Priya", "phone": "+919812500031", "email": "p@b.c"}])
+    bare = agents.create({"name": "Older desk"}, created_by="old")
+    agents.update_profile(bare["id"], {"team_members": [], "transfer_number": ""}, actor="test")
+    assert not agents.get_profile(bare["id"])["team_members"]
+
+    assert agents.backfill_team_members() >= 1
+    seeded = agents.get_profile(bare["id"])
+    assert [m["phone"] for m in seeded["team_members"]] == ["+919812500031"]
+    assert seeded["transfer_number"] == "+919812500031"
+    # Run twice: an agent that already lists someone is left alone.
+    agents.update_profile(bare["id"], {"team_members": [{"name": "Chosen", "phone": "+919812500032", "email": ""}]}, actor="test")
+    agents.backfill_team_members()
+    assert [m["phone"] for m in agents.get_profile(bare["id"])["team_members"]] == ["+919812500032"]
+
+
+def test_the_default_line_is_the_same_number_everywhere(client):
+    """A blank agent number means the account's default Plivo line, in national or E.164 form alike."""
+    from app.core.config import settings
+    from app.services import agents
+
+    shared = agents.create({"name": "Default line desk"}, created_by="admin")
+    assert agents.caller_id(shared["id"]) == agents.phone_digits(settings.plivo_phone_number)
+    assert shared["id"] in agents.on_line(settings.plivo_phone_number)
+    assert shared["id"] in agents.on_line(agents.phone_digits(settings.plivo_phone_number))
+    own = agents.create({"name": "Own line desk 2", "phone_number": "080 1234 5680"}, created_by="admin")
+    assert own["id"] not in agents.on_line(settings.plivo_phone_number)
+    assert agents.on_line("+918012345680") == [own["id"]]

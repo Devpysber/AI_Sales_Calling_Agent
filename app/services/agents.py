@@ -280,8 +280,8 @@ def _wire_own_number(agent_id: int, number: str | None, actor: str) -> None:
     default line). Never blocks saving on a Plivo outage: the failure is recorded and Health & heal
     flags the line until it is connected.
     """
-    digits = "".join(c for c in (number or "") if c.isdigit())
-    if not digits or digits == "".join(c for c in (settings.plivo_phone_number or "") if c.isdigit()):
+    digits = phone_digits(number)
+    if not digits or digits == phone_digits(settings.plivo_phone_number):
         return
     from app.services.plivo_service import PlivoService
     from app.services.heal_service import INBOUND_CHECK_KEY, report
@@ -352,6 +352,25 @@ def create(data: dict, actor: str = "admin", created_by: str | None = None) -> d
     if result.get("phone_number"):
         _wire_own_number(result["id"], result["phone_number"], actor)
     return result
+
+
+def backfill_team_members(actor: str = "system") -> int:
+    """Give every agent made before the creator was seeded its first colleague, once.
+
+    Agents created earlier list nobody, so their routing page reads "Not set" and a caller asking for a
+    person reaches no one. The row is visible and editable on Inbound & transfer, so it can be changed
+    or removed like any other.
+    """
+    seeded = 0
+    for agent_id in ids():
+        profile = get_profile(agent_id)
+        if profile.get("team_members") or profile.get("transfer_number"):
+            continue
+        contact = _creator_contact((get(agent_id) or {}).get("created_by"))
+        if contact:
+            update_profile(agent_id, {"team_members": [contact]}, actor=actor)
+            seeded += 1
+    return seeded
 
 
 def update(agent_id: int, data: dict, actor: str = "admin") -> dict:
@@ -567,7 +586,7 @@ def update_automation(agent_id: int, values: dict, actor: str = "admin") -> dict
 def caller_id(agent_id: int | None) -> str:
     """Digits of the number this agent dials from."""
     number = (get(agent_id) or {}).get("phone_number") if agent_id else None
-    return "".join(c for c in (number or settings.plivo_phone_number) if c.isdigit())
+    return phone_digits(number or settings.plivo_phone_number)
 
 
 INBOUND_OWNER_KEY = "inbound_owner"   # settings state: {"<digits>": agent_id} - who answers calls to that number
