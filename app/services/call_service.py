@@ -149,11 +149,20 @@ def merge_call_context(session_lead: dict, fresh: dict | None) -> dict:
     return lead
 
 
-def spoken_language(history: list[dict]) -> str | None:
-    """Language the caller mostly spoke on this call, from the script of their transcribed lines; None when unclear."""
-    scripts = {"hi-IN": 0, "gu-IN": 0, "ta-IN": 0, "te-IN": 0, "bn-IN": 0, "kn-IN": 0, "mr-IN": 0, "en-IN": 0}
-    ranges = {"hi-IN": (0x0900, 0x097F), "bn-IN": (0x0980, 0x09FF), "gu-IN": (0x0A80, 0x0AFF), "ta-IN": (0x0B80, 0x0BFF),
-              "te-IN": (0x0C00, 0x0C7F), "kn-IN": (0x0C80, 0x0CFF)}
+def spoken_language(history: list[dict], spoken: str | None = None) -> str | None:
+    """Language the caller mostly spoke on this call, from the script of their transcribed lines; None when unclear.
+
+    `spoken` is the language the call itself ran in. Where a script is shared by several languages —
+    Devanagari by Hindi and Marathi — it decides which of them this was, so a Marathi conversation is
+    no longer saved to the lead as Hindi.
+    """
+    # Devanagari is written by Hindi and Marathi alike, so the script alone cannot tell them apart:
+    # a Marathi call used to be saved as Hindi, and the next call opened in the wrong language. The
+    # caller's own language on the call carries that distinction, so it is passed in and wins for
+    # its own script family. Codes come from the shared script table, not a second copy that drifts.
+    from app.services import tts as tts_service
+    ranges = {code: (lo, hi) for lo, hi, code in tts_service.SCRIPTS}
+    scripts = dict.fromkeys([*ranges, "en-IN"], 0)
     for turn in history:
         if turn.get("role") not in ("customer", "user"):
             continue
@@ -169,7 +178,11 @@ def spoken_language(history: list[dict]) -> str | None:
     if total < 20:
         return None
     code, count = max(scripts.items(), key=lambda kv: kv[1])
-    return code if count / total >= 0.6 else None
+    if count / total < 0.6:
+        return None
+    if spoken and spoken != code and spoken in tts_service.SHARED_SCRIPT.get(code, ()):
+        return spoken   # same script, and the call knows which of its languages it was actually speaking
+    return code
 
 
 def _valid_meeting(value) -> str | None:
@@ -862,7 +875,7 @@ class CallService:
                 # A send_email to the lead is already queued below for this same call: don't also fire
                 # the CRM's own "follow-up call scheduled" mail on top of it.
                 updates["_no_followup_email"] = True
-            spoken_lang = spoken_language(history)
+            spoken_lang = spoken_language(history, s.get("language"))
             if spoken_lang and spoken_lang != (self.crm.get(lead_id) or {}).get("language"):
                 # The script the caller actually used beats a seeded or guessed value: the next call's greeting
                 # and speech recognition run in it (an English record on a Hindi caller garbled call two).

@@ -394,7 +394,7 @@ def add_lead_tool(agent_id: int, name: str | None, phone: str | None, requiremen
     from app.services.crm_service import normalize_phone
     digits = normalize_phone(str(phone or ""))
     if not digits:
-        return "Failed: I need a full phone number with country code (say it in groups, e.g. 98765 43210)."
+        return "Failed: I need a full phone number with country code, said in two groups of five digits."
     crm = CRMService(agent_id)
     existing = crm.find_by_phone(digits)
     if existing:
