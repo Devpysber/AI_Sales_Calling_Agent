@@ -64,8 +64,26 @@ def test_autofill_writes_only_empty_fields_and_never_the_identity(client, agent_
 
 def test_autofill_does_nothing_when_the_playbook_is_already_written(agent_id, monkeypatch):
     monkeypatch.setattr(persona_writer, "draft", lambda _id: {"fields": {"objective": "x"}})
-    for field in persona_writer.AUTOFILL:
-        pass
     from app.services import agents as agent_service
     agent_service.update_profile(agent_id, {f: "already written" for f in persona_writer.AUTOFILL}, actor="test")
     assert persona_writer.autofill(agent_id) == {}
+
+
+def test_a_draft_is_repaired_into_the_shape_the_form_and_the_prompt_expect():
+    """The model returns these shapes often enough that repairing beats re-asking, which costs a turn."""
+    tidy = persona_writer._tidy
+
+    # An objection and its answer split across two lines, bulleted or not, become one line each.
+    assert tidy("objection_handling", "Objection: Is it free?\nAnswer: Yes, for couples.") == "Is it free?: Yes, for couples."
+    assert tidy("objection_handling", "- Objection: I have a vendor.\n- Answer: We help with the rest.") == "I have a vendor: We help with the rest."
+    # Several objections returned as one run-on line are split apart.
+    assert tidy("objection_handling", "Too costly: It is free. Already booked: We help with other services.").count("\n") == 1
+
+    # A "next step" that is really a question, however politely phrased, is dropped rather than shown
+    # in a field the page labels "the single next step the agent asks for".
+    assert tidy("call_to_action", "What are you looking for?") == ""
+    assert tidy("call_to_action", "Please tell me what kind of venue you want.") == ""
+    assert tidy("call_to_action", "Send the registration link on WhatsApp.") == "Send the registration link on WhatsApp."
+
+    # One word means one word.
+    assert tidy("customer_noun", "couple (planning a wedding)") == "couple"
