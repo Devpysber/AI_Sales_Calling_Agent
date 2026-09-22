@@ -530,11 +530,20 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
     raise LLMError("All streaming LLM providers failed — " + " | ".join(errors))
 
 
+def provider_order(providers: str | None = None) -> list[str]:
+    """The configured order, with a dead OpenRouter (401/402 minutes ago) moved last: every summary and
+    classification would otherwise pay the failed round trip and its fallback-model retries first."""
+    order = [p.strip() for p in (providers or settings.llm_providers).split(",") if p.strip()]
+    if "openrouter" in order and len(order) > 1 and _openrouter_dead():
+        order = [p for p in order if p != "openrouter"] + ["openrouter"]
+    return order
+
+
 def complete(messages: list[dict], json_mode: bool = False, max_tokens: int = 500, temperature: float = 0.3,
              providers: str | None = None, timeout: float | None = None) -> LLMResult:
     """providers: comma-separated order for this request (default LLM_PROVIDERS). timeout: OpenRouter wall-clock budget."""
     errors = []
-    for name in [p.strip() for p in (providers or settings.llm_providers).split(",") if p.strip()]:
+    for name in provider_order(providers):
         provider = PROVIDERS.get(name)
         if provider is None:
             continue

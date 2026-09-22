@@ -55,3 +55,12 @@ def test_with_nothing_cached_the_providers_are_asked(monkeypatch):
     for key in ("alerts:credits:v2", "alerts:credits:last"):
         store.store.delete(store.PREFIX + key)
     assert alerts.credits()["providers"][0]["value"] == "first"
+
+
+def test_dead_openrouter_is_tried_last_for_offline_work(monkeypatch):
+    from app.services import llm
+    monkeypatch.setattr(llm, "_openrouter_dead", lambda: True)
+    assert llm.provider_order("openrouter,sarvam") == ["sarvam", "openrouter"]
+    assert llm.provider_order("openrouter") == ["openrouter"]  # the only provider is still tried
+    monkeypatch.setattr(llm, "_openrouter_dead", lambda: False)
+    assert llm.provider_order("openrouter,sarvam") == ["openrouter", "sarvam"]
