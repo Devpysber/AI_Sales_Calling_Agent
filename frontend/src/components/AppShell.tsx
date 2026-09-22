@@ -219,6 +219,24 @@ function Sidebar({ agents, agent, compact, setCompact, onNew, onPalette, onHelp,
 }) {
   const location = useLocation()
   const navRef = useRef<HTMLDivElement>(null)
+  // The nav list scrolls on its own. After a refresh (or opening a section low in the list) the active
+  // item sat below the fold; keep it in view, and keep the list where the user left it across refreshes.
+  useEffect(() => {
+    const nav = navRef.current
+    if (!nav) return
+    try {
+      const saved = sessionStorage.getItem('nav:scroll')
+      if (saved && !nav.dataset.restored) { nav.scrollTop = Number(saved) || 0; nav.dataset.restored = '1' }
+    } catch { /* storage unavailable */ }
+    const active = nav.querySelector<HTMLElement>('[aria-current="page"]')
+    if (active) {
+      const r = active.getBoundingClientRect(), box = nav.getBoundingClientRect()
+      if (r.top < box.top || r.bottom > box.bottom) active.scrollIntoView({ block: 'nearest' })
+    }
+    const remember = () => { try { sessionStorage.setItem('nav:scroll', String(nav.scrollTop)) } catch { /* ignore */ } }
+    nav.addEventListener('scroll', remember, { passive: true })
+    return () => nav.removeEventListener('scroll', remember)
+  }, [location.pathname, agent?.id])
   const path = (to: string) => agent ? `/a/${agent.id}${to === '/' ? '' : to}` : to
   const done = agent ? SETUP_STEPS.filter((s) => agent.setup?.[s.key]).length : 0
   const next = agent ? (agent.setup ? SETUP_STEPS.find((s) => !agent.setup[s.key]) : undefined) : undefined
