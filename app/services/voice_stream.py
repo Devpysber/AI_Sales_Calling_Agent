@@ -1073,9 +1073,10 @@ class CallStream:
             context["call_goal"] = agent.call_goal(context, purpose)
             lead = None
         else:
-            if lead is None and phone and previous.get("call_purpose") == "inbound_choose":
-                # A new caller was asked which desk before anything was saved: they are this desk's lead now,
-                # whether they named it or ran out of asking and stayed where they were greeted.
+            if lead is None and phone:
+                # A customer the new desk does not know yet becomes its lead now: on the first switch
+                # because nothing was saved until they named a desk, and on any later change of desk
+                # because a call with no lead has nowhere to put its summary and drops off both desks.
                 with contextlib.suppress(Exception):
                     lead = crm.create({"phone": phone, "source": "inbound call", "status": "New",
                                        **({"language": language} if language else {})}, actor="system")

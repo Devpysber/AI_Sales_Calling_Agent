@@ -50,8 +50,13 @@ class LeadPatch(BaseModel):
     retry_count: int | None = None
 
 
+# One bulk action covers everything /ids can hand back, or "Select all" quietly produced a selection
+# no button could act on (422 with a raw pydantic message).
+MAX_BULK_IDS = 5000
+
+
 class Ids(BaseModel):
-    ids: list[int] = Field(min_length=1, max_length=1000)
+    ids: list[int] = Field(min_length=1, max_length=MAX_BULK_IDS)
 
 
 class QueueRequest(Ids):
@@ -95,6 +100,9 @@ def meeting_time(value: str) -> str:
 BOARD_STATUSES = ["New", "Contacted", "Interested", "Follow Up", "Meeting Booked", "Closed Won", "Closed Lost",
                   "Not Interested", "Do Not Call"]
 LEAD_STATUSES = set(BOARD_STATUSES)
+# What a person may set by hand. The live ones (Queued, Ringing, In Progress) belong to a real call:
+# typing them in made the queue page and today's numbers report a call that does not exist.
+EDITABLE_CALL_STATUSES = {"", "Pending", "Completed", "No Answer", "Busy", "Failed", "Canceled"}
 
 
 class BulkUpdate(Ids):
@@ -145,7 +153,7 @@ def export(search: str | None = None, status: str | None = None, call_status: st
 @router.get("/ids")
 def matching_ids(search: str | None = None, status: str | None = None, call_status: str | None = None,
                  qualification: str | None = None, view: str | None = None, source: str | None = None,
-                 limit: int = Query(5000, ge=1, le=20000), agent_id: int = Depends(workspace)):
+                 limit: int = Query(MAX_BULK_IDS, ge=1, le=MAX_BULK_IDS), agent_id: int = Depends(workspace)):
     """Every id the current filters select, so a bulk action can cover the result set, not one page."""
     ids = CRMService(agent_id).matching_ids(limit=limit, search=search, status=status, call_status=call_status,
                                             qualification=qualification, view=view, source=source)
@@ -319,6 +327,14 @@ def get(lead_id: int, agent_id: int = Depends(workspace)):
 @router.patch("/{lead_id}")
 def patch(lead_id: int, body: LeadPatch, request: Request, agent_id: int = Depends(workspace)):
     data = body.model_dump(exclude_unset=True)
+    # Checked here as well as on a bulk edit: one lead's form could set any string at all, including a
+    # call status that puts it straight back into the auto-dialler.
+    if data.get("status") and data["status"] not in LEAD_STATUSES:
+        raise HTTPException(400, f"Unknown status: {data['status']}")
+    if data.get("qualification") not in (None, "", "Hot", "Warm", "Cold"):
+        raise HTTPException(400, "Qualification must be Hot, Warm or Cold.")
+    if (data.get("call_status") or "") not in EDITABLE_CALL_STATUSES:
+        raise HTTPException(400, "That call status is set by a real call, not by hand.")
     current = CRMService(agent_id).get(lead_id) if ("callback_at" in data or data.get("meeting_at")) else None
     if "callback_at" in data:
         at = scheduled_time(data["callback_at"])
