@@ -904,6 +904,28 @@ def compacted_upto(history: list[dict]) -> int:
     return max(len(history) - MAX_HISTORY_TURNS, 0)
 
 
+# Sections a live turn can lose, cheapest first, when LIVE_PROMPT_CHAR_BUDGET is set. Ordered by what
+# a caller would notice least: the long-tail coaching goes before the rules that keep the agent honest,
+# and Grounding, Objective, Decide, Hard rules, the Caller record, Knowledge and Output are never here.
+LIVE_DROPPABLE = ("# Read the room", "# The team behind you", "# Situations", "# Details that must be right",
+                  "# Call playbook", "# Objection handling", "# How to speak (voice, not chat)")
+
+
+def compact_live_prompt(system: str, budget: int) -> str:
+    """Trim the static coaching sections until the prompt fits `budget` characters.
+
+    The per-turn trim loop in build_messages can only shed what changes per turn — passages, past
+    calls, history — so on a 27k-character prompt it emptied the retrieval and still ran over. This
+    sheds the static core instead, and only when an operator has asked for it.
+    """
+    from app.services.llm import _drop_section
+    for heading in LIVE_DROPPABLE:
+        if len(system) <= budget:
+            break
+        system = _drop_section(system, heading)
+    return system
+
+
 def build_messages(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True,
                    top_k: int = 5, embed_timeout: float = 1.0, summary: str | None = None,
                    compacted_upto: int | None = None) -> tuple[list[dict], list[dict]]:
@@ -918,8 +940,14 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
     knowledge = sorted(knowledge, key=lambda k: -float(k.get("score") or 0))
     window = history_window(history, summary, compacted_upto)
 
+    live_budget = settings.live_prompt_char_budget if lead.get("call_purpose") not in ("team", "admin") else 0
+
     def render(brief_lines=None, calls_lines=None) -> str:
         system = _system_prompt(persona, lead, knowledge, agent_id, brief_lines=brief_lines, calls_lines=calls_lines)
+        if live_budget:
+            # Only when an operator has set LIVE_PROMPT_CHAR_BUDGET, and only for a customer call: a
+            # colleague's check-in and the playground always hear the agent's full instructions.
+            system = compact_live_prompt(system, live_budget)
         if summary:
             # Turns older than the window are one line instead of a transcript: a twenty-minute call
             # costs about the same prompt as a two-minute one.
