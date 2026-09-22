@@ -63,6 +63,19 @@ def list_agents(request: Request):
     return {"agents": all_a, "voices": tts.SPEAKERS, "languages": tts.LANGUAGES}
 
 
+@router.get("/new-defaults")
+def new_agent_defaults(request: Request):
+    """What the New agent form starts from: whoever is creating it, as the agent's first colleague.
+
+    An agent with nobody to hand a caller to is the commonest reason "let me put you through" ends in
+    silence, so the form shows the creator's own line and lets them change it before the agent exists.
+    """
+    user = getattr(request.state, "user", "")
+    team_id = (getattr(request.state, "token_payload", {}) or {}).get("team_id")
+    contact = agents._creator_contact(team_id if user == "team" else "admin")
+    return {"team_member": contact or {"name": "", "phone": "", "email": ""}}
+
+
 @router.post("")
 def create_agent(body: AgentIn, request: Request, response: Response):
     user = getattr(request.state, "user", "")
