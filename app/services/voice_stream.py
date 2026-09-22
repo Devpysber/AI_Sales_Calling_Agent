@@ -35,6 +35,8 @@ import time
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
+from collections import deque
+
 import numpy as np
 import websockets
 from fastapi import WebSocket, WebSocketDisconnect
@@ -373,18 +375,26 @@ class SilenceGate:
 
     PREROLL = 10      # 200 ms
     TAIL = 60         # 1.2 s
+    WINDOW = 250      # 5 s of frames: nobody speaks that long without a gap between words
+    CEILING = 2000.0  # the floor never rises into speech range, or a loud room would gate the caller out
 
     def __init__(self):
         self.noise = 200.0
+        self.window: deque[float] = deque(maxlen=self.WINDOW)
         self.preroll: list[bytes] = []
         self.tail_left = 0
 
     def process(self, pcm: bytes) -> list[bytes]:
         samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
         rms = float(np.sqrt(np.mean(samples * samples))) if samples.size else 0.0
+        # The floor follows the quietest frame of the last five seconds, not the quiet frames alone.
+        # Adapting only on unvoiced frames latched the gate open on a noisy line: with a room above
+        # the initial threshold every frame counted as speech, the floor was never revised, and the
+        # whole call streamed to paid speech-to-text — which is where "the agent listens to background
+        # noise" comes from. A window minimum cannot be dragged up by the caller's own voice.
+        self.window.append(rms)
+        self.noise = min(0.9 * self.noise + 0.1 * min(self.window), self.CEILING)
         voiced = rms > max(350.0, self.noise * 2.5)
-        if not voiced:
-            self.noise = 0.95 * self.noise + 0.05 * rms
         if voiced:
             out = self.preroll + [pcm]
             self.preroll = []
@@ -1403,12 +1413,13 @@ class CallStream:
                 if self.commit_task and not self.commit_task.done():
                     self.commit_task.cancel()
                 if self.mode == "ai" and (self.agent_speaking or (self.reply_task and not self.reply_task.done())):
-                    if self.agent_speaking:
-                        # Could be our own audio echoing back. Hold the barge-in until a transcript
-                        # proves a human is talking, otherwise the agent cuts itself off mid-sentence.
-                        self.pending_bargein = True
-                    else:
-                        await self.interrupt()
+                    # Hold the barge-in until a transcript proves a human is talking. While the agent
+                    # is speaking this stops it cutting itself off on its own echo; while a reply is
+                    # still being generated it stops a cough, a door or a car horn from cancelling the
+                    # turn — which cost a whole second LLM and TTS round, because the cancelled words
+                    # were put back and committed again as a fresh turn. Nothing is playing yet, so
+                    # deferring costs a genuine caller nothing: the transcript still interrupts below.
+                    self.pending_bargein = True
                 self.publish_state()
             elif signal == "END_SPEECH":
                 self.caller_speaking = False

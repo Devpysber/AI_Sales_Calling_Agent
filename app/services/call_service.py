@@ -7,6 +7,7 @@ import contextlib
 import json
 import re
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -304,10 +305,25 @@ class CallService:
     # ---------------- placing calls ----------------
 
     def start(self, lead_id: int, trigger: str = "manual", actor: str = "admin", purpose: str | None = None) -> dict:
-        from app.services.plivo_service import PlivoService
-
+        """Place a call to one lead. One at a time per lead, across every replica and every trigger."""
+        from app.core import store
         if self.agent_id is None:
             raise CallError("Calls must be placed by an agent.")
+        # has_active() below reads call rows, and the row for a call being placed right now does not
+        # exist until several network calls later. Two triggers landing together — "Run now" beside a
+        # scheduler tick, or a scheduler on two replicas — both passed that check and rang the customer
+        # twice. The lock closes that window; it is per lead, so other leads dial in parallel as before.
+        token = uuid.uuid4().hex
+        if not store.acquire_lock(f"dial:{lead_id}", token, 90):
+            raise CallError("A call to this lead is already being placed.")
+        try:
+            return self._start(lead_id, trigger, actor, purpose)
+        finally:
+            store.delete(f"lock:dial:{lead_id}")   # store.delete adds the key prefix itself
+
+    def _start(self, lead_id: int, trigger: str, actor: str, purpose: str | None) -> dict:
+        from app.services.plivo_service import PlivoService
+
         lead = self.crm.get(lead_id)
         if not lead:
             raise CallError("Lead not found.")
