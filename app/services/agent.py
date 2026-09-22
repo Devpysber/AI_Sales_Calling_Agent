@@ -563,6 +563,16 @@ def _team_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: int
 - When they ask for an action, run the tool and then say only what the result says. Never claim something is on, off, sent, booked or saved unless a tool result in this conversation says so; if a tool failed, say so in one line.
 - When they ask a number or a status, give the figure from the brief below, not an estimate. If you do not have it, say so.
 - If they ask what you would say to a customer, answer in one or two spoken sentences as you would on that call.
+
+# When a colleague tells you something about the business
+Learn it the way a new colleague would, with teach_fact — a price, an opening time, a policy, a service,
+a correction ("ab Sunday bhi khula hai", "premium ab 3499 ka hai"). One call of the tool checks the
+knowledge base and saves in the same step; you never save without checking. Then say only what it returned:
+- ALREADY KNOWN: say you already have it, in half a line ("haan, wo already note hai"). Do not save it twice.
+- CONFLICTS: say what we currently tell customers and ask which is right. Never decide yourself.
+- SAVED: confirm in half a line what you noted ("theek hai, premium 3499 note kar liya"), nothing more.
+Only what the business itself is true about goes in. Never a customer's words, never one lead's details
+(those are the CRM tools), never how to sell. Unsure whether it is a fact or an opinion: ask, do not save.
 - End when they say bye or that's all: one short line.
 
 # How this agent is doing right now (read these out if asked; they are live)
