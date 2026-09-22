@@ -584,17 +584,80 @@ def parse_json(text: str) -> dict:
         raise
 
 
-def embed(texts: list[str], timeout: float = 30) -> list[list[float]] | None:
+def embed(texts: list[str], timeout: float = 30, task: str = "document",
+          provider: str | None = None) -> list[list[float]] | None:
     """
-    Embeddings via OpenRouter; None when unavailable (RAG then uses keyword search only).
+    Embeddings from the first configured provider that answers; None when none do (RAG then uses
+    keyword search only). `task` is "document" while ingesting and "query" while searching: Gemini
+    embeds the two differently and ranks better when told which it is given. `provider` pins the
+    call to one provider, which the knowledge base needs: vectors from two different models share
+    no geometry, so a query embedded elsewhere than the passages would rank noise.
     """
-    if not settings.openrouter_api_key or not texts or _openrouter_dead():
+    answered = embed_with_provider(texts, timeout, task, provider)
+    return answered[1] if answered else None
+
+
+def embeddings_configured() -> bool:
+    """Whether any embedding provider has a key. Without one there is nothing to retry."""
+    for name in [p.strip() for p in settings.embedding_providers.split(",") if p.strip()]:
+        if (name == "gemini" and settings.gemini_api_key) or (name == "openrouter" and settings.openrouter_api_key):
+            return True
+    return False
+
+
+def embed_with_provider(texts: list[str], timeout: float = 30, task: str = "document",
+                        provider: str | None = None) -> tuple[str, list[list[float]]] | None:
+    """As `embed`, but also says which provider answered, so the caller can pin later calls to it."""
+    if not texts:
+        return None
+    order = [provider] if provider else [p.strip() for p in settings.embedding_providers.split(",") if p.strip()]
+    for name in order:
+        if name == "gemini" and settings.gemini_api_key:
+            vectors = _embed_gemini(texts, timeout, task)
+        elif name == "openrouter":
+            vectors = _embed_openrouter(texts, timeout)
+        else:
+            continue
+        if vectors is not None:
+            return name, vectors
+    return None
+
+
+def _embed_gemini(texts: list[str], timeout: float, task: str) -> list[list[float]] | None:
+    """Google's free embedding tier. One request carries the whole batch."""
+    model = f"models/{settings.gemini_embedding_model}"
+    body = {"requests": [{
+        "model": model,
+        "content": {"parts": [{"text": t}]},
+        "taskType": "RETRIEVAL_QUERY" if task == "query" else "RETRIEVAL_DOCUMENT",
+        "outputDimensionality": settings.gemini_embedding_dimensions,
+    } for t in texts]}
+    try:
+        res = _client.post(
+            f"https://generativelanguage.googleapis.com/v1beta/{model}:batchEmbedContents",
+            headers={"x-goog-api-key": settings.gemini_api_key},
+            json=body,
+            timeout=timeout,
+        )
+        if res.status_code >= 400:
+            log.warning("Gemini embeddings unavailable: %s: %s", res.status_code, res.text[:200])
+            return None
+        vectors = [e["values"] for e in res.json().get("embeddings", [])]
+        return vectors if len(vectors) == len(texts) else None
+    except Exception as e:
+        log.warning("Gemini embeddings unavailable: %s", e)
+        return None
+
+
+def _embed_openrouter(texts: list[str], timeout: float) -> list[list[float]] | None:
+    if not settings.openrouter_api_key or _openrouter_dead():
         return None
     try:
         res = _client.post(
             "https://openrouter.ai/api/v1/embeddings",
             headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-            json={"model": settings.openrouter_embedding_model, "input": texts},
+            json={"model": settings.openrouter_embedding_model, "input": texts,
+                  "dimensions": settings.openrouter_embedding_dimensions},
             timeout=timeout,
         )
         if res.status_code >= 400:

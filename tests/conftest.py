@@ -51,7 +51,7 @@ MEETING_AT = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d 15:00")
 @pytest.fixture(autouse=True)
 def fake_ai(monkeypatch):
     """Deterministic LLM, TTS and Plivo."""
-    from app.services import llm, tts
+    from app.services import llm, tts, rag
 
     def complete(messages, json_mode=False, max_tokens=500, temperature=0.3, **_):
         user = messages[-1]["content"]
@@ -74,7 +74,12 @@ def fake_ai(monkeypatch):
             yield reply[i:i + 7]
 
     monkeypatch.setattr(llm, "stream", stream)
-    monkeypatch.setattr(llm, "embed", lambda texts, timeout=30: None)
+    monkeypatch.setattr(llm, "embed", lambda texts, timeout=30, task="document", provider=None: None)
+    # Ingest goes through embed_with_provider; without this the suite makes real embedding calls.
+    monkeypatch.setattr(llm, "embed_with_provider", lambda texts, timeout=30, task="document", provider=None: None)
+    # A developer's .env leaves real keys configured, so a stubbed refusal would walk the whole
+    # retry ladder and leave every uploaded document still processing when the test looks at it.
+    monkeypatch.setattr(rag, "EMBED_RETRY_WAITS", ())
     monkeypatch.setattr(tts, "synthesize", lambda text, language=None, speaker=None: b"RIFF-fake-wav")
     monkeypatch.setattr(tts, "synthesize_pcm", lambda text, language=None, speaker=None: bytes([0, 16]) * 800)
 

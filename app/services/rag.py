@@ -64,6 +64,34 @@ QUERY_GLOSS = {
     # question words that hint at intent
     "कैसे": "how process", "क्या": "what", "कहाँ": "where location", "कब": "when time",
     "kaise": "how process", "kahan": "where location", "kab": "when time",
+    # weddings: the vocabulary a couple actually uses, against knowledge bases written in English
+    "शादी": "wedding marriage", "शादि": "wedding marriage", "विवाह": "wedding marriage",
+    "दूल्हा": "groom", "दुल्हन": "bride", "मेहमान": "guests capacity",
+    "फोटोग्राफर": "photographer photography", "मेकअप": "makeup bridal artist",
+    "मेहंदी": "mehndi mehendi henna", "हलवाई": "caterer catering food",
+    "खाना": "catering food menu", "सजावट": "decorator decoration decor",
+    "बैंक्वेट": "banquet hall venue", "हॉल": "hall venue banquet", "लॉन": "lawn garden venue",
+    "पंडित": "pandit priest pooja", "डीजे": "dj entertainment music",
+    "बुकिंग": "booking book reserve", "तारीख": "date availability",
+    "वेंडर": "vendor supplier listing", "प्लान": "plan subscription premium featured",
+    "shaadi": "wedding marriage", "shadi": "wedding marriage", "vivah": "wedding marriage",
+    "dulha": "groom", "dulhan": "bride", "mehman": "guests capacity",
+    "kharcha": "cost price budget", "kharch": "cost price budget",
+    "photographer": "photographer photography", "makeup": "makeup bridal artist",
+    "mehndi": "mehndi mehendi henna", "mehendi": "mehndi mehendi henna",
+    "halwai": "caterer catering food", "khana": "catering food menu",
+    "sajawat": "decorator decoration decor", "banquet": "banquet hall venue",
+    "hall": "hall venue banquet", "lawn": "lawn garden venue",
+    "pandit": "pandit priest pooja", "booking": "booking book reserve",
+    "tarikh": "date availability", "vendor": "vendor supplier listing",
+    # what a couple asks about money and terms, in Devanagari
+    "कपल": "couple customer", "कपल्स": "couples customers", "जोड़ा": "couple",
+    "फीस": "fee fees charges price", "चार्ज": "charge fees price", "शुल्क": "fee charges",
+    "मुफ्त": "free no charge", "फ्री": "free no charge", "कमीशन": "commission",
+    "रिफंड": "refund money back", "कैंसिल": "cancel cancellation",
+    "वेन्यू": "venue hall banquet", "लिस्टिंग": "listing plan premium featured",
+    "प्रीमियम": "premium plan", "पैकेज": "package plan pricing",
+    "fees": "fee charges price", "commission": "commission", "listing": "listing plan",
 }
 
 
@@ -163,6 +191,32 @@ def add_text(agent_id: int, title: str, text: str, actor: str = "admin") -> dict
 # characters instead, roughly four per token, well under the cap.
 EMBED_BATCH_CHARS = 6_000
 EMBED_MIN_BATCH = 4
+# Waits before each retry of a refused batch. Ingest runs in a background thread, so sleeping
+# here costs nothing a caller can hear. Tests set this to () to keep the suite fast.
+EMBED_RETRY_WAITS = (5, 20, 45)
+
+def _provider_key(agent_id: int) -> str:
+    return f"rag:embed_provider:{agent_id}"
+
+
+def _has_embedded_chunks(agent_id: int) -> bool:
+    with get_db() as db:
+        return db.execute(
+            select(DocumentChunk.id)
+            .join(Document, Document.id == DocumentChunk.document_id)
+            .where(Document.agent_id == agent_id, DocumentChunk.embedding.is_not(None))
+            .limit(1)
+        ).first() is not None
+
+
+def embed_provider(agent_id: int) -> str | None:
+    """The provider that embedded this agent's passages, or None when none did.
+
+    Two embedding models place the same sentence in unrelated coordinate systems, so a query
+    embedded by the fallback provider would score noise against passages embedded by the primary.
+    Queries are pinned to whichever provider did the ingest.
+    """
+    return store.get_json(_provider_key(agent_id)) or None
 
 
 def _embed_batches(chunks: list[str]) -> list[list[str]]:
@@ -178,18 +232,29 @@ def _embed_batches(chunks: list[str]) -> list[list[str]]:
     return batches
 
 
-def _embed_with_retry(batch: list[str]) -> list[list[float] | None] | None:
-    """Embed one batch, halving it when the provider refuses, so a single oversized or
-    rate-limited request costs a retry rather than the rest of the document."""
-    result = llm.embed(batch)
-    if result is not None or len(batch) <= EMBED_MIN_BATCH:
-        return result
+def _embed_with_retry(batch: list[str], provider: str | None) -> tuple[str, list[list[float]]] | None:
+    """Embed one batch, waiting out a rate limit before halving it, so a single refused
+    request costs a pause rather than the rest of the document.
+
+    `provider` pins every batch after the first to whoever answered the first one: half a
+    document embedded by one model and half by another ranks worse than no embeddings at all.
+    """
+    waits = EMBED_RETRY_WAITS if llm.embeddings_configured() else ()
+    for wait in waits:
+        answered = llm.embed_with_provider(batch, provider=provider)
+        if answered is not None:
+            return answered
+        log.warning("Embedding batch of %d refused; retrying in %ss", len(batch), wait)
+        time.sleep(wait)
+    answered = llm.embed_with_provider(batch, provider=provider)
+    if answered is not None or len(batch) <= EMBED_MIN_BATCH:
+        return answered
     half = len(batch) // 2
-    left = _embed_with_retry(batch[:half])
+    left = _embed_with_retry(batch[:half], provider)
     if left is None:
         return None
-    right = _embed_with_retry(batch[half:])
-    return None if right is None else left + right
+    right = _embed_with_retry(batch[half:], left[0])
+    return None if right is None else (left[0], left[1] + right[1])
 
 
 def _process(agent_id: int, doc_id: int, text: str, actor: str):
@@ -198,8 +263,13 @@ def _process(agent_id: int, doc_id: int, text: str, actor: str):
         # Embed in batches; keyword search still works if this fails. A failed batch keeps chunks
         # already embedded rather than discarding every billed call made so far.
         collected = []
+        # Whoever answers the first batch embeds the rest of the document, and later queries too.
+        provider = embed_provider(agent_id) if _has_embedded_chunks(agent_id) else None
         for batch in _embed_batches(chunks):
-            result = _embed_with_retry(batch)
+            answered = _embed_with_retry(batch, provider)
+            result = None
+            if answered is not None:
+                provider, result = answered
             if result is None:
                 # Every remaining chunk gets its empty slot, not just this batch: a short list here
                 # blew up the indexing below and marked the whole document failed, so a document
@@ -216,12 +286,15 @@ def _process(agent_id: int, doc_id: int, text: str, actor: str):
                 db.add(DocumentChunk(document_id=doc_id, position=i, text=chunk, embedding=vector))
             doc = db.get(Document, doc_id)
             doc.chunk_count = len(chunks)
-            doc.embedded = any(v is not None for v in vectors)
+            doc_embedded = any(v is not None for v in vectors)
+            doc.embedded = doc_embedded
             if vectors and not all(v is not None for v in vectors):
                 doc.error = ("Semantic search unavailable for some passages (embedding provider "
                              "failed); keyword search works.")
             doc.status = "ready"
             title = doc.title
+        if doc_embedded and provider:
+            store.set_json(_provider_key(agent_id), provider)
         _bump_version(agent_id)
         from app.services import knowledge_profile
         knowledge_profile.rebuild_async(agent_id)
@@ -346,10 +419,10 @@ _prefetch_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rag-prefe
 _inflight: dict[str, Future] = {}
 
 
-def _do_embed(query: str, timeout: float) -> list[float] | None:
+def _do_embed(query: str, timeout: float, provider: str | None = None) -> list[float] | None:
     """The actual embed call, cached on success. Never joins `_inflight` itself, so a prefetch thread
     computing an entry can't deadlock waiting on its own not-yet-finished future."""
-    vectors = llm.embed([query], timeout=timeout)
+    vectors = llm.embed([query], timeout=timeout, task="query", provider=provider)
     if not vectors:
         return None
     with _embed_lock:
@@ -357,7 +430,7 @@ def _do_embed(query: str, timeout: float) -> list[float] | None:
     return vectors[0]
 
 
-def _embed_query(query: str, timeout: float) -> list[float] | None:
+def _embed_query(query: str, timeout: float, provider: str | None = None) -> list[float] | None:
     """The query embedding, from cache when it was prefetched while the caller was still speaking, or
     joined from a still-running prefetch instead of paying for a second, separately-billed embed call."""
     now = time.monotonic()
@@ -374,7 +447,7 @@ def _embed_query(query: str, timeout: float) -> list[float] | None:
             return fut.result(timeout=timeout)
         except Exception:  # noqa: BLE001 - still running or failed; the caller falls back to BM25
             return None
-    return _do_embed(query, timeout)
+    return _do_embed(query, timeout, provider)
 
 
 def prefetch(agent_id: int, query: str, timeout: float = 2.5) -> None:
@@ -391,7 +464,7 @@ def prefetch(agent_id: int, query: str, timeout: float = 2.5) -> None:
             idx = _load_index(agent_id)
             if idx.vectors is None or not idx.has_vector.any():
                 return None  # no embedded chunks to search; don't pay for a query embedding
-            return _do_embed(query, timeout)
+            return _do_embed(query, timeout, embed_provider(agent_id))
         except Exception as e:  # noqa: BLE001 - a warm cache is an optimisation, never a failure
             log.debug("RAG prefetch failed: %s", e)
             return None
@@ -440,7 +513,7 @@ def search(agent_id: int, query: str, top_k: int = 4, use_embeddings: bool = Tru
         # Nothing to lose: without this the turn has no knowledge at all, so allow a longer round trip.
         embed_timeout = max(embed_timeout, 1.5)
     if use_embeddings and index.vectors is not None and index.has_vector.any():
-        qv = _embed_query(query, embed_timeout)
+        qv = _embed_query(query, embed_timeout, embed_provider(agent_id))
         if qv:
             q = np.asarray(qv, dtype=np.float32)
             q = q / (np.linalg.norm(q) or 1)

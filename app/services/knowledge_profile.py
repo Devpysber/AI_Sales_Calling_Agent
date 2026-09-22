@@ -28,6 +28,9 @@ TOPICS = {
     "policy": "Process & policies: how they work, onboarding, support, refunds, contracts",
 }
 MAX_CHARS = 30_000  # of document text sent to the model
+# Retry size when the full corpus is refused. Free-tier models cap a prompt near 2,500 tokens, so a
+# knowledge base of any size fails outright on them; a shorter read fills most topics rather than none.
+RETRY_CHARS = 6_000
 
 PROMPT = """You audit a company's knowledge base for a phone sales agent. Read the documents and, for each topic, write what they
 actually say: 1-3 short factual sentences (max 350 characters) using concrete details (names, numbers, prices).
@@ -86,12 +89,23 @@ def rebuild(agent_id: int) -> dict:
         state.set_state(_key(agent_id), profile)
         return profile
     state.set_state(_key(agent_id), {**get(agent_id), "status": "analyzing"})
-    try:
+    system = PROMPT.format(topics="\n".join(f"- {k}: {v}" for k, v in TOPICS.items()))
+
+    def audit(text: str):
         result = llm.complete(
-            [{"role": "system", "content": PROMPT.format(topics="\n".join(f"- {k}: {v}" for k, v in TOPICS.items()))},
-             {"role": "user", "content": corpus}],
+            [{"role": "system", "content": system}, {"role": "user", "content": text}],
             json_mode=True, max_tokens=1200, temperature=0.1, providers=settings.summary_llm_providers, timeout=40)
-        data = llm.parse_json(result.text)
+        return result, llm.parse_json(result.text)
+
+    try:
+        try:
+            result, data = audit(corpus)
+        except Exception as e:  # noqa: BLE001 - most often a model refusing the prompt length
+            if len(corpus) <= RETRY_CHARS:
+                raise
+            log.warning("Knowledge coverage: full corpus refused for agent %s (%s); retrying on %s characters",
+                        agent_id, str(e)[:120], RETRY_CHARS)
+            result, data = audit(corpus[:RETRY_CHARS])
         topics = {}
         for key in TOPICS:
             item = data.get(key) or {}

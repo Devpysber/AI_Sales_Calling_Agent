@@ -63,6 +63,19 @@ class Settings(BaseSettings):
     # Max characters of the compact prompt (system prompt without knowledge/brief/past calls + last turns)
     fallback_prompt_char_budget: int = Field(6000, alias="FALLBACK_PROMPT_CHAR_BUDGET")
     openrouter_embedding_model: str = Field("openai/text-embedding-3-small", alias="OPENROUTER_EMBEDDING_MODEL")
+    # The model bills by token, not by width, so a narrower vector costs the same to make and a
+    # third of the storage and cosine work. 512 keeps the ranking this knowledge base needs.
+    openrouter_embedding_dimensions: int = Field(512, alias="OPENROUTER_EMBEDDING_DIMENSIONS")
+    # Embeddings: providers are tried in order until one answers. OpenRouter leads because it bills
+    # by token — a whole knowledge base costs about a tenth of a cent — while Gemini's free tier
+    # counts every passage as one of 1,000 daily requests, so a single upload nearly exhausts a day.
+    # Gemini stays as the free fallback for when OpenRouter runs out of credit.
+    embedding_providers: str = Field("openrouter,gemini", alias="EMBEDDING_PROVIDERS")
+    gemini_api_key: str = Field("", alias="GEMINI_API_KEY")
+    gemini_embedding_model: str = Field("gemini-embedding-001", alias="GEMINI_EMBEDDING_MODEL")
+    # Gemini returns 3072 numbers by default; 768 is the documented smaller size, a quarter of the
+    # storage and the same ranking in practice. Vectors are normalised before use either way.
+    gemini_embedding_dimensions: int = Field(768, alias="GEMINI_EMBEDDING_DIMENSIONS")
     # Post-call summaries are not latency-sensitive: try free/cheap models first, paid Sarvam as fallback.
     # Sarvam first: a summary is one request (~Rs 0.02) against ~Rs 0.15-0.20 of Gemini tokens; OpenRouter is the fallback.
     summary_llm_providers: str = Field("sarvam,openrouter", alias="SUMMARY_LLM_PROVIDERS")
@@ -155,7 +168,7 @@ class Settings(BaseSettings):
         secret_keys = {
             "resend_api_key", "email_from", "email_reply_to", 
             "smtp_host", "smtp_port", "smtp_username", "smtp_password", "smtp_from",
-            "openrouter_api_key", "sarvam_api_key",
+            "openrouter_api_key", "sarvam_api_key", "gemini_api_key",
             "plivo_auth_id", "plivo_auth_token", "plivo_phone_number"
         }
         
