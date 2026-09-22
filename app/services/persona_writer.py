@@ -32,10 +32,11 @@ FIELDS = {
     "instructions": ("How to run this call, 3-5 short lines, one instruction per line. Open, the ONE thing to find "
                      "out first, what to explain in a sentence when they ask, and when to close. Use the business's "
                      "own words for its services. No line longer than 120 characters."),
-    "objection_handling": ("The objections THIS business hears, 3-4 of them, ONE PER LINE, each written exactly as "
-                           "'Objection: how to answer'. Take them from what the documents say people ask and worry "
-                           "about. The answer is one short spoken sentence, and never promises what the documents "
-                           "do not support."),
+    "objection_handling": ("THREE OR FOUR objections this business hears. One line each, and each line is the "
+                           "objection, a colon, then the answer — like 'It sounds expensive: browsing and enquiries "
+                           "are free for couples.' No labels, no 'Objection:' or 'Answer:', and never both halves on "
+                           "separate lines. Take them from what the documents say people ask and worry about; each "
+                           "answer is one short spoken sentence that promises nothing the documents do not support."),
     "qualification_criteria": ("What makes a lead Hot, Warm or Cold here, in one line, using signals THIS business "
                                "can actually hear on a call — a date, a budget, a service named, a decision made."),
     "forbidden_topics": ("What this agent must never promise or claim, taken from the documents' own limits — what "
@@ -59,7 +60,9 @@ Rules:
 Fields:
 {fields}
 
-Return ONLY a JSON object with exactly these keys and string values."""
+Return ONLY a JSON object with exactly these keys. EVERY value is a single JSON string, never a list:
+a field that wants several lines carries them inside that one string, separated by newlines.
+Do not label lines. An objection line is the objection, a colon, then the answer, on one line."""
 
 
 # "Tell me what you are looking for" is not a next step, it is the conversation. A call to action that
@@ -70,8 +73,26 @@ _NEXT_OBJECTION = re.compile(r"(?<=[.!?])\s+(?=[A-Z][^:]{2,40}:)")
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 # Asking for information is not a next step either, however politely it is phrased.
 # A pair returned as two lines, sometimes bulleted: "- Objection: X" then "Answer: Y".
-_OBJECTION_PAIR = re.compile(r"(?im)^[\s\-\*\d.)]*objection\s*:\s*(.+?)\s*\n[\s\-\*]*answer\s*:\s*")
+# The model labels the halves however the prompt phrased it — "Objection:/Answer:", "What they
+# say:/What you answer:" — and puts them on separate lines. Either way it is one entry.
+_OBJECTION_PAIR = re.compile(
+    r"(?im)^[\s\-\*\d.)]*(?:objection|what they say)\s*:\s*(.+?)\s*\n[\s\-\*]*(?:answer|what you answer)\s*:\s*")
+_OBJECTION_LABEL = re.compile(r"(?im)^[\s\-\*\d.)]*(?:objection|what they say)\s*:\s*")
 _ASKING = re.compile(r"\b(tell me|let me know|share (with|your)|what (kind|sort|type) of)\b", re.I)
+
+
+def _as_text(value) -> str:
+    """A field the model returned as a JSON list becomes the lines a person would have typed.
+
+    Asking for "one per line" invites an array, and str() on a list put Python syntax straight
+    into the form: ['Open by welcoming them.', 'Ask which city.'].
+    """
+    if isinstance(value, (list, tuple)):
+        return "\n".join(str(item).strip() for item in value if str(item).strip())
+    if isinstance(value, dict):
+        # {"Is it free?": "Yes, for couples."} is the objection shape as a mapping.
+        return "\n".join(f"{k}: {v}" for k, v in value.items() if str(v).strip())
+    return str(value or "").strip()
 
 
 def _tidy(field: str, value: str) -> str:
@@ -83,6 +104,9 @@ def _tidy(field: str, value: str) -> str:
         # "Objection: X" on one line and "Answer: Y" on the next is two halves of one entry; the page
         # and the live prompt both expect the pair on a single line.
         value = _OBJECTION_PAIR.sub(lambda m: m.group(1).rstrip(" .;,") + ": ", value)
+        # The label itself is noise the agent would otherwise read out: the page already says these
+        # are objections, and "Objection: Is this free?: Yes" is not a sentence anyone speaks.
+        value = _OBJECTION_LABEL.sub("", value)
     if field == "objection_handling" and "\n" not in value and value.count(":") > 1:
         # Several objections returned as one run-on line: the page expects one per line, and so does
         # the prompt that reads them back on a call.
@@ -136,7 +160,7 @@ def draft(agent_id: int) -> dict:
 
     drafted, limits = {}, agents.PROFILE_LIMITS
     for name in FIELDS:
-        value = _tidy(name, str(data.get(name) or "").strip())
+        value = _tidy(name, _as_text(data.get(name)))
         if value:
             drafted[name] = value[:limits.get(name, 3000)]
     return {"fields": drafted, "reason": "", "model": f"{result.provider}/{result.model}",
