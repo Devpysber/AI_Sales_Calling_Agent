@@ -93,6 +93,10 @@ VOICEMAIL_WINDOW_SECONDS = 15.0    # only the opening of a call can be a recordi
 # The caller asks for a moment ("ek minute", "hold on", "रुकिए"): the silence loop waits instead of prompting.
 # A caller changing desk mid-call says so with a correction or a topic cue, never just the name in passing.
 DESK_SWITCH_CUE = re.compile(r"\b(actually|instead|regarding|about|nahi|nhi|galat|wala|wale|wali|ke liye|ke baare|baare|liye)\b|के बारे|के लिए|नहीं|वाला|वाली|असल में", re.I)
+# Colleague switch commands, confirmed without the model (the tool result is logged, never read out raw).
+TEAM_SWITCH_DONE = {"off": {"en": "Done, switched off.", "hi": "हो गया, बंद कर दिया।"},
+                    "on": {"en": "Done, switched on.", "hi": "हो गया, चालू कर दिया।"}}
+TEAM_SWITCH_FAILED = {"en": "That did not work; please check it on the Automation page.", "hi": "ये नहीं हो पाया, Automation page पर देख लीजिए।"}
 HOLD = re.compile(r"(ek|one|एक) (minute|second|sec|min|मिनट|सेकंड)|hold on|hold kar|रुकिए|रुको|\bruko\b|rukiye|ek min\b|"
                   r"थोड़ा रुक|just a (sec|second|moment)|one moment|\bwait\b", re.I)
 HOLD_SECONDS = 45.0
@@ -1569,10 +1573,27 @@ class CallStream:
         """
         lead = self.session.get("lead") or {}
         purpose = lead.get("call_purpose") or ""
-        if purpose in ("team", "admin", "inbound_choose") or not text:
+        key = self.lang_key()
+        if purpose in ("team", "admin") and text:
+            # A colleague's plain switch command: run it now, confirm in their language, no model round.
+            from app.services.agent_tools import team_quick_action
+            done = await asyncio.to_thread(team_quick_action, self.agent_id, text)
+            if done:
+                result, state = done
+                self.turn("customer", text)
+                if result.lower().startswith("failed"):
+                    line = TEAM_SWITCH_FAILED[key]
+                else:
+                    line = TEAM_SWITCH_DONE[state][key]
+                self.turn("assistant", line)
+                self.save_session()
+                events.record("automation.switched", result[:200], agent_id=self.agent_id, call_id=self.session.get("call_id"), actor="team")
+                await self.say_recorded(line)
+                return True
+            return False
+        if purpose == "inbound_choose" or not text:
             return False
         lead_id = self.session.get("lead_id")
-        key = self.lang_key()
         if DNC_REQUEST.search(text) and not DNC_NOT_NOW.search(text):
             log.info("Do-not-call request on session %s: %s", self.session_id[:8], text)
             self.turn("customer", text)

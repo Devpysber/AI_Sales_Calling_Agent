@@ -1054,8 +1054,20 @@ def _json_tool_turn(messages: list[dict], tools: list[dict], agent_id: int, purp
         work.append({"role": "assistant", "content": json.dumps({"reply": reply, "tool": {"name": name, "arguments": args}}, ensure_ascii=False)})
         work.append({"role": "user", "content": f"[Result of {name}: {outcome[:1500]}]\nNow tell the caller only what they asked, in one spoken sentence under 150 characters, and set tool to null."})
     log.warning("JSON tool loop hit %s rounds for purpose %s", MAX_TOOL_ROUNDS, purpose)
-    # Out of rounds: speak the last real result rather than a claim ("note kar liya") that nothing backs.
+    # Out of rounds: turn the last real result into one spoken line in the caller's language; a raw tool
+    # string ("Account credit balance is unknown: no billing integration...") must never reach the phone.
     if outcome:
+        try:
+            said = llm.complete([{"role": "system", "content": "Say this result to a colleague on the phone in ONE short sentence "
+                                                                "(under 120 characters), in the same language and script they used. No JSON, no quotes."},
+                                 {"role": "user", "content": f"Their words: {work[-1]['content'][:200] if work else ''}\nResult: {outcome[:400]}"}],
+                                max_tokens=80, temperature=0.2, providers=settings.summary_llm_providers, timeout=8)
+            line = (said.text or "").strip().strip('"')
+            if line and not line.startswith("{"):
+                yield line
+                return
+        except Exception as e:  # noqa: BLE001 - fall through to the plain outcome
+            log.warning("Could not phrase the tool result: %s", e)
         yield outcome[:200]
         return
     yield "Abhi yeh nahi ho paya, dobara boliye."

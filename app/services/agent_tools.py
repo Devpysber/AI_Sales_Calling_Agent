@@ -103,6 +103,40 @@ def _on_flag(v) -> bool:
     return str(v).strip().lower() in ("true", "yes", "1", "on", "resume", "enable", "start", "chalu")
 
 
+_ALL_WORDS = re.compile(r"\b(sab|saare|sare|sabhi|all|every|poora|pura)\b|सब|सारे|सभी|पूरा", re.I)
+_OFF_WORDS = re.compile(r"\b(off|band|bandh|stop|pause|roko|rok|disable)\b|बंद|रोक|ऑफ", re.I)
+_ON_WORDS = re.compile(r"\b(on|chalu|start|resume|enable|shuru)\b|चालू|शुरू|ऑन", re.I)
+_SWITCH_WORDS = {
+    "auto_dial": re.compile(r"auto.?dial|dialer|डायल", re.I), "retry": re.compile(r"retr(y|ies)|रिट्राई", re.I),
+    "speed_to_lead": re.compile(r"speed|website lead|form lead|स्पीड", re.I), "nurture": re.compile(r"nurture|follow.?up|फॉलो", re.I),
+    "meeting_reminder": re.compile(r"reminder|रिमाइंडर", re.I), "daily_report": re.compile(r"daily report|report|रिपोर्ट", re.I),
+    "auto_emails": re.compile(r"e-?mails?|मेल", re.I),
+}
+_AUTOMATION_WORD = re.compile(r"automation|ऑटोमेशन|automations", re.I)
+
+
+def team_quick_action(agent_id: int, text: str) -> tuple[str, str] | None:
+    """
+    A colleague's automation command with one right answer, run without the model: "saare automations off kar do",
+    "auto dial band karo", "retry chalu karo". Returns (tool result, spoken confirmation key) or None when the
+    words are not a plain switch command (the model handles anything with a question or a condition in it).
+    """
+    if not text or "?" in text or re.search(r"\b(kya|kyu|kyun|why|what|kab|when|agar|if)\b|क्या|क्यों|कब|अगर", text, re.I):
+        return None
+    on = bool(_ON_WORDS.search(text)) and not _OFF_WORDS.search(text)
+    off = bool(_OFF_WORDS.search(text))
+    if not (on or off):
+        return None
+    named = [k for k, rx in _SWITCH_WORDS.items() if rx.search(text)]
+    if _ALL_WORDS.search(text) and _AUTOMATION_WORD.search(text):
+        named = list(AUTOMATION_SWITCHES)
+    elif not named and _AUTOMATION_WORD.search(text):
+        named = [k for k in AUTOMATION_SWITCHES if k != "auto_emails"]   # "automation band karo" = the dialling ones
+    if not named:
+        return None
+    return set_automation_tool(agent_id, named, not off), ("off" if off else "on")
+
+
 def set_automation_tool(agent_id: int, switches: list[str] | str, on: bool) -> str:
     """Turn one or more of this agent's automations on or off; the only way a colleague's 'pause/resume X' takes effect."""
     from app.services.agents import update_automation

@@ -455,3 +455,18 @@ def test_a_new_agent_with_its_own_number_is_wired_on_plivo(client, monkeypatch):
         assert any(i["kind"] == "inbound_disconnected" and "8133333333" in i["detail"] for i in heal_service.list_issues())
     finally:
         agents.delete(made["id"], actor="admin")
+
+
+def test_colleague_switch_commands_run_without_the_model(client, base):
+    from app.services import agent_tools, agents
+    agent_id = int(base.rsplit("/", 1)[1])
+    agents.update_automation(agent_id, {k: True for k in ("auto_dial_enabled", "retry_enabled", "speed_to_lead_enabled", "nurture_enabled")}, actor="test")
+    result, state = agent_tools.team_quick_action(agent_id, "हाँ, सारे ऑटोमेशन्स को ऑफ कर दो यार अभी के लिए।")
+    assert state == "off" and not result.startswith("Failed")
+    cfg = agents.get_automation(agent_id)
+    assert not cfg["auto_dial_enabled"] and not cfg["retry_enabled"] and not cfg["speed_to_lead_enabled"] and not cfg["nurture_enabled"]
+    result, state = agent_tools.team_quick_action(agent_id, "auto dial chalu karo")
+    assert state == "on" and agents.get_automation(agent_id)["auto_dial_enabled"]
+    assert agent_tools.team_quick_action(agent_id, "auto dial kyun band hai?") is None       # a question goes to the model
+    assert agent_tools.team_quick_action(agent_id, "aaj kitni calls hui") is None           # not a switch command
+    assert agent_tools.team_quick_action(agent_id, "retry band karo agar koi issue ho") is None  # conditional
