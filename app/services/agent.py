@@ -103,7 +103,10 @@ def call_goal(lead: dict, purpose: str | None) -> str | None:
                 "under 100 characters). If they ask something first, answer it very briefly, then ask the next detail. "
                 "Do not skip their Name. Once collected, help them and move to the primary call to action.")
     if purpose == "inbound_choose":
-        options = "; ".join(f"{c['label']}" + (f" — {c['about']}" if c.get("about") else "") for c in lead.get("choices") or [])
+        # Labels only. The descriptions are another desk's tagline or objective, and at the very top of
+        # the prompt they read as things THIS agent sells: a wedding marketplace opened a call offering
+        # software for property agents, because a sibling desk's line was sitting in its goal.
+        options = "; ".join(c["label"] for c in lead.get("choices") or [])
         known = "" if lead.get("new_caller") else "This caller is already in our records on more than one desk. "
         return (known + "This line answers for more than one of our businesses — " + options + " — and we do not yet know "
                 "which one this call is about. Ask what they need, the way a person on the front desk would: one short, "
@@ -640,8 +643,14 @@ def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: i
     if agent_id and lead.get("call_purpose") not in ("team", "admin"):
         with contextlib.suppress(Exception):
             mine = (persona.get("company_name") or "").strip().lower()
-            others = list(dict.fromkeys(a["company_name"] + (f" ({a['tagline'][:60]})" if a["tagline"] else "")
-                                        for a in agents.desks() if a["id"] != agent_id and a["company_name"] and a["company_name"].lower() != mine))
+            # Only desks that actually answer on this agent's line. Every workspace in the account used
+            # to be listed — with its tagline — in every customer prompt, so an agent could describe a
+            # business it has nothing to do with, and the caller heard the wrong company's pitch.
+            line = (agents.get(agent_id) or {}).get("phone_number") or settings.plivo_phone_number
+            peers = set(agents.on_line(line)) - {agent_id}
+            others = list(dict.fromkeys(a["company_name"]
+                                        for a in agents.desks()
+                                        if a["id"] in peers and a["company_name"] and a["company_name"].lower() != mine))
             if others:
                 other_desks = ("Other desks of ours on this same number: " + "; ".join(others[:8]) + ". If the caller is really calling "
                                "about one of those, say so in one line, take their name and what they need, and say that team will call back. "
@@ -796,8 +805,15 @@ TRANSFER_MARK = "<TRANSFER>"
 # Each pair keeps the sentence grammatical — "update the CRM" becomes "update my notes", not a hole.
 _PLAIN_SPEECH = [
     # "in the CRM" / "to our database" -> "in my notes": the preposition already in the sentence still fits.
-    (r"\b(?:the|our|your)\s+(?:CRM|database|data\s?base|back\s?end|backend|server|portal|dashboard|knowledge\s?base|system)\b", "my notes"),
-    (r"\b(?:CRM|database|data\s?base|back\s?end|backend|knowledge\s?base)\b", "my notes"),
+    # A product noun after the word means the caller is talking about a THING, not about our own store:
+    # "your CRM tool", "database software". Without this guard the agent told a customer it builds
+    # "My notes and lead management tools", because the rewrite fired on the product it was selling.
+    (r"\b(?:the|our|your)\s+(?:CRM|database|data\s?base|back\s?end|backend|server|portal|dashboard|knowledge\s?base|system)\b(?!\s+(?:tool|tools|software|platform|product|products|solution|solutions|system|systems|vendor|company|space|market|industry))", "my notes"),
+    # "Database updated." — our own store, reported without a preposition. The verb after it is what
+    # makes it ours; a product noun would not be followed by "updated".
+    (r"\b(?:CRM|database|data\s?base|back\s?end|backend|knowledge\s?base)\s+(updated|saved|synced|created|logged|noted)\b", r"my notes \1"),
+    # Bare noun only where a verb or preposition makes it our own store: "update CRM", "logged in database".
+    (r"\b(in|into|to|from|on|update|updated|check|checked|log|logged|save|saved|add|added)\s+(?:CRM|database|data\s?base|back\s?end|backend|knowledge\s?base)\b(?!\s+(?:tool|tools|software|platform|product|products|solution|solutions|system|systems|vendor|company|space|market|industry))", r"\1 my notes"),
     (r"\bAPI\b", "our team"),
     # Only the noun: "we record every call" is ordinary speech and must survive untouched.
     (r"\b(the|your|our|my|their|this|that)\s+records\b", r"\1 notes"),

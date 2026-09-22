@@ -27,7 +27,8 @@ TOPICS = {
     "proof": "Case studies: clients, results, testimonials, numbers",
     "policy": "Process & policies: how they work, onboarding, support, refunds, contracts",
 }
-MAX_CHARS = 30_000  # of document text sent to the model
+MAX_CHARS = 30_000     # hard ceiling on the text sent to the model
+CHARS_PER_PASSAGE = 400   # a retrieved passage is one chunk; more than this is a runaway document
 # Retry size when the full corpus is refused. Free-tier models cap a prompt near 2,500 tokens, so a
 # knowledge base of any size fails outright on them; a shorter read fills most topics rather than none.
 RETRY_CHARS = 6_000
@@ -56,30 +57,47 @@ def get(agent_id: int) -> dict:
     return SettingsService().get_state(_key(agent_id)) or {"status": "empty", "topics": {}}
 
 
+# What to search the knowledge base for, per topic. The audit used to read the corpus from the top and
+# stop at a character budget, so a knowledge base whose pricing sits in section 8 and whose FAQs sit in
+# section 21 reported both as missing while holding hundreds of passages on them. Retrieval finds each
+# topic wherever it lives, and costs a fraction of the prompt: keyword search only, no embedding spend.
+TOPIC_QUERIES = {
+    "overview": "company about us who we are founded years locations offices team",
+    "services": "services products what we offer packages solutions for customers",
+    "pricing": "price cost fees charges plan package payment terms rupees discount",
+    "faq": "frequently asked questions common customer question answer",
+    "proof": "case study client results testimonial review numbers success story",
+    "policy": "policy process refund cancellation onboarding support contract terms privacy",
+}
+PASSAGES_PER_TOPIC = 6
+
+
 def _corpus(agent_id: int) -> tuple[str, list[str]]:
+    """Passages that speak to each of the six topics, gathered by searching for them.
+
+    Returns the text put in front of the model and the document titles it may cite.
+    """
+    from app.services import rag
     with get_db() as db:
-        rows = db.execute(
-            select(Document.id, Document.title, DocumentChunk.text)
-            .join(DocumentChunk, DocumentChunk.document_id == Document.id)
-            .where(Document.agent_id == agent_id, Document.status == "ready")
-            .order_by(Document.id, DocumentChunk.position)
-        ).all()
-    doc_ids = list(dict.fromkeys(doc_id for doc_id, _, _ in rows))
-    per_doc = max(MAX_CHARS // max(len(doc_ids), 1), 2000)
-    parts, titles = [], []
-    doc_used = {}
-    for doc_id, title, text in rows:
-        used = doc_used.get(doc_id, 0)
-        if used >= per_doc:
-            continue
-        if used == 0:
-            parts.append(f"\n=== Document: {title} ===\n")
-            titles.append(title)
-        remaining = per_doc - used
-        chunk = text[:remaining]
-        parts.append(chunk)
-        doc_used[doc_id] = used + len(chunk)
-    return "\n".join(parts), titles
+        titles = [t for (t,) in db.execute(
+            select(Document.title).where(Document.agent_id == agent_id, Document.status == "ready")
+        ).all()]
+    if not titles:
+        return "", []
+
+    parts, seen = [], set()
+    for topic, query in TOPIC_QUERIES.items():
+        hits = rag.search(agent_id, query, top_k=PASSAGES_PER_TOPIC, use_embeddings=False)
+        lines = []
+        for hit in hits:
+            text = (hit.get("text") or "").strip()
+            if not text or text in seen:
+                continue   # a passage that answers two topics is sent once, not twice
+            seen.add(text)
+            lines.append(f"- ({hit.get('title') or 'document'}) {text[:CHARS_PER_PASSAGE]}")
+        if lines:
+            parts.append(f"\n=== Passages about {TOPICS[topic]} ===\n" + "\n".join(lines))
+    return "\n".join(parts)[:MAX_CHARS], list(dict.fromkeys(titles))
 
 
 def rebuild(agent_id: int) -> dict:
