@@ -181,20 +181,20 @@ export default function Inbound() {
       <Card className="mb-4">
         <CardHeader title="Who answers this line" description={ownerQ.data?.own_number
           ? `This agent has its own number: every call to it is answered here, with this agent's persona, knowledge and CRM. The colleagues it lists, and the one who created it, are recognised by their number and get check-in mode.`
-          : "A customer who is already in an agent's CRM gets that agent back, with its persona, knowledge and CRM. A colleague — the one who created an agent, or anyone listed on it — is recognised by their number and gets that agent's check-in mode (asked which one, if they made several). Any other caller, when several agents share the line, is asked which of them the call is about and handed to the one they name, with no lead saved until they say. The agent designated here only greets and takes the call when the caller never names a desk. Give an agent its own number under Agent settings when you get one."} />
+          : "A caller already in an agent's CRM gets that agent back, with its persona and knowledge. A colleague — whoever created an agent, or anyone listed on it — gets check-in mode on their own agents. Anyone else is asked which business the call is about and handed to the one they name; nothing is saved to a CRM until they say. Only if they never say does the greeting agent keep the call."} />
         <div className="flex flex-wrap items-center gap-3 px-4 pb-4 text-sm sm:px-5 sm:pb-5">
           {ownerQ.data ? (
             <>
               <span className="font-mono">+{ownerQ.data.number || '—'}</span>
               <span className="text-muted">·</span>
               {ownerQ.data.owner_id === agent?.id
-                ? <Badge tone="success">This agent answers unnamed callers</Badge>
+                ? <Badge tone="success">This agent greets this line</Badge>
                 : ownerQ.data.owner_id
-                  ? <span>Greets unnamed callers: <strong>{ownerQ.data.sharing.find((a) => a.id === ownerQ.data!.owner_id)?.name ?? `agent #${ownerQ.data.owner_id}`}</strong></span>
-                  : <span className="text-muted">No agent designated: known callers reach their own agent, others are asked which desk they want</span>}
+                  ? <span><strong>{ownerQ.data.sharing.find((a) => a.id === ownerQ.data!.owner_id)?.name ?? `agent #${ownerQ.data.owner_id}`}</strong> greets this line</span>
+                  : <span className="text-muted">Nobody greets this line yet: known callers still reach their own agent, everyone else is asked which business they want</span>}
               {ownerQ.data.owner_id !== agent?.id && (
                 <Button size="sm" variant="primary" className="ml-auto" loading={setOwner.isPending} onClick={() => setOwner.mutate()}>
-                  <PhoneIncoming />Make {agent?.name} greet unnamed callers
+                  <PhoneIncoming />Make {agent?.name} greet instead
                 </Button>
               )}
               {ownerQ.data.sharing.length > 1 && <span className="basis-full text-xs text-muted">Sharing this line: {ownerQ.data.sharing.map((a) => a.name).join(', ')}</span>}
