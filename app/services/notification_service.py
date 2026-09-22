@@ -185,7 +185,10 @@ def notify_admin(subject: str, body: str, lead_id: int | None = None, agent_id: 
     """
     from app.core.auth import login_email
     address = (login_email() or "").strip().lower()
-    return bool(address) and email_sent(send_email(address, subject, body, lead_id=lead_id, agent_id=agent_id, actor="ai"))
+    # actor="system", not "ai": this goes to the account owner, not the customer. Filed as "ai" it
+    # appeared in the Email Centre under "AI auto-emails" with the LEAD's name on the row, so an
+    # internal alert about a lead with no email address read as mail sent to that customer.
+    return bool(address) and email_sent(send_email(address, subject, body, lead_id=lead_id, agent_id=agent_id, actor="system"))
 
 
 def notify_team(subject: str, body: str, lead_id: int | None = None, agent_id: int | None = None,
@@ -193,7 +196,7 @@ def notify_team(subject: str, body: str, lead_id: int | None = None, agent_id: i
     """Send one message to every team recipient. Returns the addresses that accepted it."""
     delivered = []
     for address in team_recipients(role, agent_id):
-        if email_sent(send_email(address, subject, body, lead_id=lead_id, agent_id=agent_id, actor="ai")):
+        if email_sent(send_email(address, subject, body, lead_id=lead_id, agent_id=agent_id, actor="system")):   # to the team, not the customer
             delivered.append(address)
     return delivered
 

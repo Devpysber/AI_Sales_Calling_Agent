@@ -72,3 +72,28 @@ export const callHandledBy = (
     : call.trigger === 'forwarded'
       ? 'Team · number not recorded'
       : `${agentName || 'AI agent'} (AI)`
+
+
+export const LEAD_JOURNEY = ['New', 'Contacted', 'Interested', 'Follow Up', 'Meeting Booked', 'Closed Won']
+
+/**
+ * 0-100 engagement score: temperature, pipeline stage, how often they pick up, and recency.
+ *
+ * One formula for every page. The list and the lead page used to carry their own, weighted
+ * differently (stage x7 against x6, recency 12 against 10, and only the lead page counted
+ * connect rate at all), so the same lead showed two different scores depending on where you
+ * looked. `connected`/`total` come from the lead row on the list and from the loaded calls on
+ * the lead page; with no call data the reach term is simply absent, not guessed.
+ */
+export function leadScore(lead: { do_not_call?: boolean; qualification?: string | null; status: string; last_contacted_at?: string | null; total_calls?: number; connected_calls?: number }, calls?: { status: string; duration: number }[]): number {
+  if (lead.do_not_call) return 0
+  const temp = ({ Hot: 45, Warm: 28, Cold: 8 } as Record<string, number>)[lead.qualification ?? ''] ?? 12
+  const stage = Math.max(0, LEAD_JOURNEY.indexOf(lead.status)) * 6
+  const total = calls ? calls.length : lead.total_calls ?? 0
+  const connected = calls
+    ? calls.filter((c) => c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0)).length
+    : lead.connected_calls ?? 0
+  const reach = total ? Math.round((15 * connected) / total) : 0
+  const recent = lead.last_contacted_at && Date.now() - Date.parse(lead.last_contacted_at) < 7 * 86_400_000 ? 10 : 0
+  return Math.min(100, temp + stage + reach + recent)
+}

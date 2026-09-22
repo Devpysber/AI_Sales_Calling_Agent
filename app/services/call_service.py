@@ -136,6 +136,10 @@ def _merge_text(existing: str | None, new: str | None, cap: int = 2000) -> str |
     return (existing + " " + " ".join(added))[:cap]
 
 
+# Everything below this line in a lead's notes belongs to the post-call analyser and is rewritten after
+# every call; everything above it was typed by a person and is never touched.
+NOTES_SENTINEL = "--- from the last call ---"
+
 # Customer lines that mean "never call me again": marked from the transcript so a failed or mislabelled summary
 # cannot leave them dialable.
 DNC_RE = re.compile(r"(don'?t|do not|never|stop) call(ing)?( me)?|remove my number|call mat (karo|karna|kijiye)|dobara call mat"
@@ -680,7 +684,8 @@ class CallService:
                 address = (m.get("email") or "").strip() if isinstance(m, dict) else ""
                 if address:
                     with contextlib.suppress(Exception):
-                        send_email(address, f"[{other_persona['company_name']}] {subject}", "\n".join(lines), agent_id=other, actor="ai")
+                        # Another desk's team, not a customer: "system" keeps it out of the AI-mail filter.
+                        send_email(address, f"[{other_persona['company_name']}] {subject}", "\n".join(lines), agent_id=other, actor="system")
 
     def _desk_named_in(self, text: str) -> int | None:
         """Another of our agents whose company or agent name appears in the text; None when none or ours."""
@@ -832,16 +837,19 @@ class CallService:
                     updates[key] = merged_text
             # Budget, timeline, product and next action are restated on most calls: keep one current line
             # each instead of appending a near-duplicate after every conversation.
-            notes_lines = [ln for ln in (current.get("notes") or "").splitlines() if ln.strip()]
+            # "Notes for the agent" is a box a person types in, and the analyser owns only what it wrote
+            # there. Rewriting the whole field deleted human lines: any line merely CONTAINING "Budget:"
+            # was dropped, so "Ask about Budget: he is cagey" vanished after the next call, and blank
+            # lines between paragraphs were stripped on every pass.
+            head, _, tail = (current.get("notes") or "").partition(NOTES_SENTINEL)
+            ai_lines = [ln for ln in tail.splitlines() if ln.strip()]
             for key, label in (("budget", "Budget"), ("timeline", "Timeline"), ("product", "Product"), ("next_action", "Next action")):
                 value = str(s.get(key) or "").strip()
                 if not value:
                     continue
-                line = f"{label}: {value}"
-                notes_lines = [ln for ln in notes_lines if not ln.strip().startswith(f"{label}:")
-                               and f"{label}:" not in ln]
-                notes_lines.append(line)
-            merged = "\n".join(notes_lines)
+                ai_lines = [ln for ln in ai_lines if not ln.strip().startswith(f"{label}:")]
+                ai_lines.append(f"{label}: {value}")
+            merged = (head.rstrip() + (f"\n\n{NOTES_SENTINEL}\n" + "\n".join(ai_lines) if ai_lines else "")).lstrip("\n")
             if merged != (current.get("notes") or ""):
                 updates["notes"] = merged
             callback_at = _valid_callback(s.get("callback_at"))

@@ -15,7 +15,7 @@ import { api, ApiError } from '@/lib/api'
 import { Stagger } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
 import type { ActivityEvent, Call, Lead, Page } from '@/lib/types'
-import { cn, formatDate, formatDuration, LANGUAGES, LEAD_STATUSES, timeAgo, titleCase } from '@/lib/utils'
+import { cn, formatDate, formatDuration, LANGUAGES, LEAD_STATUSES, leadScore, timeAgo, titleCase } from '@/lib/utils'
 
 const JOURNEY = ['New', 'Contacted', 'Interested', 'Follow Up', 'Meeting Booked', 'Closed Won']
 const LIVE_STATUSES = ['Queued', 'Ringing', 'In Progress']
@@ -59,17 +59,6 @@ function nextAction(lead: Lead, calls: Call[]): { title: string; detail: string;
   }
   if (lead.qualification === 'Hot' || lead.qualification === 'Warm') return { title: 'Book a meeting', detail: 'The lead shows interest. Call to confirm a day and time.', kind: 'call' }
   return { title: 'Qualify further', detail: 'Interest is unclear. The next call should find the requirement and budget.', kind: 'call' }
-}
-
-/** 0-100 engagement score from temperature, stage, connect rate and recency. */
-function leadScore(lead: Lead, calls: Call[]) {
-  if (lead.do_not_call) return 0
-  const temp = { Hot: 45, Warm: 28, Cold: 8 }[lead.qualification ?? ''] ?? 12
-  const stage = Math.max(0, JOURNEY.indexOf(lead.status)) * 6
-  const connected = calls.filter((c) => c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0)).length
-  const reach = calls.length ? Math.round((15 * connected) / calls.length) : 0
-  const recent = lead.last_contacted_at && Date.now() - Date.parse(lead.last_contacted_at) < 7 * 86_400_000 ? 10 : 0
-  return Math.min(100, temp + stage + reach + recent)
 }
 
 function CopyChip({ icon, value, href }: { icon: ReactNode; value: string; href?: string }) {

@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 
 from app.core.database import get_db
 from app.core.logging import get_logger
@@ -127,6 +127,20 @@ def clean_name(value) -> str | None:
     return name
 
 
+def _call_counts(db, lead_ids: list[int]) -> dict[int, dict]:
+    """{lead_id: {total_calls, connected_calls}} for a page of leads, in one query."""
+    if not lead_ids:
+        return {}
+    from app.models.call import Call
+    rows = db.execute(
+        select(Call.lead_id, func.count(Call.id),
+               func.sum(case((or_(Call.status == "Completed", and_(Call.status == "Failed", Call.duration > 0)), 1), else_=0)))
+        .where(Call.lead_id.in_(lead_ids)).group_by(Call.lead_id)
+    ).all()
+    return {lead_id: {"total_calls": int(total or 0), "connected_calls": int(connected or 0)}
+            for lead_id, total, connected in rows}
+
+
 class CRMService:
     """Leads of one agent. agent_id=None is unscoped: only for webhooks that already hold a trusted lead id."""
 
@@ -205,7 +219,14 @@ class CRMService:
             column = SORTABLE.get(sort, Lead.id)
             query = query.order_by(column.desc().nulls_last() if order == "desc" else column.asc().nulls_last())
             rows = db.scalars(query.offset((page - 1) * page_size).limit(page_size)).all()
-            return {"items": [r.to_dict() for r in rows], "total": total, "page": page, "page_size": page_size}
+            items = [r.to_dict() for r in rows]
+            # Call counts for the page's leads in ONE grouped query, so the list can show the same lead
+            # score the lead page does. Without them the two pages scored the same lead differently,
+            # because only the detail page knew how often the lead actually picked up.
+            counts = _call_counts(db, [i["id"] for i in items])
+            for item in items:
+                item.update(counts.get(item["id"], {"total_calls": 0, "connected_calls": 0}))
+            return {"items": items, "total": total, "page": page, "page_size": page_size}
 
     def board(self, statuses: list[str], search=None, qualification=None, per_column: int = 50) -> dict:
         """Leads grouped by status for the pipeline board: the most recently active per column plus totals."""

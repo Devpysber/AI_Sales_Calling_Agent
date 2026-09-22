@@ -499,7 +499,9 @@ def _notify_missed(session: dict, persona: dict, status: str):
     for m in persona.get("team_members") or []:
         address = (m.get("email") or "").strip().lower() if isinstance(m, dict) else ""
         if address and address not in delivered:
-            if email_sent(send_email(address, subject, "\n".join(lines), lead_id=session.get("lead_id"), agent_id=session.get("agent_id"), actor="ai")):
+            # A team member, not the customer: filed as "system" so the Email Centre does not show it
+            # as AI mail to the lead whose name is on the row.
+            if email_sent(send_email(address, subject, "\n".join(lines), lead_id=session.get("lead_id"), agent_id=session.get("agent_id"), actor="system")):
                 delivered.add(address)
 
 
