@@ -72,3 +72,28 @@ def test_live_calls_does_not_rebuild_full_agent_stats(client, base, monkeypatch)
     monkeypatch.setattr(agents, "list_agents", boom)
     res = client.get("/api/agents/live")
     assert res.status_code == 200
+
+
+def test_plivo_machine_verdict_hangs_up_and_ends_as_no_answer(client, base, monkeypatch):
+    from app.services import agents, call_session
+    from app.services.call_service import CallService
+    agent_id = int(base.rsplit("/", 1)[1])
+    agents.update_profile(agent_id, {"detect_voicemail": True}, actor="test")
+    lead = client.post(f"{base}/leads", json={"name": "Machine", "phone": "9466666666"}).json()
+    cid = client.post(f"{base}/calls", json={"lead_id": lead["id"]}).json()["call_id"]
+    from app.models.call import Call
+    from app.core.database import get_db
+    with get_db() as db:
+        sid = db.get(Call, cid).session_id
+    xml = client.post(f"/api/plivo/answer?sid={sid}&cid={cid}", data={"CallUUID": "u-m", "Machine": "true"}).text
+    assert "<Hangup" in xml and "<Stream" not in xml and "<Play" not in xml
+    assert call_session.get(sid)["voicemail"] is True
+    CallService(agent_id).on_hangup(cid, "completed", 3, None, "u-m")
+    call = client.get(f"{base}/calls/{cid}").json()
+    assert call["status"] == "No Answer" and call["hangup_cause"] == "Voicemail"
+    # Switch off: the same verdict is ignored and the call proceeds normally.
+    agents.update_profile(agent_id, {"detect_voicemail": False}, actor="test")
+    cid2 = client.post(f"{base}/calls", json={"lead_id": lead["id"]}).json()["call_id"]
+    with get_db() as db:
+        sid2 = db.get(Call, cid2).session_id
+    assert "<Hangup" not in client.post(f"/api/plivo/answer?sid={sid2}&cid={cid2}", data={"CallUUID": "u-n", "Machine": "true"}).text

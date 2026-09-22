@@ -370,7 +370,7 @@ function ProfileEditor({ section, draft, setDraft, data }: {
           <Switch checked={draft.record_calls} onChange={(v) => set('record_calls', v)} label="Record calls" />
         </Card>
         <Card className="flex items-center justify-between gap-4 p-5">
-          <div className="min-w-0"><div className="font-medium">Voicemail detection</div><div className="text-sm text-muted">Hang up automatically when an answering machine picks up. Can misfire on Indian caller tunes, so keep it off unless you see voicemail calls.</div></div>
+          <div className="min-w-0"><div className="font-medium">Voicemail detection</div><div className="text-sm text-muted">Off: the agent still hangs up when the first words it hears are a voicemail greeting or a carrier announcement. On: Plivo's answering-machine detection is added on outbound calls (small extra charge per call) and the call is cut before the greeting. It can misfire on Indian caller tunes, so switch it on only if voicemail calls keep getting through.</div></div>
           <Switch checked={draft.detect_voicemail} onChange={(v) => set('detect_voicemail', v)} label="Voicemail detection" />
         </Card>
       </Stagger>

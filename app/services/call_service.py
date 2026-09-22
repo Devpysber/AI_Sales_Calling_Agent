@@ -476,8 +476,11 @@ class CallService:
         latencies = session.get("latencies") or []
 
         status = PLIVO_STATUS.get((plivo_status or "").lower(), "Completed")
-        if cause and "machine" in cause.lower():
+        if (cause and "machine" in cause.lower()) or session.get("voicemail"):
+            # Hung up on a recording (Plivo's detection or our own on the first transcript): a no-answer
+            # for retries and stats, never a "completed conversation" with a summary.
             status = "No Answer"
+            cause = cause or "Voicemail"
         if status == "Completed" and not answered:
             status = "No Answer"
         if duration == 0 and answered and answered_at:

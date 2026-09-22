@@ -17,7 +17,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services import agent, agents, call_session, tts
+from app.services import agent, agents, call_session, events, tts
 from app.services.call_service import CallService, session_agent
 
 log = get_logger(__name__)
@@ -215,6 +215,13 @@ async def answer(request: Request):
 
     agent_id = session_agent(session)
     persona = agents.get_profile(agent_id)
+    if p.get("sid") and persona.get("detect_voicemail") and str(p.get("Machine") or "").lower() == "true":
+        # Plivo's answering-machine detection (asked for only when the persona switch is on) said a
+        # machine picked up: hang up before the greeting costs anything; the call ends as a no-answer.
+        call_session.update(session["id"], voicemail=True)
+        events.record("call.voicemail", "Answering machine detected by Plivo, hung up", call_id=session.get("call_id"), actor="system")
+        r.add(plivoxml.HangupElement())
+        return xml(r)
     if not p.get("sid"):
         route = inbound_route(persona, agent_id, p.get("From"))
         # Nobody left to ring (e.g. the only transfer number is the line calling in): the AI
