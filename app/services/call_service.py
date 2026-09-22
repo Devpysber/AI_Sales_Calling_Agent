@@ -104,6 +104,22 @@ def _next_callback_slot(cfg: dict, now: datetime | None = None) -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
+def _clamp_callback(at: str, cfg: dict) -> tuple[str, bool]:
+    """A callback time the callbacks job can actually dial, and whether it had to be moved.
+
+    The job refuses to dial outside calling hours, and a row whose time has passed stays due for
+    ever, so a customer who agreed to "in two minutes" at 23:10 was rung at nine the next morning
+    with no explanation. Times are clamped where they are written instead, so what the lead page
+    shows is the time the call will really happen.
+    """
+    try:
+        dt = datetime.strptime(str(at)[:16], "%Y-%m-%d %H:%M").replace(tzinfo=IST)
+    except ValueError:
+        return at, False
+    slot = next_calling_window(cfg, dt)
+    return slot.strftime("%Y-%m-%d %H:%M"), slot != dt
+
+
 def _merge_text(existing: str | None, new: str | None, cap: int = 2000) -> str | None:
     """Append sentences the stored text does not already contain; a short call must not wipe earlier discovery notes."""
     existing = (existing or "").strip()
@@ -860,6 +876,15 @@ class CallService:
                 if soon == 15 and str(s.get("team_action") or "").strip():
                     self._urgent_team_alert(lead_id, call_id, str(s.get("team_action")))
             if callback_at:
+                try:
+                    window_cfg = agents.get_automation(self.agent_id)
+                except Exception:  # noqa: BLE001 - no automation row: the defaults inside the clamp apply
+                    window_cfg = {}
+                callback_at, moved = _clamp_callback(callback_at, window_cfg)
+                if moved:
+                    events.record("callback.moved", f"Callback moved into calling hours: {callback_at}",
+                                  "The time agreed on the call is outside the calling window.",
+                                  agent_id=self.agent_id, lead_id=lead_id, call_id=call_id, actor="system")
                 updates["callback_at"] = callback_at
                 updates.setdefault("follow_up_date", callback_at[:10])
                 if synthetic_callback:

@@ -1318,7 +1318,7 @@ Return ONLY JSON:
   "objections": "",
   "meeting_at": "YYYY-MM-DD HH:MM or empty",
   "follow_up_date": "YYYY-MM-DD or empty",
-  "callback_at": "YYYY-MM-DD HH:MM (24h IST) when the customer agreed to a call back at a specific time or delay (e.g. 'in 10 minutes', 'tomorrow 11 am'), else empty",
+  "callback_at": "YYYY-MM-DD HH:MM (24h IST) when the customer agreed to a call back at a specific time or delay (e.g. 'in 10 minutes', 'tomorrow 11 am'), else empty. Calls only go out between 9 am and 9 pm IST: a time outside that is moved to the next morning, so prefer a slot inside the window",
   "team_action": "what the customer asked a human on the team to DO, in one sentence, if they asked for anything at all (e.g. 'Customer is standing outside the Bhopal showroom now and wants someone to come out and meet him'), else empty",
   "urgent": "true only when the customer needs a person within the hour (waiting at a location, angry, blocked), else false",
   "email": "",

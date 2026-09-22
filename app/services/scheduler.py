@@ -8,6 +8,7 @@ instance executes jobs at a time.
 """
 
 import asyncio
+import contextlib
 import os
 import socket
 import time
@@ -45,6 +46,10 @@ def _dial(agent_id: int, leads: list[dict], trigger: str, limit: int) -> str:
 
 def job_auto_dial(agent_id, cfg, force=False):
     if not force and not within_calling_hours(cfg):
+        # Rows written before the clamp existed, or by an older build, sit due for ever: the job fires
+        # on every 20s tick all night, refuses every time, and the customer is rung hours late with no
+        # explanation. Move them into the next window once, visibly, and stop the churn.
+        _drain_stale_callbacks(agent_id, cfg)
         return "outside calling hours"
     leads = CRMService(agent_id).pending_for_dial(cfg["max_calls_per_run"] * 3)
     return _dial(agent_id, leads, "auto_dial", cfg["max_calls_per_run"]) if leads else "no pending leads"
@@ -55,6 +60,21 @@ def job_retry_calls(agent_id, cfg, force=False):
         return "outside calling hours"
     leads = CRMService(agent_id).retry_candidates(cfg["max_retries"], cfg["retry_min_gap_minutes"], cfg["max_calls_per_run"] * 3)
     return _dial(agent_id, leads, "retry", cfg["max_calls_per_run"]) if leads else "no leads to retry"
+
+
+def _drain_stale_callbacks(agent_id, cfg) -> None:
+    """Rewrite callbacks whose promised time has passed by an hour to the next moment we may dial."""
+    from app.services.call_service import _clamp_callback
+    now = datetime.now(IST)
+    stale = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M")
+    crm = CRMService(agent_id)
+    for lead in crm.due_callbacks(stale, 20):
+        at, moved = _clamp_callback(lead.get("callback_at") or "", cfg)
+        if not moved:
+            continue
+        with contextlib.suppress(Exception):
+            crm.update(lead["id"], {"callback_at": at}, actor="system", event_type="callback.deferred",
+                       title=f"Callback moved to {at}: the agreed time is outside calling hours")
 
 
 def job_callbacks(agent_id, cfg, force=False):

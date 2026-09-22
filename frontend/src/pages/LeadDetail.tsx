@@ -30,7 +30,19 @@ function nextAction(lead: Lead, calls: Call[]): { title: string; detail: string;
   if (calls.some((c) => LIVE_STATUSES.includes(c.status))) return { title: 'Call in progress', detail: 'The agent is on the phone with this lead right now. The transcript below updates live.', kind: 'live' }
   const connected = calls.filter((c) => c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0))
   if (lead.do_not_call) return { title: 'Do not contact', detail: 'This lead asked not to be called. It is excluded from every call and campaign.', kind: 'stop' }
-  if (lead.callback_at) return { title: `Callback at ${formatDate(lead.callback_at.replace(' ', 'T') + '+05:30')}`, detail: 'The customer asked to be called back. The agent will dial automatically at that time (inside calling hours).', kind: 'followup' }
+  if (lead.callback_at) {
+    // The scheduler only dials inside calling hours, and a time already past is not a plan: saying
+    // "the agent will dial automatically at that time" for either one promised what nothing delivers.
+    const at = new Date(lead.callback_at.replace(' ', 'T') + '+05:30')
+    const overdue = at.getTime() < Date.now()
+    return {
+      title: `Callback at ${formatDate(lead.callback_at.replace(' ', 'T') + '+05:30')}`,
+      detail: overdue
+        ? 'This time has passed. The agent dials on its next run inside calling hours, or call now.'
+        : 'The customer asked to be called back. The agent dials automatically at that time.',
+      kind: 'followup',
+    }
+  }
   if (lead.status === 'Not Interested') return { title: 'Nurture later', detail: 'Not interested right now. Revisit in a few months with a new offer.', kind: 'stop' }
   if (lead.meeting_at) {
     const at = new Date(lead.meeting_at.replace(' ', 'T') + '+05:30')

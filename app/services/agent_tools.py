@@ -327,9 +327,21 @@ def schedule_callback_tool(lead_id, date_time: str, agent_id: int, lead: str | N
                 "Take them off Do Not Call first if they asked us to ring back.")
     if current.get("phone_valid") is False:
         return f"Lead {lead_id} has an incomplete phone number, so no callback was scheduled. Fix the number first."
+    # The callbacks job only dials inside calling hours, so a time outside them was booked, never
+    # dialled at that time, and reported back as if it were. Book what will actually happen and say so.
+    from app.services.call_service import _clamp_callback
+    from app.services.agents import get_automation
     try:
-        crm.update(lead_id, {"callback_at": when, "call_status": "Pending"}, actor="team")
-        return f"Callback scheduled for lead {lead_id} at {when} IST."
+        window_cfg = get_automation(agent_id)
+    except Exception:  # noqa: BLE001 - no automation row: the clamp's own defaults apply
+        window_cfg = {}
+    booked, moved = _clamp_callback(when, window_cfg)
+    try:
+        crm.update(lead_id, {"callback_at": booked, "call_status": "Pending"}, actor="team")
+        if moved:
+            return (f"{when} IST is outside calling hours, so the callback for lead {lead_id} is booked for "
+                    f"{booked} IST instead.")
+        return f"Callback scheduled for lead {lead_id} at {booked} IST."
     except Exception as e:
         return f"Failed to schedule callback: {str(e)}"
 
