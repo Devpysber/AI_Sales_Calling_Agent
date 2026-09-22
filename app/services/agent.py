@@ -11,6 +11,7 @@ sentiment, meeting / follow-up extraction.
 
 import contextlib
 import json
+import difflib
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -102,15 +103,13 @@ def call_goal(lead: dict, purpose: str | None) -> str | None:
                 "Do not skip their Name. Once collected, help them and move to the primary call to action.")
     if purpose == "inbound_choose":
         options = "; ".join(f"{c['label']}" + (f" — {c['about']}" if c.get("about") else "") for c in lead.get("choices") or [])
-        if lead.get("new_caller"):
-            return ("This number answers for more than one of our businesses and this caller is new to us: "
-                    f"{options}. Your ONLY job right now is to find out which of these they are calling about, in one short, "
-                    "natural question under 100 characters. Do not pitch, do not answer product questions yet, do not collect "
-                    "details, and do not say we already know them. If they describe something else, ask which option it is closest to.")
-        return ("This caller is known to more than one of our desks and we do not yet know which one this call is about: "
-                f"{options}. Your ONLY job right now is to find out which of these they are calling about, in one short, "
-                "natural question under 100 characters. Do not pitch, do not answer product questions yet, do not collect details. If they "
-                "name something else entirely, ask which of the options it is closest to.")
+        known = "" if lead.get("new_caller") else "This caller is already in our records on more than one desk. "
+        return (known + "This line answers for more than one of our businesses — " + options + " — and we do not yet know "
+                "which one this call is about. Ask what they need, the way a person on the front desk would: one short, "
+                "natural question under 100 characters. NEVER read our businesses out as a list and never ask them to choose "
+                "between company names; their reason is what tells us where the call belongs. Do not pitch, do not answer "
+                "product questions yet and do not collect details. If they have already said what they want, do not ask again: "
+                "acknowledge it in a few words and wait.")
     if purpose in ("team", "admin"):
         who = (lead.get("team_name") or "").strip()
         if lead.get("choices"):
@@ -173,11 +172,15 @@ INBOUND_GREETING = {"en": "Thank you for calling {company}, this is {agent}. How
                     "hi": "{company} में call करने के लिए धन्यवाद, मैं {agent} बोल रहा हूँ। मैं आपकी क्या मदद कर सकता हूँ?"}
 INBOUND_GREETING_NAMED = {"en": "Hi {name}, thank you for calling {company}, this is {agent}. How can I help you today?",
                           "hi": "नमस्ते {name}, {company} में call करने के लिए धन्यवाद, मैं {agent} बोल रहा हूँ। बताइए, मैं आपकी क्या मदद कर सकता हूँ?"}
-# A caller several of our agents know: find out which matter this call is about before any agent takes over.
-INBOUND_CHOOSE_GREETING = {"en": "Hi {name}, thanks for calling, this is {agent}. Are you calling about {options} today?",
-                           "hi": "नमस्ते {name}, call करने के लिए धन्यवाद, मैं {agent} बोल रहा हूँ। आज आप {options} — किस बारे में बात करना चाहेंगे?"}
-INBOUND_CHOOSE_GREETING_ANON = {"en": "Hi, thanks for calling, this is {agent}. Are you calling about {options} today?",
-                                "hi": "नमस्ते, call करने के लिए धन्यवाद, मैं {agent} बोल रहा हूँ। आज आप {options} — किस बारे में बात करना चाहेंगे?"}
+# One line answers for more than one of our businesses. A person on a switchboard does not read the
+# customer a list of company names: they ask what the call is about and work it out from the answer.
+INBOUND_CHOOSE_GREETING = {"en": "Hi {name}, thanks for calling, this is {agent}. How can I help you today?",
+                           "hi": "नमस्ते {name}, call करने के लिए धन्यवाद, मैं {agent} बोल रहा हूँ। बताइए, किस बारे में call किया है?"}
+INBOUND_CHOOSE_GREETING_ANON = {"en": "Hi, thanks for calling, this is {agent}. How can I help you today?",
+                                "hi": "नमस्ते, call करने के लिए धन्यवाद, मैं {agent} बोल रहा हूँ। बताइए, किस बारे में call किया है?"}
+# Only after their answer was genuinely ambiguous does the agent name the businesses — once.
+CHOOSE_CLARIFIER = {"en": "Ask once, in one short line, whether it is about {options} — then carry on with their answer.",
+                    "hi": "एक बार, एक छोटी line में पूछिए कि call {options} में से किसके बारे में है — फिर उनके जवाब पर आगे बढ़िए।"}
 
 # Someone we have already spoken to does not need the full "this is X calling from Y" introduction
 # again: a person picking the thread back up just says who it is and gets to the point.
@@ -230,31 +233,115 @@ def choice_options(choices: list[dict], english: bool) -> str:
     return (", ".join(labels[:-1]) + joiner + labels[-1]) if len(labels) > 1 else labels[0]
 
 
+# Rough Devanagari -> Latin, good enough to compare a spoken brand name with a written one: a caller
+# saying "वेड इजी" or "वेडीजी" means Wedeazzy, and speech recognition writes down whichever it heard.
+_DEVA_LATIN = {
+    "क": "k", "ख": "kh", "ग": "g", "घ": "gh", "ङ": "n", "च": "ch", "छ": "chh", "ज": "j", "झ": "jh", "ञ": "n",
+    "ट": "t", "ठ": "th", "ड": "d", "ढ": "dh", "ण": "n", "त": "t", "थ": "th", "द": "d", "ध": "dh", "न": "n",
+    "प": "p", "फ": "ph", "ब": "b", "भ": "bh", "म": "m", "य": "y", "र": "r", "ल": "l", "व": "v", "श": "sh",
+    "ष": "sh", "स": "s", "ह": "h", "ळ": "l", "क़": "k", "ख़": "kh", "ग़": "g", "ज़": "z", "ड़": "d", "ढ़": "dh",
+    "फ़": "f", "अ": "a", "आ": "a", "इ": "i", "ई": "i", "उ": "u", "ऊ": "u", "ए": "e", "ऐ": "ai", "ओ": "o",
+    "औ": "au", "ा": "a", "ि": "i", "ी": "i", "ु": "u", "ू": "u", "े": "e", "ै": "ai", "ो": "o", "ौ": "au",
+    "ं": "n", "ँ": "n", "ः": "", "्": "", "़": "", "ृ": "ri",
+}
+
+
+def _romanize(text: str) -> str:
+    """Letters only, one script, so "वेड इजी" and "Wed Easy" can be compared at all."""
+    out = []
+    for ch in (text or "").lower():
+        if ch in _DEVA_LATIN:
+            out.append(_DEVA_LATIN[ch])
+        elif ch.isalnum():
+            out.append(ch)
+        else:
+            out.append(" ")
+    return re.sub(r"\s+", " ", "".join(out)).strip()
+
+
+def _fold(text: str) -> str:
+    """One spelling for sounds speech recognition swaps freely: w/v, z/j, c/k, and aspiration (kh, dh)."""
+    folded = _romanize(text).translate(str.maketrans({"w": "v", "z": "j", "q": "k", "x": "k", "c": "k"}))
+    folded = re.sub(r"(?<=[a-z])h", "", folded)
+    return re.sub(r"(.)\1+", r"\1", folded)
+
+
+def _skeleton(text: str) -> str:
+    """Consonants only: "Wedeazzy", "वेड इजी" and "वे डी जी" all come out as vdj."""
+    return re.sub(r"(.)\1+", r"\1", re.sub(r"[aeiouy]", "", _fold(text).replace(" ", "")))
+
+
+def _name_hit(said: str, c: dict) -> float:
+    """How strongly the caller said this desk's NAME, however mangled by the line or the recogniser.
+
+    Matched against single words and against neighbouring words joined up, because the recogniser
+    splits a brand it does not know ("वेड इजी"); never across the whole sentence, or a first name like
+    Omkar turns up inside "my kar" and takes the call to the wrong desk.
+    """
+    words = _fold(said).split()
+    groups = words + ["".join(words[i:i + n]) for n in (2, 3) for i in range(len(words) - n + 1)]
+    heard = {_skeleton(g) for g in groups if g}
+    best = 0.0
+    for label in (c.get("company") or "", c.get("label") or ""):
+        name = _skeleton(label)
+        if len(name) < 2:
+            continue
+        for piece in heard:
+            if not piece:
+                continue
+            if name == piece or (len(name) >= 3 and name in piece):
+                return 1.0
+            if len(name) >= 4:
+                best = max(best, difflib.SequenceMatcher(None, name, piece).ratio())
+    # The agent's own first name is deliberately not matched here: callers introduce themselves
+    # ("मैं आशीष बोल रहा हूँ") with the same names our agents use, and that must not place the call.
+    return best
+
+
+CHOICE_STOPWORDS = {"the", "and", "for", "our", "with", "your", "you", "from", "that", "this", "their", "them",
+                    "about", "kall", "kalls", "kalling", "team", "kustomer", "kustomers", "klient", "klients",
+                    "help", "vant", "need", "book", "meeting", "please", "hello", "hain", "karna", "karne",
+                    "raha", "rahe", "mein", "liye", "bare", "bat", "koi", "aur", "sir", "madam", "kya"}
+
+
+def _topic_hit(said: str, c: dict) -> int:
+    """How much of what the caller wants matches what this desk actually does."""
+    words = [w for w in _fold(said).split() if len(w) > 2 and w not in CHOICE_STOPWORDS]
+    topic = [w for w in _fold(f"{c.get('topic') or ''} {c.get('about') or ''}").split()
+             if len(w) > 2 and w not in CHOICE_STOPWORDS]
+    hits = 0
+    for word in set(words):
+        if any(difflib.SequenceMatcher(None, word, t).ratio() >= 0.85 for t in topic):
+            hits += 1
+    return hits
+
+
 def choose_agent(text: str, choices: list[dict], use_llm: bool = True) -> int | None:
     """
-    Which of the offered desks the caller means. Cheap word overlap first (the caller usually repeats a
-    company or agent name), then a tiny LLM classification; None when they still have not said.
+    Which of our desks this call is about. The caller is never read a menu, so this works from what they
+    actually say: the brand as speech recognition heard it ("वेड इजी" for Wedeazzy), or the reason itself
+    ("meri gaadi ke liye"). Cheap matching first, then a small model; None while it could still be either.
     """
-    said = re.sub(r"[^\w\s]", " ", (text or "").lower())
-    words = set(said.split())
-    if not words:
+    said = (text or "").strip()
+    if not said:
         return None
-    scored = []
-    for c in choices:
-        keys = {w for w in re.sub(r"[^\w\s]", " ", f"{c['label']} {c['company']} {c['agent_name']}".lower()).split() if len(w) > 2}
-        scored.append((len(keys & words), c["agent_id"]))
-    scored.sort(reverse=True)
-    if scored and scored[0][0] and (len(scored) == 1 or scored[0][0] > scored[1][0]):
-        return scored[0][1]
+    named = sorted(((_name_hit(said, c), c["agent_id"]) for c in choices), reverse=True)
+    if named and named[0][0] >= 0.8 and (len(named) == 1 or named[0][0] - named[1][0] >= 0.15):
+        return named[0][1]
+    topics = sorted(((_topic_hit(said, c), c["agent_id"]) for c in choices), reverse=True)
+    if topics and topics[0][0] and (len(topics) == 1 or topics[0][0] > topics[1][0]):
+        return topics[0][1]
     if not use_llm:
         return None
-    # Ordinal answers ("the first one", "second") and paraphrases go to the model.
-    menu = "\n".join(f"{i + 1}. {c['label']}" + (f" — {c['about']}" if c.get("about") else "") for i, c in enumerate(choices))
+    # Everything else — ordinals, paraphrases, a need described in any language — goes to the model.
+    menu = "\n".join(f"{i + 1}. {c['label']} — {(c.get('about') or c.get('topic') or '')[:160]}" for i, c in enumerate(choices))
     try:
         result = llm.complete([
-            {"role": "system", "content": "A caller was asked which of these matters they are calling about:\n" + menu +
-                                          "\nReply with the option number only, or 0 if their answer does not pick one."},
-            {"role": "user", "content": text}], max_tokens=5, temperature=0, providers=settings.summary_llm_providers, timeout=6)
+            {"role": "system", "content": "Our phone line answers for these businesses:\n" + menu +
+                                          "\nThe caller said what they want. Reply with the number of the business that "
+                                          "handles it: judge by what they need, and also accept a garbled or "
+                                          "transliterated brand name. Reply 0 only if it could genuinely be any of them."},
+            {"role": "user", "content": said}], max_tokens=5, temperature=0, providers=settings.summary_llm_providers, timeout=6)
         n = int(re.search(r"\d+", result.text or "0").group())
         return choices[n - 1]["agent_id"] if 0 < n <= len(choices) else None
     except Exception as e:  # noqa: BLE001 - ask again rather than guess

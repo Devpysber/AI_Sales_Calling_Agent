@@ -184,7 +184,8 @@ def test_caller_known_to_two_agents_is_asked_which_desk(client, base, monkeypatc
     assert session["language"] == "hi-IN"  # last spoken language wins, whichever desk it was recorded on
     assert call_session.get(session["id"])["lead"]["choices"] == choices
     text = agent.greeting(a["id"], session["lead"], "en-IN")
-    assert "Acme Cars or Blue Homes" in text and "Two Desks" in text
+    # Greeted by name and asked what they need — our company names are not read out to them.
+    assert "Two Desks" in text and "Acme Cars" not in text and "Blue Homes" not in text
 
 
 def test_recent_calls_tool_reports_real_durations(client, base):
@@ -342,7 +343,9 @@ def test_shared_family_phone_is_not_greeted_by_one_desks_name(client, base, monk
     monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
     session = CallService(None).create_inbound("919812300222", "918000000000", "fam-1")
     text = agent.greeting(session["agent_id"], session["lead"], "en-IN")
-    assert "Rahul" not in text and "Priya" not in text and "Alpha Cars or Beta Hair" in text
+    # Neither name, and no list of our companies either: the caller is asked what the call is about.
+    assert "Rahul" not in text and "Priya" not in text
+    assert "Alpha Cars" not in text and "Beta Hair" not in text and "help you today" in text
 
 
 def test_mid_call_desk_change_needs_a_cue_and_a_name():
@@ -668,9 +671,12 @@ def test_the_brief_for_a_new_caller_does_not_claim_we_know_them():
     choices = [{"agent_id": 1, "label": "Shared Cars", "company": "Shared Cars", "agent_name": "Ashish", "about": ""},
                {"agent_id": 2, "label": "Shared Homes", "company": "Shared Homes", "agent_name": "Omkar", "about": ""}]
     new = agent_service.call_goal({"choices": choices, "new_caller": True}, "inbound_choose")
-    assert "new to us" in new and "known to more than one" not in new
+    assert "already in our records" not in new
     known = agent_service.call_goal({"choices": choices}, "inbound_choose")
-    assert "known to more than one of our desks" in known
+    assert "already in our records" in known
+    # Both briefs forbid reading the businesses out as a menu; the reason is what places the call.
+    for brief in (new, known):
+        assert "NEVER read our businesses out as a list" in brief and "Shared Cars" in brief
 
 
 def test_every_agent_ends_up_with_someone_to_hand_a_caller_to(client, monkeypatch):

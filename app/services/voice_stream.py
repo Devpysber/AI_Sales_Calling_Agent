@@ -1699,18 +1699,35 @@ class CallStream:
         if text and lead.get("choices") and lead.get("call_purpose") in ("inbound_choose", "team", "admin"):
             # The caller was asked which of our desks this call is about: once they say, the rest of the call
             # runs as that agent (its persona, knowledge base and CRM record; a colleague keeps the team brief).
-            chosen = await asyncio.to_thread(agent.choose_agent, text, lead.get("choices") or [])
+            # Everything they have said so far, not just this line: a caller names the business once and
+            # then answers other questions, and the line that finally places the call is often earlier.
+            said = " ".join([t.get("text", "") for t in self.session.get("history", [])
+                             if t.get("role") in ("customer", "user")][-6:] + [text])
+            chosen = await asyncio.to_thread(agent.choose_agent, said, lead.get("choices") or [])
             if chosen:
                 lead = await asyncio.to_thread(self.switch_agent, chosen)
-                guidance = " ".join(g for g in (guidance, f"The caller chose {self.persona['company_name']}. Acknowledge in a few "
-                                                          "words and continue as that agent; whole reply under 120 characters.") if g)
+                # The caller never chose from a menu, so nothing is "confirmed" back at them: the agent
+                # simply carries on as the right desk.
+                guidance = " ".join(g for g in (guidance, "This call belongs to this desk. Continue from what they already "
+                                                          "said, without repeating the question or introducing yourself again; "
+                                                          "whole reply under 120 characters.") if g)
+                self.session.pop("choose_attempts", None)
+                self.save_session()
             else:
-                # Asked once, unclear once more: stop asking and carry on as the desk that answered.
                 attempts = int(self.session.get("choose_attempts") or 0) + 1
                 self.session["choose_attempts"] = attempts
-                if attempts >= 2 and lead.get("call_purpose") == "inbound_choose":
-                    lead = await asyncio.to_thread(self.switch_agent, self.agent_id)
-                    guidance = " ".join(g for g in (guidance, "They did not say which desk: help them as this desk, no more asking.") if g)
+                if lead.get("call_purpose") == "inbound_choose":
+                    if attempts == 1:
+                        # Their reason did not place the call. One plain question that names the businesses,
+                        # asked once — the loop of re-asking the same thing is what callers hang up on.
+                        english = str(language).startswith("en")
+                        options = agent.choice_options(lead.get("choices") or [], english)
+                        guidance = " ".join(g for g in (guidance, agent.CHOOSE_CLARIFIER["en" if english else "hi"]
+                                                        .format(options=options)) if g)
+                    else:
+                        lead = await asyncio.to_thread(self.switch_agent, self.agent_id)
+                        guidance = " ".join(g for g in (guidance, "They have not placed the call and must not be asked a third "
+                                                                  "time: help them here, as this desk.") if g)
                 self.save_session()
         elif text and self.session.get("desk_choices") and DESK_SWITCH_CUE.search(text):
             # Mid-call "actually, Hairscope ke baare mein": a caller known to several desks may change desk once
