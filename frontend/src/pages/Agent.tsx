@@ -413,7 +413,8 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
   const [history, setHistory] = useState<ChatTurn[]>([])
   const [text, setText] = useState('')
   const [lang, setLang] = useState(profile.default_language || 'en-IN')
-  const [direction, setDirection] = useState<'outbound' | 'inbound'>('outbound')
+  const [direction, setDirection] = useState<'outbound' | 'inbound' | 'team'>('outbound')
+  const team = direction === 'team'
   const inbound = direction === 'inbound'
   const [leadId, setLeadId] = useState<number | ''>('')
   const [speak, setSpeak] = useState(true) // Voice is now primary
@@ -490,7 +491,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
 
   const greeting = useQuery({
     queryKey: ['agent', 'greeting', lang, leadId, direction, profile],
-    queryFn: () => api<{ text: string }>(`${base}/greeting`, { params: { language: lang, lead_id: leadId || undefined, purpose: inbound ? 'inbound' : undefined } }),
+    queryFn: () => api<{ text: string }>(`${base}/greeting`, { params: { language: lang, lead_id: leadId || undefined, purpose: team ? 'team' : inbound ? 'inbound' : undefined } }),
   })
   // Seed the opening line at index 0; if a customer turn somehow landed first, the greeting still goes in front of it.
   useEffect(() => {
@@ -524,7 +525,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
 
   const send = useMutation({
     mutationFn: ({ message, prior }: { message: string; prior: ChatTurn[]; session: number }) => api<AgentTurnResult>(`${base}/playground`, {
-      method: 'POST', json: { message, lead_id: leadId || undefined, purpose: inbound ? 'inbound' : undefined, history: prior.map(({ role, text }) => ({ role, text })) },
+      method: 'POST', json: { message, lead_id: team ? undefined : (leadId || undefined), purpose: team ? 'team' : inbound ? 'inbound' : undefined, history: prior.map(({ role, text }) => ({ role, text })) },
     }),
     onSettled: () => { pending.current = false },
     onSuccess: (res, vars) => {
@@ -647,7 +648,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
                     : listening ? <><span className="size-1.5 animate-pulse rounded-full bg-danger" />Listening</>
                     : ended ? 'Ended' : <><span className="size-1.5 rounded-full bg-success" />Live</>}
                 </span>
-                <span className="truncate">{inbound ? 'Rehearsing an inbound call' : 'Rehearsing an outbound call'} · voice {titleCase(profile.voice_speaker)} · nothing is saved to the CRM</span>
+                <span className="truncate">{team ? 'Team check-in: what a colleague hears when they ring this agent · actions are real (automations, leads, meetings change)' : `${inbound ? 'Rehearsing an inbound call' : 'Rehearsing an outbound call'} · voice ${titleCase(profile.voice_speaker)} · nothing is saved to the CRM`}</span>
               </div>
               {(() => {
                 const last = [...history].reverse().find((t) => t.meta?.char_budget)?.meta
@@ -676,7 +677,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
             </div>
           </div>
           <Tabs value={direction} onChange={(v) => { setDirection(v); clear() }}
-            items={[{ value: 'outbound', label: 'Outbound' }, { value: 'inbound', label: 'Inbound' }]} />
+            items={[{ value: 'outbound', label: 'Outbound' }, { value: 'inbound', label: 'Inbound' }, { value: 'team', label: 'Team check-in' }]} />
           <Select value={leadId} onChange={(e) => { setLeadId(e.target.value ? Number(e.target.value) : ''); clear() }} className="h-9 w-auto max-w-56 text-[13px]" aria-label="Prospect">
             <option value="">Sample {caller}</option>
             {leads.isPending && <option value="" disabled>Loading leads…</option>}

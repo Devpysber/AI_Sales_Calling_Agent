@@ -67,6 +67,10 @@ def validate(name: str, raw) -> str:
         if not parts or any("/" not in p for p in parts):
             raise ValueError(f"{label}: model ids look like provider/model, comma-separated.")
         return ",".join(parts)
+    if name == "stt_language_mode":
+        if value.lower() not in ("call", "auto"):
+            raise ValueError("Speech recognition language must be 'call' or 'auto'.")
+        return value.lower()
     if name == "heal_export_token" and len(value) < 16:
         raise ValueError("Heal export token must be at least 16 characters.")
     return value

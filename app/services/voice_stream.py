@@ -700,8 +700,11 @@ class CallStream:
         self.persona = agents.get_profile(self.agent_id) if self.agent_id else {}
         self.stream_id: str | None = None
         self.call_uuid: str | None = None
-        # Auto-detect: the caller may answer in another language than the lead's; replies follow what they speak.
-        self.stt = SarvamSTT("unknown")
+        # Recognition pinned to the call's language: auto-detect drifted Hindi speech into Gujarati, Punjabi,
+        # Tamil and Malayalam script mid-call ("પોલી", "ਕੋਈ ਇਸ਼ੂ ਨਹੀਂ"), which the agent then could not read. Hinglish
+        # comes back in Devanagari under hi-IN, which the prompt handles. "auto" in Runtime tuning restores detection.
+        call_language = (self.session.get("language") if self.session else None) or self.persona.get("default_language") or "hi-IN"
+        self.stt = SarvamSTT("unknown" if settings.stt_language_mode == "auto" else call_language)
         self.gate = SilenceGate() if settings.stt_silence_gate else None
         self.tts = make_tts(self.session.get("language", "en-IN") if self.session else "en-IN", self.persona.get("voice_speaker"))
 

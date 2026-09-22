@@ -28,3 +28,16 @@ def test_team_member_counts_down_to_the_limit(client, monkeypatch):
 def test_usage_endpoint_for_admin(client, base):
     res = client.get(f"{base}/playground/usage").json()
     assert res["exempt"] is True and res["limit"] == 5
+
+
+def test_team_check_in_in_the_playground_runs_real_tools(client, base):
+    from app.services import agents
+    agent_id = int(base.rsplit("/", 1)[1])
+    agents.update_automation(agent_id, {"auto_dial_enabled": True}, actor="test")
+    res = client.post(f"{base}/playground", json={"message": "auto dial band karo", "purpose": "team", "history": []})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert "बंद" in body["reply"] or "off" in body["reply"].lower()
+    assert body["tool_result"] and not agents.get_automation(agent_id)["auto_dial_enabled"]
+    greeting = client.get(f"{base}/greeting", params={"language": "en-IN", "purpose": "team"}).json()["text"]
+    assert "What would you like to check" in greeting or "check" in greeting

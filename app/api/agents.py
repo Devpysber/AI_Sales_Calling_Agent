@@ -4,6 +4,7 @@ playground, automation, analytics and activity.
 """
 
 import asyncio
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Path
 from fastapi.responses import Response
@@ -285,6 +286,8 @@ async def playground(body: PlaygroundMessage, request: Request, agent_id: int = 
     if new_try and not usage["exempt"] and usage["used"] >= usage["limit"]:
         raise HTTPException(429, f"PLAYGROUND_LIMIT: you have used all {usage['limit']} rehearsals for this month. "
                                  f"The allowance resets on {usage['resets_at'][:10]}.")
+    if body.purpose in ("team", "admin"):
+        return await _team_playground(body, request, agent_id, usage, new_try)
     lead = (CRMService(agent_id).get(body.lead_id) if body.lead_id else None) or {"name": "Test Prospect"}
     goal = agent.call_goal(lead, body.purpose)
     if goal:
@@ -325,6 +328,59 @@ async def playground(body: PlaygroundMessage, request: Request, agent_id: int = 
     return res
 
 
+async def _team_playground(body: PlaygroundMessage, request: Request, agent_id: int, usage: dict, new_try: bool) -> dict:
+    """
+    The colleague check-in in the browser: the same compact team prompt, quick actions and tools a team call
+    gets — so 'auto dial band karo' or 'kal 11 baje meeting fix karo' can be tried without a phone call.
+    Actions are real (they change this agent), which the page says. Admin gets the admin tool set.
+    """
+    from app.core.auth import me
+    from app.services.agent_tools import team_quick_action
+    from app.services.voice_stream import TEAM_SWITCH_DONE, TEAM_SWITCH_FAILED
+    who = me(request)
+    purpose = "admin" if who.get("user") == "admin" else "team"
+    context = {"phone": "", "call_purpose": purpose, "team_name": who.get("display_name") or "", "name": who.get("display_name") or ""}
+    context["call_goal"] = agent.call_goal(context, purpose)
+    history = list(body.history)
+    started = time.perf_counter()
+    profile = agents.get_profile(agent_id)
+    language = profile.get("default_language") or "hi-IN"
+    key = "hi" if language.startswith("hi") else "en"
+    done = await asyncio.to_thread(team_quick_action, agent_id, body.message)
+    if done:
+        result, state = done
+        reply = TEAM_SWITCH_FAILED[key] if result.lower().startswith("failed") else TEAM_SWITCH_DONE[state][key]
+        tool_note = result
+    else:
+        def collect() -> str:
+            parts = []
+            for delta in agent.respond_stream(agent_id, history, body.message, context, language=language):
+                if isinstance(delta, str):
+                    parts.append(delta)
+            return "".join(parts)
+        try:
+            reply = await asyncio.to_thread(collect)
+        except LLMError as e:
+            raise HTTPException(502, str(e))
+        reply = reply.replace(agent.END_MARK, "").replace(agent.TRANSFER_MARK, "").strip()
+        tool_note = None
+    res = {"reply": reply, "language": tts.detect_language(reply, language), "intent": "other", "qualification": None,
+           "end_call": False, "crm_update": {}, "total_ms": round((time.perf_counter() - started) * 1000),
+           "tool_result": tool_note, "spoken_chars": sum(len(t.get("text") or "") for t in history if t.get("role") == "assistant") + len(reply),
+           "char_budget": int(settings.tts_chars_per_call or 0), "steer": None}
+    try:
+        audio_id = await asyncio.to_thread(tts.prepare_audio_id, reply, res["language"], profile["voice_speaker"])
+        res["audio_url"] = tts.audio_url(audio_id) if audio_id else ""
+    except TTSError as e:
+        res["audio_url"] = ""
+        res["audio_error"] = str(e)
+    if new_try:
+        _count_playground_try(request, usage)
+        usage = playground_usage(request)
+    res["usage"] = usage
+    return res
+
+
 @router.get("/{agent_id}/greeting")
 def greeting_preview(lead_id: int | None = None, language: str = "en-IN", purpose: str | None = None,
                      agent_id: int = Depends(workspace)):
@@ -333,6 +389,8 @@ def greeting_preview(lead_id: int | None = None, language: str = "en-IN", purpos
         purpose = "follow_up"  # same rule as dialling: nothing to confirm without a meeting time
     if purpose in ("inbound", "confirm_meeting", "follow_up"):
         lead = {**lead, "call_purpose": purpose}
+    elif purpose in ("team", "admin"):
+        lead = {"call_purpose": purpose, "team_name": "", "name": ""}   # the check-in opener, no sample prospect
     return {"text": agent.greeting(agent_id, lead, language)}
 
 

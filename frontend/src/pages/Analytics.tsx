@@ -70,11 +70,19 @@ function Heatmap({ cells }: { cells: AnalyticsReport['heatmap'] }) {
                 const c = map.get(`${w}-${h}`)
                 const rate = c?.calls ? Math.round((100 * c.connected) / c.calls) : null
                 const label = c ? `${d} ${h}:00 · ${c.calls} calls · ${rate}% connected` : `${d} ${h}:00 · no calls`
+                // Fill strength decides the text colour; mix-blend-difference made the digits vanish on mid tones.
+                const strength = c ? 12 + (78 * c.calls) / max : 0
+                const textClass = strength > 48 ? 'text-bg' : 'text-fg'
                 return (
                   <td key={h} title={label} aria-label={label} tabIndex={c ? 0 : undefined}
-                    className={cn('heat-cell h-7 rounded-md ring-1 ring-border/60 transition-transform hover:scale-110 focus-visible:scale-110 focus-visible:ring-2 focus-visible:ring-fg focus-visible:outline-none', c === best && 'heat-best')}
-                    style={{ animationDelay: `${(w + (h - 8)) * 28}ms`, background: c ? `color-mix(in srgb, var(--fg) ${Math.round(12 + (78 * c.calls) / max)}%, transparent)` : 'var(--surface-2)' }}>
-                    {c && rate !== null && <span className="block text-center text-[9.5px] font-bold text-bg mix-blend-difference" aria-hidden>{c.calls >= 3 ? rate : c.calls}</span>}
+                    className={cn('heat-cell h-8 rounded-md ring-1 ring-border/60 transition-transform hover:scale-110 focus-visible:scale-110 focus-visible:ring-2 focus-visible:ring-fg focus-visible:outline-none', c === best && 'heat-best')}
+                    style={{ animationDelay: `${(w + (h - 8)) * 28}ms`, background: c ? `color-mix(in srgb, var(--fg) ${Math.round(strength)}%, transparent)` : 'var(--surface-2)' }}>
+                    {c && rate !== null && (
+                      <span className={cn('block text-center font-bold leading-none tabular-nums', textClass)} aria-hidden>
+                        <span className="block text-[11px]">{c.calls}</span>
+                        <span className="block text-[8.5px] opacity-80">{rate}%</span>
+                      </span>
+                    )}
                   </td>
                 )
               })}

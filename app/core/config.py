@@ -109,6 +109,8 @@ class Settings(BaseSettings):
     turn_end_grace_ms: int = Field(150, alias="TURN_END_GRACE_MS")
     # Speech-to-text is billed per second of audio sent: skip long silences (keeps pre-roll and a silent tail for VAD)
     stt_silence_gate: bool = Field(True, alias="STT_SILENCE_GATE")
+    # "call": recognise in the call's language (lead's, else the persona default); "auto": let Sarvam detect per segment.
+    stt_language_mode: str = Field("call", alias="STT_LANGUAGE_MODE")
 
     # ---------------- Plivo ----------------
     plivo_auth_id: str = Field("", alias="PLIVO_AUTH_ID")
@@ -185,6 +187,7 @@ RUNTIME_KEYS = {
     "llm_prompt_char_budget": (int, "Prompt character budget", "Max characters of the live prompt before knowledge/history are trimmed.", (8000, 64000)),
     "playground_monthly_limit": (int, "Playground rehearsals per member per month", "0 = unlimited.", (0, 10000)),
     "heal_export_token": (str, "Heal export token", "Token the cloud fix agent presents; rotate here or in Health & heal.", None),
+    "stt_language_mode": (str, "Speech recognition language", "'call' = the call's language (steady Hindi/Hinglish in Devanagari); 'auto' = detect per phrase (drifts into other Indic scripts).", None),
 }
 
 
