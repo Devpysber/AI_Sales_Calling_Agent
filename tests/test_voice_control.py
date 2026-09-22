@@ -60,3 +60,43 @@ def test_an_agent_named_by_voice_is_resolved_not_silently_ignored():
     for name in ("get_agent_config", "pause_agent_automation"):
         kind = schema[name]["function"]["parameters"]["properties"]["target_agent_id"]["type"]
         assert kind == "string", f"{name} still takes an integer, so a spoken name becomes None"
+
+
+def test_a_colleague_can_read_and_change_who_answers_the_line(agent_id):
+    said = run("call_routing", "{}", agent_id)
+    assert "In hours" in said and "After hours" in said
+
+    # Forwarding to a team nobody is listed in is refused, before the routing is changed.
+    if "nobody is listed to ring" in said:
+        assert "transfer number" in run("set_call_routing", '{"when": "after hours", "mode": "team"}', agent_id)
+        run("add_team_member", '{"name": "Neha", "phone": "+919812300999"}', agent_id)
+    assert "your team" in run("set_call_routing", '{"when": "after hours", "mode": "team"}', agent_id)
+    assert "After hours: your team" in run("call_routing", "{}", agent_id)
+    # A message instead of answering only makes sense outside hours.
+    assert run("set_call_routing", '{"when": "hours", "mode": "message"}', agent_id).startswith("Failed")
+    assert "Hand-over off" in run("set_call_routing", '{"handover": false}', agent_id)
+
+
+def test_a_colleague_can_add_somebody_to_the_ring_order(agent_id):
+    # A number of its own: the routing test may already have added Neha to this shared workspace.
+    added = run("add_team_member", '{"name": "Vikram", "phone": "+919812300777"}', agent_id)
+    assert "Added Vikram" in added
+    assert "already on the ring list" in run("add_team_member", '{"name": "Vikram", "phone": "+919812300777"}', agent_id)
+    assert run("add_team_member", '{"name": "Short", "phone": "12"}', agent_id).startswith("Failed")
+
+
+def test_live_calls_and_ending_one_are_honest_when_nothing_is_live(agent_id):
+    assert "No calls are live" in run("live_calls", "{}", agent_id)
+    assert "No calls are live" in run("end_call", "{}", agent_id)
+
+
+def test_automation_numbers_are_changed_and_refused_with_the_allowed_range(agent_id):
+    assert "is now 5" in run("set_automation_number", '{"setting": "calls per run", "value": 5}', agent_id)
+    refused = run("set_automation_number", '{"setting": "calls per run", "value": 500}', agent_id)
+    assert refused.startswith("Failed") and "50" in refused      # the caller hears the real limit
+    assert run("set_automation_number", '{"setting": "wibble", "value": 2}', agent_id).startswith("Failed")
+
+
+def test_a_job_can_be_run_on_demand_by_its_everyday_name(agent_id):
+    assert "Auto-dial" in run("run_job_now", '{"job": "dialer"}', agent_id)
+    assert run("run_job_now", '{"job": "something else"}', agent_id).startswith("Failed")

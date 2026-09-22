@@ -710,6 +710,182 @@ def set_agent_paused_tool(target_agent_id: int, paused: bool) -> str:
     return f"Agent {target_agent_id} is now {'paused: no calls go out' if paused else 'active'}."
 
 
+ROUTING_MODES = {"ai": "ai", "agent": "ai", "self": "ai", "forward": "forward", "team": "forward",
+                 "human": "forward", "person": "forward", "message": "message", "voicemail": "message"}
+
+
+def call_routing_tool(agent_id: int) -> str:
+    """Who answers this line now, in hours and after them: the Inbound page, spoken."""
+    from app.services import agents as agent_service
+    from app.services.call_service import within_calling_hours
+    p = agent_service.get_profile(agent_id)
+    cfg = agent_service.get_automation(agent_id)
+    spoken = {"ai": "the AI agent", "forward": "your team", "message": "a message, then hang up"}
+    team = [m.get("name") or m.get("phone") for m in (p.get("team_members") or []) if m.get("phone")]
+    return (f"In hours: {spoken.get(p.get('inbound_mode'), p.get('inbound_mode'))}. "
+            f"After hours: {spoken.get(p.get('after_hours_mode'), p.get('after_hours_mode'))}. "
+            f"Open {cfg.get('calling_hours_start')} to {cfg.get('calling_hours_end')}, "
+            f"{'open right now' if within_calling_hours(cfg) else 'closed right now'}. "
+            f"Hand-over {'on' if p.get('transfer_on_request') else 'off'}"
+            + (f", ringing {', '.join(team[:3])}" if team else ", but nobody is listed to ring") + ".")
+
+
+def set_call_routing_tool(agent_id: int, when: str | None, mode: str | None, handover=None) -> str:
+    """Change who answers: in hours, after hours, and whether the agent hands callers over at all."""
+    from app.services import agents as agent_service
+    updates = {}
+    if handover is not None:
+        updates["transfer_on_request"] = _on_flag(handover)
+    if mode:
+        chosen = ROUTING_MODES.get(str(mode).strip().lower())
+        if not chosen:
+            return "Failed: say who should answer — the AI agent, your team, or a message."
+        field = "after_hours_mode" if "after" in str(when or "").lower() or "night" in str(when or "").lower() else "inbound_mode"
+        if field == "inbound_mode" and chosen == "message":
+            return "Failed: a message instead of answering is only for after hours."
+        updates[field] = chosen
+    if not updates:
+        return "Failed: say what to change — who answers in hours, after hours, or whether hand-over is on."
+    try:
+        agent_service.update_profile(agent_id, updates, actor="team")
+    except ValueError as e:
+        return f"Failed: {e}"
+    return "Done. " + call_routing_tool(agent_id)
+
+
+def add_team_member_tool(agent_id: int, name: str | None, phone: str | None, email: str | None = None) -> str:
+    """Add a colleague to the ring order, so a caller asking for a person reaches somebody."""
+    from app.services import agents as agent_service
+    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
+    if len(digits) < 11 or len(digits) > 15:
+        return "Failed: I need their full number with country code, said in digits."
+    p = agent_service.get_profile(agent_id)
+    members = list(p.get("team_members") or [])
+    if any("".join(ch for ch in str(m.get("phone") or "") if ch.isdigit()) == digits for m in members):
+        return f"{name or 'That number'} is already on the ring list."
+    members.append({"name": (name or "").strip()[:120], "phone": "+" + digits,
+                    **({"email": email.strip()[:200]} if email else {})})
+    try:
+        agent_service.update_profile(agent_id, {"team_members": members}, actor="team")
+    except ValueError as e:
+        return f"Failed: {e}"
+    return f"Added {name or '+' + digits} to the ring list, position {len(members)}."
+
+
+def live_calls_tool(agent_id: int) -> str:
+    """Calls ringing or talking on this agent right now. A colleague could not see them at all before."""
+    from app.services import agents as agent_service
+    rows = [c for c in agent_service.live_calls([agent_id]) if c.get("agent_id") == agent_id]
+    if not rows:
+        return "No calls are live on this agent right now."
+    lines = []
+    for c in rows[:5]:
+        who = c.get("lead_name") or c.get("to_number") or c.get("from_number") or "unknown"
+        lines.append(f"{who}, {c.get('direction')}, {c.get('status')}, call {c.get('id')}")
+    return f"{len(rows)} live: " + "; ".join(lines) + "."
+
+
+def end_call_tool(agent_id: int, call_id=None, lead: str | None = None) -> str:
+    """Hang up a live call this agent is running.
+
+    The caller's own call is never one of these: this tool runs from inside a call, and the session it
+    belongs to has no row in ACTIVE for the colleague speaking, so there is nothing to cut by accident.
+    """
+    from app.services.call_service import CallError, CallService
+    from app.services import agents as agent_service
+    calls = CallService(agent_id)
+    rows = [c for c in agent_service.live_calls([agent_id]) if c.get("agent_id") == agent_id]
+    if not rows:
+        return "No calls are live on this agent right now."
+    chosen = None
+    if call_id and str(call_id).isdigit():
+        chosen = next((c for c in rows if c.get("id") == int(call_id)), None)
+    elif lead:
+        wanted = str(lead).strip().lower()
+        chosen = next((c for c in rows
+                       if wanted in str(c.get("lead_name") or "").lower()
+                       or wanted in str(c.get("to_number") or "")), None)
+    elif len(rows) == 1:
+        chosen = rows[0]
+    if not chosen:
+        return ("Say which call to end: " +
+                "; ".join(f"{c.get('lead_name') or c.get('to_number')} (call {c.get('id')})" for c in rows[:5]) + ".")
+    try:
+        calls.hangup(int(chosen["id"]))
+    except CallError as e:
+        return f"Failed: {e}"
+    return f"Ended the call with {chosen.get('lead_name') or chosen.get('to_number')}."
+
+
+def call_summary_tool(agent_id: int, lead: str | None = None, call_id=None) -> str:
+    """What was said and decided on a past call: the summary, outcome and how long it ran."""
+    from app.services.call_service import CallService
+    calls = CallService(agent_id)
+    if call_id and str(call_id).isdigit():
+        call = calls.get(int(call_id))
+    else:
+        items = calls.list_calls(search=lead, page=1, page_size=5).get("items", [])
+        call = next((c for c in items if c.get("summary")), items[0] if items else None)
+    if not call:
+        return f"No call found{f' for {lead}' if lead else ''}."
+    seconds = int(call.get("duration") or 0)
+    when = (call.get("created_at") or "")[:16].replace("T", " ")
+    parts = [f"{call.get('lead_name') or call.get('to_number')}, {when}, {seconds // 60}m {seconds % 60}s",
+             f"result {call.get('status')}"]
+    if call.get("outcome"):
+        parts.append(f"outcome {call['outcome']}")
+    if call.get("summary"):
+        parts.append(" ".join(str(call["summary"]).split())[:400])
+    return ". ".join(parts) + "."
+
+
+# What a colleague calls each automation number, mapped to the field the Automation page writes.
+AUTOMATION_NUMBERS = {
+    "calls per run": "max_calls_per_run", "batch size": "max_calls_per_run",
+    "simultaneous calls": "max_concurrent_calls", "concurrent calls": "max_concurrent_calls",
+    "at a time": "max_concurrent_calls", "max retries": "max_retries", "attempts": "max_retries",
+    "retry gap": "retry_min_gap_minutes", "wait between attempts": "retry_min_gap_minutes",
+    "dial interval": "auto_dial_interval_minutes", "check every": "auto_dial_interval_minutes",
+    "follow up after": "nurture_after_days", "nurture days": "nurture_after_days",
+    "follow ups per lead": "nurture_max_attempts", "reminder hour": "meeting_reminder_hour",
+    "report hour": "daily_report_hour",
+}
+
+
+def set_automation_number_tool(agent_id: int, setting: str | None, value=None) -> str:
+    """Change one number on the Automation page: only the on/off switches were reachable by voice."""
+    from app.services import agents as agent_service
+    asked = " ".join(str(setting or "").lower().split())
+    field = AUTOMATION_NUMBERS.get(asked) or next(
+        (f for phrase, f in AUTOMATION_NUMBERS.items() if phrase in asked or asked in phrase), None)
+    if not field:
+        return ("Failed: say which setting — calls per run, simultaneous calls, max retries, wait between "
+                "attempts, dial interval, follow up after, follow-ups per lead, reminder hour or report hour.")
+    number = _int(value, -1)
+    if number < 0:
+        return f"Failed: say the new number for {asked}."
+    try:
+        agent_service.update_automation(agent_id, {field: number}, actor="team")
+    except ValueError as e:
+        return f"Failed: {e}"   # carries the allowed range, which is what the caller needs to hear
+    return f"Done: {asked or field} is now {number}."
+
+
+def run_job_now_tool(agent_id: int, job: str | None) -> str:
+    """Run a scheduled job this moment instead of waiting for its next turn."""
+    from app.services import scheduler
+    asked = " ".join(str(job or "").lower().split()).replace("-", " ").replace(" ", "_")
+    aliases = {"dialer": "auto_dial", "dialler": "auto_dial", "auto_dialer": "auto_dial", "dial": "auto_dial",
+               "retry": "retry_calls", "retries": "retry_calls", "callback": "callbacks",
+               "follow_up": "nurture", "follow_ups": "nurture", "followups": "nurture",
+               "reminders": "meeting_reminder", "reminder": "meeting_reminder", "report": "daily_report"}
+    name = asked if asked in scheduler.JOBS else aliases.get(asked)
+    if not name:
+        return "Failed: say which one — the dialer, retries, callbacks, follow-ups, the call queue, meeting reminders or the daily report."
+    result = scheduler.run_job(agent_id, name, True, actor="team")
+    return f"{scheduler.LABELS.get(name, name)}: {result}"
+
+
 def lead_details_tool(agent_id: int, lead: str | None = None, lead_id=None) -> str:
     """Everything on one lead, read back on a call: only a five-row name list existed before."""
     lead_id, note = resolve_lead(agent_id, lead_id, lead)
@@ -1072,6 +1248,25 @@ TOOLS += [
         "parameters": {"type": "object", "properties": {"start": {"type": "integer"}, "end": {"type": "integer"}}}}},
     {"type": "function", "function": {"name": "pending_work", "description": "What is waiting: call queue size, callbacks due today, meetings today. Use for 'kya pending hai', 'aaj kya hai'.",
         "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "set_automation_number", "description": "Change a number on the Automation page: calls per run, simultaneous calls, max retries, wait between attempts, dial interval, follow up after (days), follow-ups per lead, reminder hour, report hour. 'ek baar mein 5 call karo'.",
+        "parameters": {"type": "object", "properties": {"setting": {"type": "string"}, "value": {"type": "integer"}}, "required": ["setting", "value"]}}},
+    {"type": "function", "function": {"name": "run_job_now", "description": "Run a scheduled job right now: the dialer, retries, callbacks, follow-ups, the call queue, meeting reminders or the daily report. 'abhi dialer chala do'.",
+        "parameters": {"type": "object", "properties": {"job": {"type": "string"}}, "required": ["job"]}}},
+    {"type": "function", "function": {"name": "live_calls", "description": "Calls ringing or talking on this agent right now. 'abhi koi call chal rahi hai'.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "end_call", "description": "Hang up a live call this agent is running. Never ends the call you are on. 'Rahul wali call kaat do'.",
+        "parameters": {"type": "object", "properties": {"lead": {"type": "string", "description": "Whose call, by name or number"}, "call_id": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "call_summary", "description": "What happened on a call: summary, outcome and length. 'Rahul se kya baat hui'.",
+        "parameters": {"type": "object", "properties": {"lead": {"type": "string"}, "call_id": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "call_routing", "description": "Who answers this line in hours and after hours, whether hand-over is on, and who gets rung. 'inbound kaise set hai'.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "set_call_routing", "description": "Change who answers incoming calls: the AI agent, your team, or (after hours) a message. Also switches hand-over on or off. 'raat ko team pe daal do', 'transfer band karo'.",
+        "parameters": {"type": "object", "properties": {
+            "when": {"type": "string", "description": "'hours' or 'after hours'"},
+            "mode": {"type": "string", "description": "ai | forward (your team) | message"},
+            "handover": {"type": "boolean", "description": "Whether the agent hands a caller over when they ask for a person"}}}}},
+    {"type": "function", "function": {"name": "add_team_member", "description": "Add a colleague to the ring order for hand-overs: name and full phone number. 'Neha ko bhi ring list mein daal do'.",
+        "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "phone": {"type": "string"}, "email": {"type": "string"}}, "required": ["phone"]}}},
     {"type": "function", "function": {"name": "lead_details", "description": "Everything on one lead: stage, temperature, what they need, objections, notes, meeting and callback. 'Rahul ka kya scene hai', 'read me the lead'.",
         "parameters": {"type": "object", "properties": {"lead": {"type": "string", "description": "Name, phone or id"}}, "required": ["lead"]}}},
     {"type": "function", "function": {"name": "analytics", "description": "The Insights numbers for this agent: calls, connect rate, meetings and spend over a period. 'is hafte ka kya hisaab hai'.",
@@ -1206,7 +1401,9 @@ ADMIN_TOOLS = [
 _TARGET_AWARE = {"add_lead", "add_note", "update_lead_details", "set_do_not_call", "dial_lead", "set_meeting",
                  "set_schedule", "set_calling_hours", "pending_work", "teach_fact", "set_automation",
                  "today_stats", "check_agent_schedule", "recent_calls", "check_records", "set_agent_paused",
-                 "lead_details", "analytics", "knowledge_list", "knowledge_search", "persona"}
+                 "lead_details", "analytics", "knowledge_list", "knowledge_search", "persona",
+                 "call_routing", "set_call_routing", "add_team_member",
+                 "live_calls", "end_call", "call_summary", "set_automation_number", "run_job_now"}
 _AGENT_ARG = {"type": "string", "description": "Another agent by id, name or company name. Omit to act on this agent."}
 
 
@@ -1335,7 +1532,23 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
         target, note = resolve_agent(args.get("agent"), agent_id)
         if note:
             return note
-    if name == "lead_details":
+    if name == "set_automation_number":
+        return set_automation_number_tool(target, args.get("setting"), args.get("value"))
+    elif name == "run_job_now":
+        return run_job_now_tool(target, args.get("job"))
+    elif name == "live_calls":
+        return live_calls_tool(target)
+    elif name == "end_call":
+        return end_call_tool(target, args.get("call_id"), args.get("lead") or args.get("name"))
+    elif name == "call_summary":
+        return call_summary_tool(target, args.get("lead") or args.get("name"), args.get("call_id"))
+    elif name == "call_routing":
+        return call_routing_tool(target)
+    elif name == "set_call_routing":
+        return set_call_routing_tool(target, args.get("when"), args.get("mode"), args.get("handover"))
+    elif name == "add_team_member":
+        return add_team_member_tool(target, args.get("name"), args.get("phone"), args.get("email"))
+    elif name == "lead_details":
         return lead_details_tool(target, args.get("lead") or args.get("name"), args.get("lead_id"))
     elif name == "analytics":
         return analytics_tool(target, _int(args.get("days"), 7))
