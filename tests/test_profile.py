@@ -40,3 +40,10 @@ def test_new_caller_details_are_capped_and_ordered(client, base):
     assert client.get(f"{base}/profile").json()["profile"]["inbound_collect"] == ["name", "requirement", "city", "email"]
     res = client.put(f"{base}/profile", json={"inbound_collect": ["name", "requirement", "city", "company", "email"]})
     assert res.status_code == 400 and "at most 4" in res.text
+
+
+def test_an_old_nine_detail_list_reads_back_capped(client, base):
+    from app.services import agents
+    agent_id = int(base.rsplit("/", 1)[1])
+    agents._update_group(agent_id, "profile", {"inbound_collect": ["city", "company", "email", "budget", "timeline", "callback_time", "source", "name", "requirement"]}, "test", "test")
+    assert client.get(f"{base}/profile").json()["profile"]["inbound_collect"] == ["name", "requirement", "city", "company"]

@@ -362,11 +362,23 @@ def _update_group(agent_id: int, group: str, values: dict, label: str, actor: st
     return _get_group(agent_id, group)
 
 
-def get_profile(agent_id: int) -> dict:
-    return _get_group(agent_id, "profile")
-
-
 MAX_INBOUND_COLLECT = 4   # every detail is one more question on a paid call; name + need + two more is the ceiling
+
+
+def _ordered_collect(fields) -> list[str]:
+    """Name and need first whatever order was clicked, unknown keys dropped, duplicates removed."""
+    from app.services.agent import COLLECT_LABELS
+    chosen = list(dict.fromkeys(str(f) for f in (fields or []) if str(f) in COLLECT_LABELS))
+    return [f for f in ("name", "requirement") if f in chosen] + [f for f in chosen if f not in ("name", "requirement")]
+
+
+def get_profile(agent_id: int) -> dict:
+    profile = _get_group(agent_id, "profile")
+    # A list saved before the cap existed (all nine details on) is trimmed on read: the page and the
+    # live call both see at most four, without waiting for someone to re-save the page.
+    if isinstance(profile.get("inbound_collect"), list):
+        profile["inbound_collect"] = _ordered_collect(profile["inbound_collect"])[:MAX_INBOUND_COLLECT]
+    return profile
 
 
 def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
@@ -375,9 +387,7 @@ def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
         if not isinstance(values["inbound_collect"], list):
             raise ValueError("inbound_collect must be a list")
         # Name and need first whatever the order clicked, then at most two extras: nine questions is not a call.
-        from app.services.agent import COLLECT_LABELS
-        chosen = [str(f) for f in values["inbound_collect"] if str(f) in COLLECT_LABELS]
-        chosen = [f for f in ("name", "requirement") if f in chosen] + [f for f in chosen if f not in ("name", "requirement")]
+        chosen = _ordered_collect(values["inbound_collect"])
         if len(chosen) > MAX_INBOUND_COLLECT:
             raise ValueError(f"Ask new callers for at most {MAX_INBOUND_COLLECT} details; each one is another question on a paid call.")
         values["inbound_collect"] = chosen
