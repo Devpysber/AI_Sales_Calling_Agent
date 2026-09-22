@@ -76,11 +76,11 @@ def test_unanswered_forward_falls_back_to_ai(client, support, monkeypatch):
     session = call_session.create(agent_id=support, lead_id=None, lead={"phone": "+919000000077"}, language="en-IN")
     xml = client.post(f"/api/plivo/transfer-done?sid={session['id']}", data={"DialStatus": "no-answer"}).text
     assert "<Stream" in xml
-    assert call_session.get(session["id"])["history"][-1]["text"].startswith("Sorry, our team is busy")
+    assert "passed your request" in call_session.get(session["id"])["history"][-1]["text"]
 
     client.put(f"/api/agents/{support}/profile", json={"forward_fallback": "message"})
     xml = client.post(f"/api/plivo/transfer-done?sid={session['id']}", data={"DialStatus": "busy"}).text
-    assert "<Stream" not in xml and "<Record" in xml
+    assert "<Stream" not in xml and "<Record" not in xml and "<Hangup" in xml  # told the team will ring back, then ends
 
 
 def test_alerts_summary_and_snooze(client, monkeypatch):

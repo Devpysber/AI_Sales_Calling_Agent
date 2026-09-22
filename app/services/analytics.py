@@ -39,9 +39,17 @@ def _kpis(rows) -> dict:
 
 
 def usage(rows) -> dict:
-    """Billable usage and an estimate from the rates in settings (0 = not set)."""
+    """Billable usage and an estimate from the rates in settings (0 = not set).
+
+    Per-call and per-minute figures are customer calls only: a colleague's check-in costs money too (it is in
+    the total) but says nothing about what a customer call costs, and there were more check-ins than customers
+    in the first week.
+    """
     from app.core.config import settings
 
+    all_rows = list(rows)
+    internal_rows = [r for r in all_rows if getattr(r, "trigger", None) == "internal"]
+    rows = [r for r in all_rows if getattr(r, "trigger", None) != "internal"]
     metered = [r for r in rows if r.tts_chars is not None]
     tts = sum(r.tts_chars or 0 for r in metered)
     stt = sum(r.stt_seconds or 0 for r in metered)
@@ -71,6 +79,14 @@ def usage(rows) -> dict:
         "stt": stt / 3600 * cost_per_stt,
         "llm": llm_cost,
     }
+    internal_metered = [r for r in internal_rows if r.tts_chars is not None]
+    internal_minutes = sum((r.duration or 0) for r in internal_rows if r.status == ANSWERED) / 60
+    internal_cost = (internal_minutes * cost_per_call
+                     + sum(r.tts_chars or 0 for r in internal_metered) / 10_000 * cost_per_tts
+                     + sum(r.stt_seconds or 0 for r in internal_metered) / 3600 * cost_per_stt
+                     + (sum(getattr(r, "llm_input_tokens", 0) or 0 for r in internal_metered) / 1e6 * per_1m_in
+                        + sum(getattr(r, "llm_output_tokens", 0) or 0 for r in internal_metered) / 1e6 * per_1m_out
+                        if per_1m_in else sum(r.llm_requests or 0 for r in internal_metered) * cost_per_llm))
     answered = sum((r.status == ANSWERED or (r.status == "Failed" and (r.duration or 0) > 0)) for r in metered) or 0
     total = sum(cost.values())
     qualified = sum((getattr(r, "qualification", None) == "Hot" or getattr(r, "outcome", None) == "meeting_booked") for r in rows)
@@ -78,7 +94,8 @@ def usage(rows) -> dict:
     return {
         "metered_calls": len(metered), "tts_chars": tts, "stt_seconds": round(stt), "llm_requests": llm,
         "call_minutes": round(connected_minutes, 1),
-        "cost": {k: round(v, 2) for k, v in cost.items()}, "total_cost": round(total, 2),
+        "cost": {k: round(v, 2) for k, v in cost.items()}, "total_cost": round(total + internal_cost, 2),
+        "customer_cost": round(total, 2), "internal_calls": len(internal_rows), "internal_cost": round(internal_cost, 2),
         "cost_per_connected_call": round(total / answered, 2) if answered else None,
         # The numbers to negotiate and tune with: per connected minute.
         "per_minute": ({"tts_chars": round(tts / connected_minutes), "tts_cost": round(cost["tts"] / connected_minutes, 2),

@@ -293,16 +293,16 @@ function UsageCard({ usage: u }: { usage: AnalyticsUsage }) {
   return (
     <Card>
       <CardHeader title={<span className="inline-flex items-center gap-2"><IndianRupee className="size-4" />Usage & cost</span>}
-        description={u.metered_calls ? `Billable usage measured on ${u.metered_calls} call${u.metered_calls === 1 ? '' : 's'} in this period`
-          : 'Usage is measured on calls placed from now on.'}
+        description={u.metered_calls ? `Billable usage on ${u.metered_calls} customer call${u.metered_calls === 1 ? '' : 's'} in this period${u.internal_calls ? ` · ${u.internal_calls} team check-in${u.internal_calls === 1 ? '' : 's'} (${money(u.internal_cost ?? 0)}) in the total, not in the per-call figures` : ''}`
+          : 'Usage is measured on customer calls placed from now on.'}
         action={u.rates_configured && <div className="text-right"><div className="text-xl font-extrabold tabular-nums">{money(u.total_cost)}</div>
-          <div className="text-xs text-muted">{u.cost_per_connected_call != null ? `${money(u.cost_per_connected_call)} per connected call` : 'estimated'}</div>
+          <div className="text-xs text-muted">{u.cost_per_connected_call != null ? `${money(u.cost_per_connected_call)} per connected customer call` : 'estimated'}</div>
           {u.per_minute && <div className="mt-1 text-xs font-semibold tabular-nums text-fg-2">{money(u.per_minute.total_cost)}/min · TTS {money(u.per_minute.tts_cost)}/min · {u.per_minute.tts_chars.toLocaleString('en-IN')} chars/min</div>}
           {u.per_call && <div className="mt-1 text-xs tabular-nums text-muted">{u.per_call.tts_chars.toLocaleString('en-IN')} chars/call{u.budget ? ` (budget ${u.budget.tts_chars})` : ''} · {Math.round(u.per_call.duration / 60)}m{u.per_call.duration % 60}s avg{u.cost_per_qualified_lead != null ? ` · ${money(u.cost_per_qualified_lead)} per qualified lead` : ''}</div>}</div>} />
       {u.rates_configured && u.per_call && (
         // The 100-call baseline: what one connected call actually costs, part by part, and what the LLM is fed.
         <div className="mx-4 mb-3 grid gap-2 rounded-xl border border-border bg-surface-2/60 p-3 text-xs tabular-nums sm:mx-5 sm:grid-cols-2 lg:grid-cols-4">
-          <div><div className="text-muted">Per connected call</div><div className="font-bold text-sm">{money(u.per_call.total_cost ?? 0)}</div>
+          <div><div className="text-muted">Per connected customer call</div><div className="font-bold text-sm">{money(u.per_call.total_cost ?? 0)}</div>
             <div className="text-muted">tel {money(u.per_call.telephony_cost ?? 0)} · STT {money(u.per_call.stt_cost ?? 0)} · TTS {money(u.per_call.tts_cost)} · LLM {money(u.per_call.llm_cost ?? 0)}</div></div>
           <div><div className="text-muted">LLM requests / call</div><div className="font-bold text-sm">{u.per_call.llm_requests ?? 0}</div>
             <div className="text-muted">{u.llm_billing === 'tokens' ? 'billed by tokens' : 'billed per request'}</div></div>
