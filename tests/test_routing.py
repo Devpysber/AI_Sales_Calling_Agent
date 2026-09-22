@@ -383,3 +383,31 @@ def test_colleague_tools_add_note_dnc_queue_meeting_hours(client, base, monkeypa
     assert agents.get(agent_id)["status"] == "active"
     names = {t["function"]["name"] for t in agent_tools.get_tools_for_role("team")}
     assert {"add_lead", "add_note", "dial_lead", "set_meeting", "pending_work", "set_agent_paused"} <= names
+
+
+def test_designated_agent_is_only_the_fallback_on_a_shared_number(client, base, monkeypatch):
+    """'This agent answers' = who takes callers the router cannot place; CRM identity and team lists come first."""
+    from app.services import agents
+    from app.services.call_service import CallService
+    cars = client.post("/api/agents", json={"name": "Cars desk X"}).json()
+    hair = client.post("/api/agents", json={"name": "Hair desk X"}).json()
+    client.put(f"/api/agents/{cars['id']}/profile", json={"company_name": "CarsIndias X"})
+    client.put(f"/api/agents/{hair['id']}/profile", json={"company_name": "Hairscope X",
+                                                          "team_members": [{"name": "Neha", "role": "Sales", "phone": "+919812400004"}]})
+    agents.set_inbound_owner("918000000000", cars["id"])
+    client.post(f"/api/agents/{hair['id']}/leads", json={"name": "Hair customer", "phone": "9812400001"})
+    client.post(f"/api/agents/{cars['id']}/leads", json={"name": "Both", "phone": "9812400002"})
+    client.post(f"/api/agents/{hair['id']}/leads", json={"name": "Both", "phone": "9812400002"})
+    monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
+    try:
+        route = lambda n, uuid: CallService(None).create_inbound(n, "918000000000", uuid)
+        s = route("919812400001", "d-1")      # known only to Hairscope -> Hairscope, although CarsIndias is designated
+        assert s["agent_id"] == hair["id"] and s["lead"]["call_purpose"] == "inbound"
+        s = route("919812400002", "d-2")      # known to both -> designated desk asks which
+        assert s["agent_id"] == cars["id"] and s["lead"]["call_purpose"] == "inbound_choose"
+        s = route("919812400003", "d-3")      # unknown -> designated desk, saved as its lead
+        assert s["agent_id"] == cars["id"] and s["lead_id"] and s["lead"]["call_purpose"] == "inbound"
+        s = route("919812400004", "d-4")      # Hairscope's colleague -> Hairscope in check-in mode, no lead
+        assert s["agent_id"] == hair["id"] and s["lead"]["call_purpose"] == "team" and s["lead_id"] is None
+    finally:
+        agents.set_inbound_owner("918000000000", None)
