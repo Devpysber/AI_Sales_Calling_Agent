@@ -38,7 +38,9 @@ KINDS = {
     "scheduler_stalled": ("Automation scheduler stalled", "Runs a scheduler tick now"),
     "scheduler_error": ("Automation job crashed", "Runs the job again"),
     "public_url": ("Public URL unreachable", None),
+    "inbound_disconnected": ("Inbound calls not reaching the app", "Points the Plivo number back at this app's webhooks"),
 }
+INBOUND_CHECK_KEY = "heal_inbound_check"   # store: last Plivo inbound-status check, so a Settings refresh is not a Plivo API call
 
 
 def _now() -> str:
@@ -164,6 +166,25 @@ def detect() -> list[dict]:
         if last and time.time() - float(last) > TICK_SECONDS * 6:
             checks.append(("scheduler_stalled", f"No scheduler tick for {int(time.time() - float(last))}s.", {}))
     with contextlib.suppress(Exception):
+        # Every number calls can arrive on: the default line plus each agent's own. A number whose Plivo
+        # application no longer points here (someone pressed Restore, or a re-provisioned app) rings nothing.
+        cached = store.get_json(INBOUND_CHECK_KEY)
+        if cached is None:
+            from app.services.plivo_service import PlivoService
+            from app.core.config import settings as _settings
+            numbers = {"".join(c for c in (_settings.plivo_phone_number or "") if c.isdigit())}
+            numbers |= {"".join(c for c in (agents.get(a) or {}).get("phone_number", "") or "" if c.isdigit()) for a in agents.ids(active_only=True)}
+            svc = PlivoService()
+            cached = []
+            for number in sorted(n for n in numbers if n):
+                st = svc.inbound_status(number)
+                if not st.get("connected"):
+                    cached.append({"number": st["number"], "app": st.get("app_name") or st.get("app_id") or "no application"})
+            store.set_json(INBOUND_CHECK_KEY, cached, ttl=300)
+        for row in cached:
+            checks.append(("inbound_disconnected", f"{row['number']}: incoming calls go to \"{row['app']}\", not to this app. Press Heal to connect inbound.",
+                           {"number": row["number"]}))
+    with contextlib.suppress(Exception):
         if not public_url_reachable():
             checks.append(("public_url", "The app's public URL does not answer; Plivo cannot reach calls or audio.", {}))
     for kind, detail, data in checks:
@@ -217,6 +238,12 @@ def _heal_one(issue: dict) -> tuple[bool, str]:
             return True, f"Summaries written for {n} call(s)."
         why = next((e for _, e in left if e), "") or "provider gave no summary"
         return False, f"{n} retried, {len(left)} still without a summary: {why[:200]}. Check the Summary LLM order / provider credits in Runtime tuning."
+    if kind == "inbound_disconnected":
+        from app.services.plivo_service import PlivoService
+        st = PlivoService().connect_inbound(data.get("number"))
+        store.delete(INBOUND_CHECK_KEY)
+        return bool(st.get("connected")), (f"{st['number']} now sends incoming calls to this app." if st.get("connected")
+                                           else f"Plivo still points {st['number']} at {st.get('app_name') or 'another application'}.")
     if kind == "scheduler_stalled":
         from app.services.scheduler import tick
         tick()

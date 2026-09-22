@@ -164,7 +164,11 @@ def _plivo_action(action: str):
     from app.services.plivo_service import PlivoService
     try:
         service = PlivoService()
-        return getattr(service, action)()
+        result = getattr(service, action)()
+        if action != "inbound_status":
+            from app.services.heal_service import INBOUND_CHECK_KEY
+            store.delete(INBOUND_CHECK_KEY)   # Health & heal re-reads Plivo on the next check
+        return result
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001 - surface Plivo errors to the admin

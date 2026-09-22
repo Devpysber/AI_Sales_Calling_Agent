@@ -122,3 +122,23 @@ def test_summary_heal_closes_silent_calls_and_reports_the_rest(client, base, mon
     with get_db() as db:
         silent = db.scalar(__import__("sqlalchemy").select(Call).where(Call.from_number == "+919000000090"))
         assert silent.summary.startswith("No conversation")
+
+
+def test_disconnected_inbound_number_is_detected_and_healed(client, monkeypatch):
+    from app.core import store
+    from app.services import plivo_service
+    state = {"connected": False}
+    class FakePlivo:
+        def __init__(self, *a, **k): pass
+        def inbound_status(self, number=None):
+            return {"number": "+918000000000", "connected": state["connected"], "app_name": "agent_flow_old", "app_id": "a1", "previous_app": None}
+        def connect_inbound(self, number=None):
+            state["connected"] = True
+            return self.inbound_status(number)
+    monkeypatch.setattr(plivo_service, "PlivoService", FakePlivo)
+    store.delete(heal_service.INBOUND_CHECK_KEY)
+    issue = next(i for i in heal_service.detect() if i["kind"] == "inbound_disconnected")
+    assert "agent_flow_old" in issue["detail"] and issue["healable"]
+    result = heal_service.heal(issue["id"])[0]
+    assert result["ok"] and "now sends incoming calls" in result["note"]
+    assert not [i for i in heal_service.detect() if i["kind"] == "inbound_disconnected" and i["status"] == "open"]
