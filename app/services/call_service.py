@@ -486,11 +486,17 @@ class CallService:
                 if trigger in ("callback", "nurture", "auto_dial", "queue", "retry"):
                     cfg = agents.get_automation(agent_id)
                     if cfg.get("retry_enabled") and updates["retry_count"] <= cfg.get("max_retries", 3):
-                        delay = cfg.get("retry_interval_minutes", 60)
+                        # A "callback" redial is only a customer-requested slot if the lead's prior
+                        # state came from an engaged call (Completed/Failed). If it came from a
+                        # no-answer, this slot is one we self-scheduled (below) on an earlier retry,
+                        # so honour the wider retry gap instead of the short callback interval, and
+                        # never tell the customer "we called at the time you asked for" — they didn't.
+                        self_scheduled = trigger != "callback" or lead.get("call_status") in RETRIABLE
+                        delay = cfg.get("retry_min_gap_minutes", 180) if self_scheduled else cfg.get("retry_interval_minutes", 60)
                         next_at = (_utcnow() + timedelta(minutes=delay) + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M")
                         updates["callback_at"] = next_at
                         # A time the customer was promised and we could not keep: tell them in writing.
-                        if trigger == "callback":
+                        if trigger == "callback" and not self_scheduled:
                             self._missed_call_email(lead_id, lead, next_at)
             elif status == "Completed":
                 updates["retry_count"] = 0
@@ -804,11 +810,15 @@ class CallService:
                             if not recipients:
                                 recipients.append(login_email())  # team/admin default to the system owner's email
                         
-                        from app.services.notification_service import send_email
+                        from app.services.notification_service import send_email, email_sent
                         for recipient in set(recipients):
                             try:
-                                send_email(recipient, subject, e["body"], lead_id=lead_id, agent_id=self.agent_id, actor="ai")
-                                events.record("email.sent", f"Sent email to {target} ({recipient})", lead_id=lead_id, call_id=call_id, actor="ai")
+                                status = send_email(recipient, subject, e["body"], lead_id=lead_id, agent_id=self.agent_id, actor="ai")
+                                if email_sent(status):
+                                    events.record("email.sent", f"Sent email to {target} ({recipient})", lead_id=lead_id, call_id=call_id, actor="ai")
+                                else:
+                                    log.error("Failed to send post-call email to %s: %s", recipient, status)
+                                    events.record("email.failed", f"Failed to send email to {target}: {status}", lead_id=lead_id, call_id=call_id, actor="system")
                             except Exception as err:
                                 log.error("Failed to send post-call email to %s: %s", recipient, err)
                                 events.record("email.failed", f"Failed to send email to {target}: {err}", lead_id=lead_id, call_id=call_id, actor="system")
@@ -898,6 +908,9 @@ class CallService:
             self._compact_history(session_id)
         except Exception as e:
             log.exception("Turn failed for session %s", session_id)
+            from app.services.heal_service import report
+            report("turn_error", f"{type(e).__name__}: {str(e)[:300]} (caller said: {text[:120]})", agent_id=agent_id,
+                   call_id=session.get("call_id"), data={"error": str(e)[:500], "text": text[:300]})
             session = call_session.get(session_id) or session
             call_session.add_turn(session, "customer", text)
             session["pending"] = {"state": "error", "error": str(e)[:300]}

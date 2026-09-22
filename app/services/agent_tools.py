@@ -1,7 +1,9 @@
 import subprocess
+import contextlib
 import json
+import re
 from datetime import datetime, timezone, timedelta
-from app.services.notification_service import send_email
+from app.services.notification_service import send_email, email_sent
 from app.services.crm_service import CRMService
 from app.core.config import settings
 from app.core.database import get_db
@@ -30,8 +32,8 @@ def _to_ist_text(value: str) -> str | None:
 def send_email_tool(to: str, subject: str, body: str, agent_id: int) -> str:
     """Send an email to anyone."""
     try:
-        send_email(to, subject, body, agent_id=agent_id, actor="system")
-        return f"Email successfully sent to {to}"
+        status = send_email(to, subject, body, agent_id=agent_id, actor="system")
+        return f"Email successfully sent to {to}" if email_sent(status) else f"Failed to send email: {status}"
     except Exception as e:
         return f"Failed to send email: {str(e)}"
 
@@ -88,10 +90,33 @@ AUTOMATION_SWITCHES = {
 }
 
 
+def _int(v, default: int) -> int:
+    """Best-effort int from free text markup can send ('five', '3 calls', '24h')."""
+    m = re.search(r"\d+", str(v or ""))
+    return int(m.group()) if m else default
+
+
+def _on_flag(v) -> bool:
+    """`on` as the model sends it: a boolean, or "false"/"off"/"band"/"no" quoted as a string, never bool("false")."""
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("true", "yes", "1", "on", "resume", "enable", "start", "chalu")
+
+
 def set_automation_tool(agent_id: int, switches: list[str] | str, on: bool) -> str:
     """Turn one or more of this agent's automations on or off; the only way a colleague's 'pause/resume X' takes effect."""
     from app.services.agents import update_automation
-    names = [switches] if isinstance(switches, str) else list(switches or [])
+    # sarvam markup hands the list over as one string: "speed_to_lead, auto_dial" / '["auto_dial"]'
+    if isinstance(switches, str):
+        raw = switches.strip()
+        if raw.startswith("["):
+            try:
+                switches = json.loads(raw)
+            except json.JSONDecodeError:
+                switches = raw.strip("[]")
+        if isinstance(switches, str):
+            switches = [n for n in re.split(r"[,\s/]+|\band\b|\baur\b", switches) if n]
+    names = [str(n).strip().strip("\"'") for n in (switches or [])]
     known, unknown = {}, []
     for name in names:
         key, label = AUTOMATION_SWITCHES.get(str(name or "").strip().lower(), (None, None))
@@ -130,10 +155,11 @@ def update_lead_status_tool(lead_id, new_status: str, agent_id: int, lead: str |
     lead_id, note = resolve_lead(agent_id, lead_id, lead)
     if not lead_id:
         return note
-    value = str(new_status or "").strip()
+    canon = {s.lower().replace("-", " "): s for s in list(JOURNEY) + list(EXIT_STAGES) + list(QUALIFICATIONS)}
+    value = canon.get(str(new_status or "").strip().lower().replace("_", " ").replace("-", " "), "")
     if value in QUALIFICATIONS:
         field = "qualification"
-    elif value in JOURNEY or value in EXIT_STAGES:
+    elif value:
         field = "status"
     else:
         allowed = ", ".join(list(JOURNEY) + sorted(EXIT_STAGES) + sorted(QUALIFICATIONS))
@@ -213,7 +239,7 @@ def resolve_lead(agent_id: int, lead_id=None, lead: str | None = None) -> tuple[
                 return found["id"], ""
         except (TypeError, ValueError):
             pass
-    query = str(lead or "").strip()
+    query = str(lead or "").strip() or (str(lead_id).strip() if lead_id and not str(lead_id).strip().isdigit() else "")
     if not query:
         return None, "No lead named. Ask who it is for (name or phone)."
     digits = "".join(c for c in query if c.isdigit())
@@ -577,17 +603,79 @@ def get_tools_for_role(role: str) -> list[dict]:
         return TOOLS + ADMIN_TOOLS
     return TOOLS
 
+def _tool_schemas() -> dict:
+    return {t["function"]["name"]: t["function"].get("parameters", {}).get("properties", {}) for t in TOOLS + ADMIN_TOOLS}
+
+
+def resolve_tool_name(name: str) -> str:
+    """The tool the model meant: exact, else case/underscore-insensitive, else a unique substring match."""
+    names = list(_tool_schemas())
+    if name in names:
+        return name
+    key = re.sub(r"[^a-z]", "", str(name or "").lower())
+    hits = [n for n in names if re.sub(r"[^a-z]", "", n) == key]
+    if not hits:
+        hits = [n for n in names if key and (key in re.sub(r"[^a-z]", "", n) or re.sub(r"[^a-z]", "", n) in key)]
+    return hits[0] if len(hits) == 1 else name
+
+
+def _split_list(raw: str) -> list[str]:
+    return [n.strip().strip("\"'") for n in re.split(r"[,\s/]+|\band\b|\baur\b", raw) if n.strip()]
+
+
+def normalize_args(name: str, args: dict) -> dict:
+    """Coerce every argument to its schema type: sarvam markup sends lists, ints and booleans as strings."""
+    schema = _tool_schemas().get(name) or {}
+    out = {}
+    for key, value in (args or {}).items():
+        spec = schema.get(key) or {}
+        kind = spec.get("type")
+        if isinstance(value, str):
+            raw = value.strip()
+            if kind == "array":
+                if raw.startswith("["):
+                    try:
+                        value = [str(v).strip() for v in json.loads(raw)]
+                    except json.JSONDecodeError:
+                        value = _split_list(raw.strip("[]"))
+                else:
+                    value = _split_list(raw)
+            elif kind == "boolean":
+                value = _on_flag(raw)
+            elif kind == "integer":
+                value = _int(raw, None)
+            elif kind == "object" and raw.startswith("{"):
+                with contextlib.suppress(json.JSONDecodeError):
+                    value = json.loads(raw)
+        out[key] = value
+    return out
+
+
 def execute_tool(name: str, arguments: str, agent_id: int, role: str = "team") -> str:
-    """Execute a tool by name and return its result, checking permissions."""
+    """Execute a tool by name and return its result, checking permissions.
+
+    Arguments are normalised to the schema and a misnamed tool is resolved first, so the model's
+    formatting never fails a colleague's request; a result that still fails is reported as an
+    issue the admin can heal (re-run) from the web app.
+    """
     try:
-        args = json.loads(arguments)
+        args = json.loads(arguments or "{}") if isinstance(arguments, str) else dict(arguments or {})
+        if not isinstance(args, dict):
+            args = {}
     except Exception:
         return "Failed to parse arguments."
+    name = resolve_tool_name(name)
+    args = normalize_args(name, args)
     try:
-        return _dispatch(name, args, agent_id, role)
+        result = _dispatch(name, args, agent_id, role)
     except Exception as e:
         log.exception("tool %s failed", name)
-        return f"Tool {name} failed: {e}"
+        result = f"Tool {name} failed: {e}"
+    if result.lower().startswith(("failed", "tool ", "access denied", "error")):
+        from app.services.heal_service import report
+        report("tool_failed", f"{name}({json.dumps(args, ensure_ascii=False)[:300]}) -> {result[:300]}", agent_id=agent_id,
+               data={"name": name, "args": args, "agent_id": agent_id, "role": role}, title=f"Call tool failed: {name}")
+    return result
 
 
 def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
@@ -596,15 +684,18 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
     elif name == "check_records":
         return check_records_tool(args.get("query"), agent_id)
     elif name == "check_email_status":
-        return check_email_status_tool(agent_id, int(args.get("hours") or 24))
+        return check_email_status_tool(agent_id, _int(args.get("hours"), 24))
     elif name == "check_credits":
         return check_credits_tool()
     elif name == "recent_calls":
-        return recent_calls_tool(agent_id, int(args.get("limit") or 5), lead=args.get("lead") or args.get("name"))
+        return recent_calls_tool(agent_id, _int(args.get("limit"), 5), lead=args.get("lead") or args.get("name"))
     elif name == "today_stats":
         return today_stats_tool(agent_id)
     elif name == "set_automation":
-        return set_automation_tool(agent_id, args.get("switches") or args.get("switch") or [], bool(args.get("on")))
+        flag = args.get("on", args.get("state", args.get("enabled", args.get("action"))))
+        if flag is None:
+            return "Failed: say whether to switch it on or off."
+        return set_automation_tool(agent_id, args.get("switches") or args.get("switch") or args.get("automation") or [], _on_flag(flag))
     elif name == "update_lead_status":
         return update_lead_status_tool(args.get("lead_id"), args.get("new_status"), agent_id, lead=args.get("lead") or args.get("name"))
     elif name == "check_agent_schedule":
@@ -626,14 +717,19 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
             return all_agents_overview_tool()
         elif name == "set_agent_automation":
             target, note = resolve_agent(args.get("agent"), agent_id)
-            return note or set_automation_tool(target, args.get("switches") or args.get("switch") or [], bool(args.get("on")))
+            flag = args.get("on", args.get("state", args.get("enabled", args.get("action"))))
+            if flag is None:
+                return note or "Failed: say whether to switch it on or off."
+            return note or set_automation_tool(target, args.get("switches") or args.get("switch") or args.get("automation") or [], _on_flag(flag))
         elif name == "agent_stats":
             target, note = resolve_agent(args.get("agent"), agent_id)
             return note or (today_stats_tool(target) + "\n" + recent_calls_tool(target, 3))
         elif name == "get_agent_config":
-            return get_agent_config_tool(args.get("target_agent_id"))
+            target, note = resolve_agent(args.get("target_agent_id") or args.get("agent"), agent_id)
+            return note or get_agent_config_tool(target)
         elif name == "pause_agent_automation":
-            return pause_agent_automation_tool(args.get("target_agent_id"))
+            target, note = resolve_agent(args.get("target_agent_id") or args.get("agent"), agent_id)
+            return note or pause_agent_automation_tool(target)
         elif name == "check_active_calls":
             return check_active_calls_tool()
 

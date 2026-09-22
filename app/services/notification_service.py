@@ -142,6 +142,9 @@ def send_email(to: str, subject: str, body: str, lead_id: int | None = None, age
             status = f"sent via {provider}"
         except Exception as e:
             status = f"failed: {e}"
+            from app.services.heal_service import report
+            report("email_failed", f"To {to}: {subject[:80]} -> {status[:200]}", agent_id=agent_id,
+                   data={"to": to, "subject": subject, "body": body, "lead_id": lead_id, "agent_id": agent_id, "actor": actor})
     events.record("email", f"Email to {to}: {subject}", f"{status} · from {from_}", agent_id=agent_id, lead_id=lead_id,
                   actor=actor, data={"body": body[:2000], "from": from_})
     return status

@@ -785,11 +785,13 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
 
 # A colleague's turn that needs a tool: a switch, a send, a schedule, a lookup. Anything else is conversation.
 _TOOL_WORDS = re.compile(
-    r"\b(on|off|band|bandh|chalu|start|stop|pause|resume|enable|disable|switch|send|bhej|email|mail|sms|whatsapp|message|"
+    r"\b(on|off|band|bandh|chalu|start|stop|pause|resume|enable|disable|switch|send|bhej\w*|email|mail|sms|whatsapp|message|"
     r"schedule|callback|call ?back|book|meeting|update|mark|status|stats|report|how many|kitn[aei]|count|calls?|leads?|"
-    r"record|check|dekho|batao|last|recent|pichl[aei]|aaj|today|yesterday|kal|diagnos|credit|balance|config|setting|"
-    r"automation|dialer|dial|reminder|nurture|retry|speed|agents?|overview|active|live|running|paused?|hours)\b|"
-    r"बंद|चालू|भेज|मेल|कॉल|लीड|कितन|स्टेटस|रिपोर्ट|आज|कल|पिछल|चेक|देखो|बताओ|ऑन|ऑफ|शेड्यूल|मीटिंग|अपडेट", re.I)
+    r"record|check|dekho|batao|bata\w*|last|recent|pichl[aei]|aaj|today|yesterday|kal|diagnos|credit|balance|config|setting|"
+    r"automation|dialer|dial|reminder|nurture|retry|speed|agents?|overview|active|live|running|paused?|hours|"
+    r"rok|roko|ruko|shuru|dikhao|lagao|milao|hot|warm|cold|interested|qualif\w*)\b|"
+    r"बंद|चालू|भेज|मेल|कॉल|लीड|कितन|स्टेटस|रिपोर्ट|आज|कल|पिछल|चेक|देखो|बताओ|ऑन|ऑफ|शेड्यूल|मीटिंग|अपडेट|"
+    r"रोक|शुरू|दिखा|बता|हॉट|वार्म|कोल्ड", re.I)
 
 
 def wants_tool(text: str) -> bool:
@@ -914,7 +916,7 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
         if wants_tool(customer_text):
             yield from _json_tool_turn(messages, tools, agent_id, purpose)
             return
-        yield from process_stream(messages, with_tools=False)
+        yield from process_stream(llm._without_tools(messages), with_tools=False)
         return
 
     for _round in range(MAX_TOOL_ROUNDS):
@@ -966,11 +968,13 @@ def _json_tool_turn(messages: list[dict], tools: list[dict], agent_id: int, purp
     work = [dict(messages[0]), *messages[1:]]
     work[0]["content"] = work[0]["content"] + instruction
     seen = None
+    outcome = None
     for _round in range(MAX_TOOL_ROUNDS + 1):
         result = llm.complete(work, json_mode=True, max_tokens=TOOL_MAX_TOKENS, temperature=0.3)
         yield {"usage": llm.turn_usage(work, None, len(result.text or ""), None)}
         data = _parse_turn(result.text)
-        tool = data.get("tool") if isinstance(data.get("tool"), dict) else None
+        t = data.get("tool")
+        tool = t if isinstance(t, dict) else ({"name": t, "arguments": data.get("arguments") or {}} if isinstance(t, str) and t else None)
         reply = str(data.get("reply") or "").strip()
         if not tool:
             # An empty reply is left empty: the stream layer answers a goodbye with a goodbye and anything
@@ -978,9 +982,19 @@ def _json_tool_turn(messages: list[dict], tools: list[dict], agent_id: int, purp
             yield reply
             return
         name = str(tool.get("name") or "")
-        args = tool.get("arguments") if isinstance(tool.get("arguments"), dict) else {}
+        raw = tool.get("arguments")
+        if isinstance(raw, str):
+            try:
+                raw = llm.parse_json(raw)
+            except Exception:
+                raw = {}
+        args = raw if isinstance(raw, dict) else {}
         if seen == (name, json.dumps(args, sort_keys=True)):
             # Same tool, same arguments as last round: the result is already above. Push it to act on it.
+            if reply:
+                # The model already said it: the repeat is a stale echo of the last round, not new work.
+                yield reply
+                return
             work.append({"role": "user", "content": "You already ran that and its result is above. Either run the NEXT tool needed "
                                                     "(e.g. schedule_callback / update_lead_status with the lead_id from the result) or reply now with tool null."})
             continue
@@ -990,7 +1004,11 @@ def _json_tool_turn(messages: list[dict], tools: list[dict], agent_id: int, purp
         work.append({"role": "assistant", "content": json.dumps({"reply": reply, "tool": {"name": name, "arguments": args}}, ensure_ascii=False)})
         work.append({"role": "user", "content": f"[Result of {name}: {outcome[:1500]}]\nNow tell the caller only what they asked, in one spoken sentence under 150 characters, and set tool to null."})
     log.warning("JSON tool loop hit %s rounds for purpose %s", MAX_TOOL_ROUNDS, purpose)
-    yield "Ji, maine note kar liya hai, aage ka kaam ho jayega."
+    # Out of rounds: speak the last real result rather than a claim ("note kar liya") that nothing backs.
+    if outcome:
+        yield outcome[:200]
+        return
+    yield "Abhi yeh nahi ho paya, dobara boliye."
 
 
 def _clean_crm(crm: dict) -> dict:

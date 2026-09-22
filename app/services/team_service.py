@@ -8,6 +8,7 @@ a forwarded call hunts through and the people the agent can name to a caller.
 """
 
 import ast
+from app.services.crm_service import normalize_phone
 from app.services.settings_service import SettingsService
 
 def members() -> list[dict]:
@@ -26,7 +27,7 @@ def members() -> list[dict]:
 
 
 def _digits(value: str) -> str:
-    return "".join(c for c in (value or "") if c.isdigit())
+    return "".join(c for c in (normalize_phone(value) or "") if c.isdigit())
 
 
 def call_numbers(role: str | None = None) -> list[str]:

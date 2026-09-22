@@ -421,6 +421,8 @@ class CRMService:
                         # A workspace-wide CRMService has no agent_id: take the lead's own agent so the
                         # mail is signed with the real company instead of the "Our Team" placeholder.
                         agent_id = self.agent_id or result.get("agent_id")
+                        if agent_id and not agents.get_automation(agent_id).get("ai_auto_emails", True):
+                            return
                         persona = agents.get_profile(agent_id) if agent_id else {}
                         company = persona.get("company_name") or "Our Team"
                         agent_name = persona.get("agent_name") or "Your Agent"

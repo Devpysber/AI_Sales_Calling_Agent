@@ -122,6 +122,8 @@ def _mark_openrouter_dead(reason: str) -> None:
     from app.core import store
     store.set_json(OPENROUTER_DEAD_KEY, time.time() + OPENROUTER_DEAD_SECONDS, ttl=OPENROUTER_DEAD_SECONDS)
     log.warning("OpenRouter unusable for %ss (%s); live turns go to Sarvam without tools until then", OPENROUTER_DEAD_SECONDS, reason[:120])
+    from app.services.heal_service import report
+    report("llm_dead", f"OpenRouter: {reason[:300]}", data={"reason": reason[:300]})
 
 
 PREFLIGHT_KEY = "llm_preflight"
@@ -554,11 +556,11 @@ def parse_json(text: str) -> dict:
             lowered = value.lower()
             if lowered in ("true", "false"):
                 data[key] = lowered == "true"
-            elif value.startswith("{"):
+            elif value.startswith(("{", "[")):
                 try:
                     data[key] = json.loads(value)
                 except json.JSONDecodeError:
-                    data[key] = {}
+                    data[key] = {} if value.startswith("{") else value
             else:
                 data[key] = value
         if data:

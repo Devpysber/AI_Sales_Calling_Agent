@@ -404,3 +404,60 @@ async def update_team_member_password(member_id: str, body: TeamMemberPasswordUp
     member["password_changed_at"] = int(time.time())
     SettingsService().set_state("team_members", members)
     return {"ok": True}
+
+
+# ---------------- issues & heal (admin) ----------------
+
+@router.get("/system/issues", dependencies=[Depends(require_admin)])
+def system_issues(detect: bool = True):
+    from app.services import heal_service
+    issues = heal_service.detect() if detect else heal_service.list_issues()
+    return {"issues": issues, "escalation": heal_service.escalation_text()}
+
+
+@router.post("/system/issues/heal", dependencies=[Depends(require_admin)])
+def system_heal(payload: dict | None = None):
+    """Heal one issue (payload {"id": ...}) or every open one; returns what each remedy did."""
+    from app.services import heal_service
+    results = heal_service.heal((payload or {}).get("id"))
+    return {"results": results, "issues": heal_service.list_issues(), "escalation": heal_service.escalation_text()}
+
+
+@router.post("/system/issues/{issue_id}/dismiss", dependencies=[Depends(require_admin)])
+def system_issue_dismiss(issue_id: str):
+    from app.services import heal_service
+    if not heal_service.dismiss(issue_id):
+        raise HTTPException(404, "Issue not found")
+    return {"ok": True}
+
+
+# ---------------- developer hand-off: the cloud fix agent reads escalations by token ----------------
+
+def _check_export_token(request: Request):
+    from app.services import heal_service
+    token = request.headers.get("X-Heal-Token") or request.query_params.get("token") or ""
+    if not token or token != heal_service.export_token():
+        raise HTTPException(401, "Bad heal token")
+
+
+@router.get("/system/issues/export", dependencies=[Depends(_check_export_token)])
+def system_issues_export():
+    from app.services import heal_service
+    return heal_service.export()
+
+
+@router.post("/system/issues/{issue_id}/fix", dependencies=[Depends(_check_export_token)])
+def system_issue_fix(issue_id: str, payload: dict):
+    from app.services import heal_service
+    if not str(payload.get("pr_url") or "").startswith("https://"):
+        raise HTTPException(400, "pr_url required")
+    if not heal_service.ack_fix(issue_id, payload["pr_url"], payload.get("note")):
+        raise HTTPException(404, "Issue not found")
+    return {"ok": True}
+
+
+@router.get("/system/issues/token", dependencies=[Depends(require_admin)])
+def system_heal_token(rotate: bool = False):
+    from app.services import heal_service
+    return {"token": heal_service.rotate_export_token() if rotate else heal_service.export_token(),
+            "export_url": settings.base_url + "/api/system/issues/export"}

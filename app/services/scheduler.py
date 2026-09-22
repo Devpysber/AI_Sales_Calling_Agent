@@ -10,6 +10,7 @@ instance executes jobs at a time.
 import asyncio
 import os
 import socket
+import time
 from datetime import datetime, timedelta
 
 from app.core import store
@@ -17,7 +18,7 @@ from app.core.logging import get_logger
 from app.services import agents, events
 from app.services.call_service import IST, CallError, CallService, within_calling_hours
 from app.services.crm_service import CRMService
-from app.services.notification_service import send_email
+from app.services.notification_service import send_email, email_sent
 from app.services.settings_service import SettingsService
 
 log = get_logger(__name__)
@@ -126,14 +127,18 @@ def job_meeting_reminder(agent_id, cfg, force=False):
     persona = agents.get_profile(agent_id)
     tomorrow = (datetime.now(IST) + timedelta(days=1)).strftime("%Y-%m-%d")
     sent = 0
+    failed = 0
     for lead in CRMService(agent_id).meetings_on(tomorrow):
         if lead["email"]:
-            send_email(lead["email"], f"Reminder: your meeting with {persona['company_name']} tomorrow",
+            status = send_email(lead["email"], f"Reminder: your meeting with {persona['company_name']} tomorrow",
                        f"Hi {lead['name'] or 'there'},\n\nThis is a reminder of your meeting with {persona['company_name']} "
                        f"on {lead['meeting_at']} IST.\n\nRegards,\n{persona['agent_name']}\n{persona['company_name']}",
                        lead_id=lead["id"], agent_id=agent_id)
-            sent += 1
-    return f"{sent} reminder(s) sent for {tomorrow}"
+            if email_sent(status):
+                sent += 1
+            else:
+                failed += 1
+    return f"{sent} reminder(s) sent for {tomorrow}" + (f", {failed} failed" if failed else "")
 
 
 def job_daily_report(agent_id, cfg, force=False):
@@ -163,7 +168,7 @@ def _state_key(agent_id: int, job: str) -> str:
 
 
 QUIET_RESULTS = ("outside calling hours", "no pending leads", "no leads to retry", "no callbacks due",
-                 "queue empty", "all call slots busy", "nothing to do", "no leads due")
+                 "queue empty", "all call slots busy", "nothing to do", "no leads due", "no leads to follow up")
 
 
 def _did_nothing(result: str) -> bool:
@@ -173,7 +178,11 @@ def _did_nothing(result: str) -> bool:
     return text.startswith("0 reminder") or any(text.startswith(q) or q in text for q in QUIET_RESULTS)
 
 
+_last_job: dict[int, str] = {}   # the job each agent ran last; a crashed tick reports it so heal can re-run it
+
+
 def run_job(agent_id: int, name: str, force: bool = False, actor: str = "scheduler") -> str:
+    _last_job[agent_id] = name
     cfg = agents.get_automation(agent_id)
     try:
         result = JOBS[name](agent_id, cfg, force=force)
@@ -229,7 +238,15 @@ def tick():
                 run_job(agent_id, "queue")
         except agents.AgentNotFound:
             continue  # deleted mid-tick
+        except Exception as e:
+            log.exception("Tick failed for agent %s", agent_id)
+            from app.services.heal_service import report
+            report("scheduler_error", f"Agent {agent_id}: {type(e).__name__}: {str(e)[:300]}", agent_id=agent_id,
+                   data={"agent_id": agent_id, "job": _last_job.get(agent_id)})
+            continue
     CallService().expire_stale()
+    from app.services.heal_service import SCHEDULER_TICK_KEY
+    store.set_json(SCHEDULER_TICK_KEY, time.time())
 
 
 async def scheduler_loop():

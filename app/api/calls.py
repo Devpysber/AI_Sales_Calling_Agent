@@ -72,9 +72,15 @@ async def hangup(call_id: int, agent_id: int = Depends(workspace)):
 async def monitor_call(websocket: WebSocket, call_id: int, agent_id: int):
     """Live supervision of one call: state + both audio tracks out, supervisor commands and microphone audio in."""
     from app.core.auth import COOKIE, auth_enabled, read_token
+    from app.services import team_service
 
     # HTTP auth middleware does not run for WebSockets: check the session cookie here.
-    if auth_enabled() and not read_token(websocket.cookies.get(COOKIE)):
+    payload = read_token(websocket.cookies.get(COOKIE)) if auth_enabled() else {"u": "admin"}
+    try:
+        allowed = bool(payload) and (payload.get("u") != "team" or (agent_id in payload.get("unlocked", []) and team_service.by_id(payload.get("team_id"))))
+    except Exception:  # noqa: BLE001 - a lookup that fails is a denied connection, not a hung socket
+        allowed = False
+    if not allowed:
         await websocket.close(code=4401)
         return
     stream = next((s for s in LIVE.values() if s.agent_id == agent_id and str(s.session.get("call_id")) == str(call_id)), None)

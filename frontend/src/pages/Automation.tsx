@@ -11,7 +11,7 @@ import { useAgent } from '@/lib/agent'
 
 type Resp = { settings: AutomationSettings; within_calling_hours: boolean; jobs: Record<string, { label: string; at?: string; result?: string }> }
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
-const hourLabel = (h: number) => `${((h + 11) % 12) + 1}:00 ${h < 12 ? 'AM' : 'PM'}`
+const hourLabel = (h: number) => (h === 24 ? '12:00 AM (midnight)' : `${((h + 11) % 12) + 1}:00 ${h < 12 ? 'AM' : 'PM'}`)
 /** The form draft: number fields may sit empty while the user is mid-edit (Backspace must be able to clear them). */
 type Draft = { [K in keyof AutomationSettings]: AutomationSettings[K] extends number ? number | '' : AutomationSettings[K] }
 type NumKey = { [K in keyof AutomationSettings]: AutomationSettings[K] extends number ? K : never }[keyof AutomationSettings]
@@ -28,7 +28,7 @@ const LIMITS: Record<NumKey, [label: string, min: number, max: number]> = {
   retry_min_gap_minutes: ['Wait between attempts', 5, 1440],
   max_retries: ['Max attempts', 1, 10],
   calling_hours_start: ['Calling window start', 0, 23],
-  calling_hours_end: ['Calling window end', 0, 23],
+  calling_hours_end: ['Calling window end', 1, 24],
   max_concurrent_calls: ['Max simultaneous calls', 1, 100],
   meeting_reminder_hour: ['Reminder hour', 0, 23],
   daily_report_hour: ['Report hour', 0, 23],
@@ -196,7 +196,7 @@ export default function Automation() {
               <p className="text-sm break-words text-muted">Automated calls only go out inside this window (IST). TRAI permits promotional calls 9 AM – 9 PM.</p>
               <div className="mt-4 grid gap-4 sm:grid-cols-3">
                 <Field label="From"><Select value={form.calling_hours_start} onChange={(e) => set('calling_hours_start', Number(e.target.value))}>{HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}</Select></Field>
-                <Field label="Until"><Select value={form.calling_hours_end} onChange={(e) => set('calling_hours_end', Number(e.target.value))}>{HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}</Select></Field>
+                <Field label="Until"><Select value={form.calling_hours_end} onChange={(e) => set('calling_hours_end', Number(e.target.value))}>{[...HOURS.slice(1), 24].map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}</Select></Field>
                 <Field label="Max simultaneous calls" hint="Across all triggers"><Input type="number" min={1} max={100} value={form.max_concurrent_calls} onChange={(e) => set('max_concurrent_calls', num(e.target.value, form.max_concurrent_calls))} /></Field>
               </div>
               <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Calling days">

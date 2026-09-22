@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { CheckCircle2, CircleAlert, Copy, PlugZap, RefreshCw, Server, WifiOff } from 'lucide-react'
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { toast } from 'sonner'
+import HealPanel from '@/components/HealPanel'
 import InboundSetup from '@/components/InboundSetup'
 import SecretsForm from '@/components/SecretsForm'
 import TeamMembers from '@/components/TeamMembers'
@@ -69,6 +70,7 @@ export default function Settings() {
           )
         })()}
       </PageHeader>
+      <HealPanel />
       {isError && !s ? (
         <Card>
           <EmptyState icon={<WifiOff />} title="Couldn't load system status" description={error instanceof Error ? error.message : 'The status endpoint did not respond.'}

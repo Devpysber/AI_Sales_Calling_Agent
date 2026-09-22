@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     admin_email: str = Field("", alias="ADMIN_EMAIL")
     admin_password: str = Field("", alias="ADMIN_PASSWORD")
     secret_key: str = Field("", alias="SECRET_KEY")
+    heal_export_token: str = Field("", alias="HEAL_EXPORT_TOKEN")   # read-only token for the cloud fix agent; empty = generated in the DB
     api_token: str = Field("", alias="API_TOKEN")
 
     # ---------------- LLM ----------------
