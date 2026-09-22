@@ -180,6 +180,10 @@ export default function NewAgentSheet({ open, onClose, onCreated }: {
     const name = (f.name ?? '').trim()
     if (!name) { toast.error('Give the agent a name'); return }
     if (contactPhoneError) { toast.error(contactPhoneError); return }
+    // Both required: a workspace with no passcode is open to every team member in the account, and one
+    // with nobody to ring hands a caller who asked for a person to silence.
+    if (!(f.agent_password ?? '').trim()) { toast.error('Set an agent passcode', { description: "It is what stops other team members opening this workspace's CRM." }); return }
+    if (!contactPhone.trim()) { toast.error('Name who takes the call when a caller asks for a person', { description: 'Without a number the agent promises a hand-over it cannot make.' }); return }
     const t = TEMPLATES.find((x) => x.id === template) ?? TEMPLATES[0]!
     // Only send what was filled in: blanks keep the copied agent's (or the default) values.
     const profile: Record<string, string> = Object.fromEntries(
@@ -240,17 +244,18 @@ export default function NewAgentSheet({ open, onClose, onCreated }: {
             <ColorPicker value={color} onChange={setColor} labelledBy="new-agent-colour" />
             <span className="text-xs break-words text-muted">Tells this agent apart in the switcher and on call cards.</span>
           </div>
-          <Field label="Agent passcode" hint="Require team members to enter this password to open this workspace's CRM. Leave empty for open access.">
-            <Input name="agent_password" type="password" autoComplete="new-password" placeholder="No passcode required" />
+          <Field label="Agent passcode" hint="Team members enter this to open the workspace's CRM. Required: without it, anyone on the account can open it.">
+            <Input name="agent_password" type="password" autoComplete="new-password" placeholder="Choose a passcode" required />
           </Field>
         </section>
 
         <section className="space-y-4 border-t border-border pt-5">
           <h3 className="text-sm font-semibold">Who takes the call when a caller asks for a person</h3>
+          <p className="text-xs text-muted">Required. The agent offers a hand-over only when it has somebody to ring.</p>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Name"><Input value={contactName} onChange={(e) => setContactName(e.target.value)} placeholder="e.g. Neha" maxLength={120} /></Field>
             <Field label="Phone" error={contactPhoneError}>
-              <Input value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} inputMode="tel" placeholder="+91 98765 43210" />
+              <Input value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} inputMode="tel" placeholder="+91 98765 43210" required />
             </Field>
           </div>
           <Field label="Email"><Input type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} placeholder="name@company.com" maxLength={200} /></Field>

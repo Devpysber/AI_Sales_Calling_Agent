@@ -55,6 +55,8 @@ const SETUP_STEPS: { key: keyof AgentSummary['setup']; label: string; to: string
   { key: 'knowledge', label: 'Add knowledge', to: '/knowledge' },
   { key: 'leads', label: 'Import leads', to: '/import' },
   { key: 'number', label: 'Assign a phone number', to: '/settings' },
+  { key: 'handover', label: 'Name who takes a hand-over', to: '/inbound' },
+  { key: 'passcode', label: 'Set the workspace passcode', to: '/settings' },
   { key: 'automation', label: 'Switch on automation', to: '/automation' },
 ]
 
