@@ -411,3 +411,18 @@ def test_designated_agent_is_only_the_fallback_on_a_shared_number(client, base, 
         assert s["agent_id"] == hair["id"] and s["lead"]["call_purpose"] == "team" and s["lead_id"] is None
     finally:
         agents.set_inbound_owner("918000000000", None)
+
+
+def test_inbound_owner_card_follows_the_agents_own_number(client, base):
+    from app.services import agents
+    own = client.post("/api/agents", json={"name": "Own line", "phone_number": "+918111111111"}).json()
+    shared = client.post("/api/agents", json={"name": "Shared line"}).json()
+    try:
+        mine = client.get(f"/api/agents/{own['id']}/inbound-owner").json()
+        assert mine["number"] == "918111111111" and mine["own_number"] and mine["owner_id"] == own["id"]
+        assert [a["id"] for a in mine["sharing"]] == [own["id"]]
+        theirs = client.get(f"/api/agents/{shared['id']}/inbound-owner").json()
+        assert theirs["number"] == "918000000000" and not theirs["own_number"]
+        assert own["id"] not in [a["id"] for a in theirs["sharing"]] and shared["id"] in [a["id"] for a in theirs["sharing"]]
+    finally:
+        agents.delete(own["id"], actor="admin"); agents.delete(shared["id"], actor="admin")

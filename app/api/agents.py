@@ -344,9 +344,19 @@ def automation(agent_id: int = Depends(workspace)):
 def get_inbound_owner(agent_id: int = Depends(workspace)):
     """Which agent answers calls to this agent's line (shared numbers: many dial out, one answers)."""
     number = agents.caller_id(agent_id)
+    default = "".join(c for c in (settings.plivo_phone_number or "") if c.isdigit())
+    digits = lambda a: "".join(c for c in (a.get("phone_number") or "") if c.isdigit())  # noqa: E731
+    rows = agents.list_agents()
+    # Agents on this line: on the default number, everyone without a number of their own; on an agent's own
+    # number, only the agents that carry that exact number.
+    sharing = [a for a in rows if digits(a) == number or (number == default and digits(a) == "")]
+    # Who answers: the designated agent, else (own number) the first agent carrying it — the same fallback
+    # for_inbound() applies on a real call, so the page never shows "no agent designated" for a line that has one.
     owner = agents.inbound_owner(number) if number else None
-    sharing = [a for a in agents.list_agents() if "".join(c for c in (a.get("phone_number") or "") if c.isdigit()) in (number, "")]
-    return {"number": number, "owner_id": owner, "sharing": [{"id": a["id"], "name": a["name"]} for a in sharing]}
+    if owner is None and number and number != default:
+        owner = next((a["id"] for a in sharing if digits(a) == number), None)
+    return {"number": number, "owner_id": owner, "own_number": bool(number and number != default),
+            "sharing": [{"id": a["id"], "name": a["name"]} for a in sharing]}
 
 
 @router.put("/{agent_id}/inbound-owner")

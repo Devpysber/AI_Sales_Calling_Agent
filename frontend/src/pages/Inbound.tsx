@@ -22,7 +22,7 @@ const KEYS: (keyof Routing)[] = ['transfer_number', 'team_members', 'inbound_mod
 
 export default function Inbound() {
   const { agent, base, path } = useAgent()
-  const ownerQ = useQuery({ queryKey: ['inbound-owner', base], queryFn: () => api<{ number: string; owner_id: number | null; sharing: { id: number; name: string }[] }>(`${base}/inbound-owner`) })
+  const ownerQ = useQuery({ queryKey: ['inbound-owner', base], queryFn: () => api<{ number: string; owner_id: number | null; own_number?: boolean; sharing: { id: number; name: string }[] }>(`${base}/inbound-owner`) })
   const setOwner = useMutation({
     mutationFn: () => api(`${base}/inbound-owner`, { method: 'PUT' }),
     onSuccess: () => { toast.success(`${agent?.name} now answers inbound calls on this line`); void qc.invalidateQueries({ queryKey: ['inbound-owner'] }) },
@@ -170,7 +170,9 @@ export default function Inbound() {
         description="Choose who answers when customers call, and where the AI sends callers who need a person." />
 
       <Card className="mb-4">
-        <CardHeader title="Who answers this line" description="Several agents can dial out from one number. A customer who is already in an agent's CRM gets that agent back (its persona and knowledge); one known to several agents is asked which matter the call is about, then handed to that agent. A new number goes to the agent chosen here. Your own team members are recognised by their number and get their agent in check-in mode (asked which one, if they work with several). Give an agent its own number under Agent settings when you get one." />
+        <CardHeader title="Who answers this line" description={ownerQ.data?.own_number
+          ? `This agent has its own number: every call to it is answered here, with this agent's persona, knowledge and CRM. Its team members are recognised by their number and get check-in mode.`
+          : "Several agents can dial out from one number. A customer who is already in an agent's CRM gets that agent back (its persona and knowledge); one known to several agents is asked which matter the call is about, then handed to that agent. A new number goes to the agent chosen here. Your own team members are recognised by their number and get their agent in check-in mode (asked which one, if they work with several). Give an agent its own number under Agent settings when you get one."} />
         <div className="flex flex-wrap items-center gap-3 px-4 pb-4 text-sm sm:px-5 sm:pb-5">
           {ownerQ.data ? (
             <>
