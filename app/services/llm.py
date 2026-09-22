@@ -597,6 +597,14 @@ def embed(texts: list[str], timeout: float = 30, task: str = "document",
     return answered[1] if answered else None
 
 
+def embeddings_configured() -> bool:
+    """Whether any embedding provider has a key. Without one there is nothing to retry."""
+    for name in [p.strip() for p in settings.embedding_providers.split(",") if p.strip()]:
+        if (name == "gemini" and settings.gemini_api_key) or (name == "openrouter" and settings.openrouter_api_key):
+            return True
+    return False
+
+
 def embed_with_provider(texts: list[str], timeout: float = 30, task: str = "document",
                         provider: str | None = None) -> tuple[str, list[list[float]]] | None:
     """As `embed`, but also says which provider answered, so the caller can pin later calls to it."""

@@ -239,7 +239,8 @@ def _embed_with_retry(batch: list[str], provider: str | None) -> tuple[str, list
     `provider` pins every batch after the first to whoever answered the first one: half a
     document embedded by one model and half by another ranks worse than no embeddings at all.
     """
-    for wait in EMBED_RETRY_WAITS:
+    waits = EMBED_RETRY_WAITS if llm.embeddings_configured() else ()
+    for wait in waits:
         answered = llm.embed_with_provider(batch, provider=provider)
         if answered is not None:
             return answered
