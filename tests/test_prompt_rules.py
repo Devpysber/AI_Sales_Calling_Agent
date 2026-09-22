@@ -64,6 +64,7 @@ def test_prompt_stays_within_the_cost_budget():
 
 
 SITUATIONS = {
+    "out of scope hands to the team": r"Out of scope \(a specific car",
     "no OTP/payment ever": r"NEVER ask for or accept an OTP",
     "abuse stays calm": r"Abuse, threats",
     "third party pickup": r"Someone else picks up",

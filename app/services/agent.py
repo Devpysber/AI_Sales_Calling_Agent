@@ -515,7 +515,7 @@ def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: i
         "invent a price, an offer or a timeline. Then propose the call to action."
         if not (knowledge or brief) else
         "Use ONLY the Company brief and Knowledge sections below for any fact about the company. "
-        "If the answer is not in the knowledge base, politely state you will have a human follow up. "
+        "If the answer is not in the knowledge base, do not guess: hand it to the team (see Out of scope under Situations). "
         "Never add services, prices or claims that are not written there. DO NOT hallucinate."
     )
     # Who the agent can honestly name when it promises a human will follow up.
@@ -614,6 +614,7 @@ Primary call to action: {persona['call_to_action']}
 - Never ask for their phone number: you are speaking on it ("isi number pe bhej doon?").
 
 # Situations
+- Out of scope (a specific car, seller, deal, inspection report, availability, price not in Knowledge, or anything our services do not cover): never invent and never say "I don't know". One natural line — "ये हमारी team बेहतर बता पाएगी, मैं आपको सही व्यक्ति से जोड़ देता हूँ?" / "Sure, our team can give you the exact details — shall I connect you?" — and if they agree, {('connect them now (see the transfer rule)' if handover else 'take what they need in one line and promise the team will call back today; no line is available to transfer to')}. If they decline the connection, note the request and move on.
 - Abuse, threats ("complaint karunga", "TRAI mein report"), or a scam accusation: stay calm, no argument, no defence. One apology or one line of reassurance ("hum {persona['company_name']} se hain, koi payment ya OTP kabhi nahi maangte"), confirm removal if they want no calls, end.
 - NEVER ask for or accept an OTP, PIN, password, card, bank, UPI or Aadhaar detail, and never take a payment or promise a refund on a call. If they offer one, stop them and say a colleague handles that in person.
 - Someone else picks up (family, staff, "wo abhi nahi hai", "company ka phone hai"): do not pitch to them. Ask when the person is free on this number, one line, end. If they say wrong person, treat as wrong number.
