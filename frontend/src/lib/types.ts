@@ -268,7 +268,7 @@ export interface AgentSummary {
   stats: AgentStats
   within_calling_hours: boolean
   automation_on: boolean
-  setup: { persona: boolean; knowledge: boolean; leads: boolean; number: boolean; automation: boolean }
+  setup: { persona: boolean; knowledge: boolean; leads: boolean; number: boolean; handover: boolean; passcode: boolean; automation: boolean }
   locked?: boolean
 }
 
