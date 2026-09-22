@@ -32,6 +32,17 @@ export default function InboundSetup() {
     })
     if (ok) act.mutate('connect')
   }
+  // One click here used to silently send every inbound call back to the old Plivo application.
+  const restore = async () => {
+    if (!s?.previous_app) return
+    const ok = await confirm({
+      title: `Send inbound calls on ${s.number} back to “${s.previous_app.app_name ?? s.previous_app.app_id}”?`,
+      description: 'Your agent will stop answering incoming calls on this number until you press Connect inbound again. Outbound calls are not affected.',
+      confirmLabel: 'Restore old application',
+      danger: true,
+    })
+    if (ok) act.mutate('restore')
+  }
   if (isLoading) return <Skeleton className="h-16" />
   if (!s) return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl bg-warning-soft px-3 py-2 text-warning">
@@ -60,7 +71,7 @@ export default function InboundSetup() {
         <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">
           {!s.connected && <Button variant="primary" className="w-full sm:w-auto" loading={act.isPending && act.variables === 'connect'} disabled={act.isPending} onClick={() => void connect()}><PlugZap />{stale ? 'Reconnect' : 'Connect inbound'}</Button>}
           {s.connected && <Badge tone="success" dot>Live</Badge>}
-          {s.previous_app && <Button className="w-full min-w-0 sm:w-auto sm:max-w-full" loading={act.isPending && act.variables === 'restore'} disabled={act.isPending} onClick={() => act.mutate('restore')}><span className="truncate">Restore “{s.previous_app.app_name ?? s.previous_app.app_id}”</span></Button>}
+          {s.previous_app && <Button className="w-full min-w-0 sm:w-auto sm:max-w-full" loading={act.isPending && act.variables === 'restore'} disabled={act.isPending} onClick={() => void restore()}><span className="truncate">Restore “{s.previous_app.app_name ?? s.previous_app.app_id}”</span></Button>}
         </div>
       </div>
       {s.voice_enabled === false && <p className="mt-2 text-xs text-danger">Voice is disabled on this number in Plivo.</p>}

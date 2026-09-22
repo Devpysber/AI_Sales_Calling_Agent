@@ -167,23 +167,23 @@ export function AgentAvatar({ className, zoomOut = false, isSpeaking = false, is
     renderer.domElement.style.display = 'block'
     el.appendChild(renderer.domElement)
 
-    // Lighting (Portfolio matched)
-    const directionalLight = new THREE.DirectionalLight(0x5eead4, 1)
-    directionalLight.position.set(-0.47, -0.32, -1)
-    scene.add(directionalLight)
+    // Lighting: a warm key and a neutral fill so the skin reads as skin; the cool lights are rims only.
+    // (Three saturated cyan lights used to tint the whole face cyan-white.)
+    const keyLight = new THREE.DirectionalLight(0xfff0dc, 1.6)
+    keyLight.position.set(1.5, 2.5, 3)
+    scene.add(keyLight)
 
-    const pointLight = new THREE.PointLight(0x22d3ee, 50, 100, 3)
-    pointLight.position.set(3, 12, 4)
-    scene.add(pointLight)
-
-    const fillLight = new THREE.DirectionalLight(0xffffff, 1.5)
+    const fillLight = new THREE.DirectionalLight(0xffffff, 0.9)
     fillLight.position.set(0, 0, 5)
     scene.add(fillLight)
 
-    // Cyan/Teal rim light from bottom left
-    const cyanRim = new THREE.DirectionalLight(0x00ffff, 2.0)
-    cyanRim.position.set(-5, -2, 2)
-    scene.add(cyanRim)
+    const ambient = new THREE.HemisphereLight(0xdfe8ff, 0x1a1a24, 0.5)
+    scene.add(ambient)
+
+    // Soft teal rim from the back-left keeps the dark-theme look without washing the face.
+    const rim = new THREE.DirectionalLight(0x67e8f9, 0.6)
+    rim.position.set(-4, 1, -3)
+    scene.add(rim)
 
     const group = new THREE.Group()
     scene.add(group)
