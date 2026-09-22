@@ -132,3 +132,22 @@ def test_search_matches_any_phone_format(client, base):
         assert any(l["name"] == "Format Test" for l in items), q
     board = client.get(f"{base}/leads/board", params={"search": "98765 44444", "per_column": 100}).json()
     assert sum(c["total"] for c in board.values()) >= 1
+
+
+def test_any_builder_field_names_land_on_the_lead(client, base):
+    """A form written for a clinic, a school or a showroom must not need renaming to work."""
+    agent_id = int(base.rsplit("/", 1)[1])
+    token = client.post(f"{base}/intake/rotate").json()["token"]
+    res = client.post(f"/api/public/agents/{agent_id}/leads", params={"token": token},
+                      data={"patient_name": "Neha Rao", "mobile": "9812377001", "e-mail": "neha@x.com", "clinic": "Smile Dental",
+                            "branch": "Indore", "treatment": "root canal quote", "utm_medium": "google-ads",
+                            "preferred_slot": "Saturday 11am", "_wpcf7_version": "5.9", "g-recaptcha-response": "xyz",
+                            "website": ""})
+    assert res.status_code == 200, res.text
+    lead = client.get(f"{base}/leads", params={"search": "9812377001"}).json()["items"][0]
+    assert lead["name"] == "Neha Rao" and lead["email"] == "neha@x.com"
+    assert lead["company"] == "Smile Dental" and lead["city"] == "Indore"
+    assert "root canal quote" in (lead.get("requirements") or "") + (lead.get("notes") or "")
+    notes = lead.get("notes") or ""
+    assert "Saturday 11am" in notes                  # unknown fields are kept for the agent
+    assert "wpcf7" not in notes.lower() and "recaptcha" not in notes.lower()

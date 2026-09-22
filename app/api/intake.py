@@ -32,17 +32,25 @@ CORS = {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POS
 FIELDS = ("name", "phone", "email", "company", "city", "message", "source", "language")
 # Field names other form builders / CRMs use for the same thing (WordPress, Webflow, Elementor, Zapier...).
 ALIASES = {
-    "name": ("full_name", "fullname", "your-name", "your_name", "first_name", "firstname", "contact_name", "customer_name", "lead_name"),
-    "phone": ("mobile", "mobile_number", "phone_number", "phonenumber", "contact", "contact_number", "tel", "telephone", "whatsapp", "your-phone", "your_phone"),
-    "email": ("email_address", "emailaddress", "your-email", "your_email", "mail"),
-    "company": ("organisation", "organization", "org", "business", "company_name", "firm"),
-    "city": ("location", "town", "area", "place", "city_name"),
-    "message": ("msg", "comments", "comment", "enquiry", "inquiry", "query", "requirement", "requirements", "details", "your-message", "your_message", "description", "notes"),
-    "source": ("utm_source", "campaign", "utm_campaign", "form_name", "form", "page", "landing_page"),
-    "language": ("lang", "preferred_language"),
+    "name": ("full_name", "fullname", "your-name", "your_name", "first_name", "firstname", "fname", "contact_name", "customer_name",
+             "lead_name", "patient_name", "student_name", "guest_name", "client_name", "applicant_name", "naam"),
+    "phone": ("mobile", "mobile_number", "phone_number", "phonenumber", "contact", "contact_number", "contact_no", "phone_no", "mob",
+              "tel", "telephone", "whatsapp", "whatsapp_number", "your-phone", "your_phone", "cell", "number"),
+    "email": ("email_address", "emailaddress", "your-email", "your_email", "mail", "e_mail", "e-mail"),
+    "company": ("organisation", "organization", "org", "business", "company_name", "firm", "clinic", "school", "college", "institute",
+                "shop", "store", "brand", "dealership"),
+    "city": ("location", "town", "area", "place", "city_name", "region", "branch", "state", "pincode", "zip", "postcode"),
+    "message": ("msg", "comments", "comment", "enquiry", "inquiry", "query", "requirement", "requirements", "details", "your-message",
+                "your_message", "description", "notes", "subject", "reason", "interest", "interested_in", "service", "services",
+                "product", "course", "treatment", "property", "package", "problem", "issue", "help", "question"),
+    "source": ("utm_source", "campaign", "utm_campaign", "utm_medium", "form_name", "form", "form_id", "page", "landing_page",
+               "referrer", "ref", "channel", "ad", "adgroup"),
+    "language": ("lang", "preferred_language", "locale", "language_preference"),
 }
 # Never recorded: honeypots, tokens and framework noise.
-IGNORED = {"website", "url_hp", "token", "csrf", "_token", "csrfmiddlewaretoken", "g-recaptcha-response", "h-captcha-response", "submit", "action", "_wpcf7", "_wpnonce"}
+IGNORED = {"website", "url_hp", "token", "csrf", "_token", "csrfmiddlewaretoken", "g-recaptcha-response", "h-captcha-response", "cf-turnstile-response",
+           "submit", "action", "_wpcf7", "_wpcf7_version", "_wpcf7_locale", "_wpcf7_unit_tag", "_wpcf7_container_post", "_wpnonce",
+           "formid", "form_id_hidden", "hs_context", "__vtrftk", "entry_id", "gform_submit", "is_submit", "state", "consent", "terms", "agree"}
 
 
 def normalise(body: dict) -> tuple[dict, dict]:

@@ -286,9 +286,10 @@ function WebsiteIntake() {
   }
   if (!data) return <Skeleton className="h-64 xl:col-span-2" />
   const snippets = {
-    html: `<form accept-charset="UTF-8" action="${data.url}" method="POST">\n  <input name="name" placeholder="Your name" required>\n  <input name="phone" placeholder="Phone" required>\n  <input name="email" placeholder="Email">\n  <textarea name="message" placeholder="How can we help?"></textarea>\n  <input name="website" style="display:none" tabindex="-1" autocomplete="off">\n  <button>Request a call</button>\n</form>`,
-    js: `await fetch("${data.url}", {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify({ name, phone, email, message, source: "landing-page" }),\n})`,
-    curl: `curl -X POST "${data.url}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"name":"Rahul","phone":"9876543210","message":"Interested"}'`,
+    // Works for any kind of agent: only phone is required, everything else is optional and free-form.
+    html: `<form accept-charset="UTF-8" action="${data.url}" method="POST">\n  <input name="name" placeholder="Your name">\n  <input name="phone" placeholder="Phone" required>\n  <input name="email" placeholder="Email">\n  <input name="city" placeholder="City">\n  <textarea name="message" placeholder="What do you need?"></textarea>\n  <input type="hidden" name="source" value="website">\n  <input name="website" style="display:none" tabindex="-1" autocomplete="off">\n  <button>Request a call</button>\n</form>`,
+    js: `await fetch("${data.url}", {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify({\n    phone,                 // required\n    name, email, city,     // optional\n    message,               // what they asked for, in their words\n    source: "website",     // or the campaign / page name\n    language: "hi-IN",     // optional: the agent calls in this language\n  }),\n})`,
+    curl: `curl -X POST "${data.url}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"phone":"9876543210","name":"Rahul","city":"Bhopal","message":"Wants a demo","source":"website"}'`,
   }
   const copy = async (t: string) => {
     try { await navigator.clipboard.writeText(t); toast.success('Copied') }
@@ -302,7 +303,7 @@ function WebsiteIntake() {
         <div className="min-w-0 flex-1 w-full">
           <div className="flex flex-wrap items-center gap-2"><h3 className="font-bold break-words">Website form → {agent?.name}</h3>
             <Badge tone={fate.tone} dot className="max-w-full whitespace-normal">{fate.label}</Badge></div>
-          <p className="mt-1 text-sm break-words text-muted">Send enquiries from any website, landing page, WordPress/Webflow form, Zapier or your backend straight into this agent's leads. Use a separate agent per website to keep each site's leads, script and reports apart.</p>
+          <p className="mt-1 text-sm break-words text-muted">One link that takes enquiries from any website, landing page, WordPress, Webflow, Elementor, Google or Meta lead forms, Zapier, Make or your own backend — whatever this agent is for: sales, a clinic, a school, a showroom, support or bookings. Give each website its own agent so its leads, script and reports stay apart.</p>
           <div className="mt-3 flex min-w-0 items-center gap-2 rounded-xl border border-border bg-surface-2 px-3 py-2">
             <code className="min-w-0 flex-1 truncate font-mono text-[12.5px]" title={data.url}>{data.url}</code>
             <Button size="icon" variant="ghost" onClick={() => copy(data.url)} aria-label="Copy form link"><Copy /></Button>
@@ -315,7 +316,7 @@ function WebsiteIntake() {
             <Button size="sm" variant="ghost" className="sm:ml-auto" onClick={() => copy(snippets[tab])}><Copy />Copy snippet</Button>
           </div>
           <pre className="mt-2 max-h-56 min-w-0 overflow-auto rounded-xl bg-ink p-3 font-mono text-[12px] leading-relaxed break-all whitespace-pre-wrap text-ink-fg">{snippets[tab]}</pre>
-          <p className="mt-2 text-xs break-words text-muted">Any form works: phone is required; name, email, company, city, message, source and language (e.g. hi-IN) are recognised under their usual names (your-name, mobile, enquiry…), and every other field the form collects is saved on the lead for the agent to use. Repeat enquiries update the same lead. Bots filling the hidden “website” field are ignored.</p>
+          <p className="mt-2 text-xs break-words text-muted">Only <b>phone</b> is required. Name, email, company, city, message, source and language (e.g. hi-IN) are recognised under the names builders use — your-name, mobile, whatsapp, enquiry, treatment, course, property, utm_source and more — so an existing form usually needs no change. Anything else the form collects (budget, model, appointment time, class…) is saved on the lead and the agent reads it before it calls. Repeat enquiries update the same lead; captcha, nonce and hidden “website” honeypot fields are ignored.</p>
         </div>
         <Button size="sm" variant="ghost" className="w-full sm:w-auto" loading={rotate.isPending} onClick={async () => {
           if (rotate.isPending) return
