@@ -295,3 +295,25 @@ def test_colleague_on_one_agent_goes_straight_there(client, base):
     client.put(f"/api/agents/{a['id']}/profile", json={"team_members": [{"name": "Raj", "role": "Sales", "phone": "+919812399002"}]})
     session = CallService(None).create_inbound("919812399002", "918000000000", "team-1")
     assert session["agent_id"] == a["id"] and session["lead"]["call_purpose"] == "team" and "choices" not in session["lead"]
+
+
+def test_unknown_caller_asking_for_the_other_desk_reaches_that_desk(client, base, monkeypatch):
+    from app.services import agents, llm
+    from app.services.call_service import CallService
+    agents._desks_cache["at"] = 0.0
+    a = client.post("/api/agents", json={"name": "Cars A"}).json()
+    b = client.post("/api/agents", json={"name": "Hair B"}).json()
+    client.put(f"/api/agents/{a['id']}/profile", json={"company_name": "Acme Cars"})
+    client.put(f"/api/agents/{b['id']}/profile", json={"company_name": "Hairscope", "team_members": [{"name": "Neha", "role": "Sales", "phone": "+919812399100", "email": "neha@hairscope.test"}]})
+    agents._desks_cache["at"] = 0.0
+    from app.services import agent
+    text = agent._system_prompt(agents.get_profile(a["id"]), {"call_purpose": "inbound"}, [], a["id"])
+    assert "Other desks of ours" in text and "Hairscope" in text
+    sent = []
+    monkeypatch.setattr("app.services.notification_service.send_email", lambda to, subject, body, **k: sent.append((to, subject)) or "sent via test")
+    monkeypatch.setattr(llm, "complete", lambda *a, **k: llm.LLMResult(
+        '{"summary":"Caller wants Hairscope hair treatment pricing.","qualification":"Unknown","outcome":"other","sentiment":"neutral",'
+        '"team_action":"Hairscope team to call back about hair treatment pricing","urgent":false}', "fake", "m", 5))
+    lead = client.post(f"/api/agents/{a['id']}/leads", json={"name": "Wrong Desk", "phone": "9812399101"}).json()
+    CallService(a["id"])._summarize_inner(0, lead["id"], [{"role": "customer", "text": "Hairscope ke baare mein call kiya"}])
+    assert any(to == "neha@hairscope.test" and "[Hairscope]" in subject for to, subject in sent), sent

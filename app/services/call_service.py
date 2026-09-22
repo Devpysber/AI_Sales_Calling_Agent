@@ -606,6 +606,33 @@ class CallService:
         subject = ("URGENT: " if urgent else "") + f"{who} needs a callback - {persona['company_name']}"
         with contextlib.suppress(Exception):
             notify_team(subject, "\n".join(lines), lead_id=lead_id, agent_id=self.agent_id)
+        other = self._desk_named_in(action + " " + str(summary.get("summary") or ""))
+        if other:
+            # A caller on the shared number asked for one of our other desks: that desk's own people get the
+            # message, on their agent's timeline, instead of it dying in this desk's inbox.
+            other_persona = agents.get_profile(other)
+            events.record("call.handover", f"For {other_persona['company_name']}: {action}", f"from {who}, took the call on {persona['company_name']}",
+                          agent_id=other, lead_id=None, call_id=call_id, actor="ai")
+            from app.services.notification_service import send_email, email_sent
+            for m in other_persona.get("team_members") or []:
+                address = (m.get("email") or "").strip() if isinstance(m, dict) else ""
+                if address:
+                    with contextlib.suppress(Exception):
+                        send_email(address, f"[{other_persona['company_name']}] {subject}", "\n".join(lines), agent_id=other, actor="ai")
+
+    def _desk_named_in(self, text: str) -> int | None:
+        """Another of our agents whose company or agent name appears in the text; None when none or ours."""
+        lowered = (text or "").lower()
+        if not lowered:
+            return None
+        for a in agents.desks():
+            if a["id"] == self.agent_id:
+                continue
+            for key in ("company_name", "agent_name"):
+                name = str(a.get(key) or "").strip().lower()
+                if len(name) >= 4 and name in lowered:
+                    return a["id"]
+        return None
 
     def _missed_call_email(self, lead_id: int, lead: dict, next_at: str):
         """Tell a lead we rang at the time they asked for, missed them, and when we will try again."""

@@ -22,7 +22,7 @@ from app.services.tts import LANGUAGES
 
 log = get_logger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
-MAX_HISTORY_TURNS = 14          # every turn resends history: fewer turns = fewer billed tokens
+MAX_HISTORY_TURNS = 10          # every turn resends history: fewer turns = fewer billed tokens; older turns live in the summary
 LIVE_EMBED_TIMEOUT = 0.3        # a live turn waits this long for a query embedding that was not prefetched
 COMPACT_AFTER_TURNS = 20        # a call this long gets its older turns folded into one summary line
 COMPACT_EVERY_TURNS = 6         # and re-folded this often after that
@@ -478,6 +478,16 @@ def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: i
 
     # A colleague checking the agent gets its live numbers; a customer never sees any of this.
     status = team_brief(agent_id) if (agent_id and lead.get("call_purpose") in ("team", "admin")) else ""
+    other_desks = ""
+    if agent_id and lead.get("call_purpose") not in ("team", "admin"):
+        with contextlib.suppress(Exception):
+            mine = (persona.get("company_name") or "").strip().lower()
+            others = list(dict.fromkeys(a["company_name"] + (f" ({a['tagline'][:60]})" if a["tagline"] else "")
+                                        for a in agents.desks() if a["id"] != agent_id and a["company_name"] and a["company_name"].lower() != mine))
+            if others:
+                other_desks = ("Other desks of ours on this same number: " + "; ".join(others[:8]) + ". If the caller is really calling "
+                               "about one of those, say so in one line, take their name and what they need, and say that team will call back. "
+                               "Do not answer for that desk and do not pitch ours.")
     hours = ""
     if agent_id:
         with contextlib.suppress(Exception):
@@ -593,6 +603,7 @@ Name a colleague only from this list, only when it helps ("Rohit aapko call kare
 # Today
 {now:%A, %d %B %Y, %H:%M} IST
 {hours}
+{other_desks}
 
 {('# How this agent is doing right now (read these out if asked; they are live)' + chr(10) + status + chr(10)) if status else ''}
 # {Caller}

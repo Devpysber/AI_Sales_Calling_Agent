@@ -1063,6 +1063,8 @@ class CallStream:
         self.session["agent_id"] = agent_id
         self.session["lead_id"] = lead and lead["id"]
         self.session["lead"] = context
+        self.session.setdefault("original_agent_id", old)
+        self.session["switch_history"] = (self.session.get("switch_history") or []) + [{"from": old, "to": agent_id, "reason": "caller_selection"}]
         if self.session.get("call_id"):
             with get_db() as db:
                 call = db.get(Call, self.session["call_id"])

@@ -165,6 +165,26 @@ def ids(active_only: bool = False) -> list[int]:
         return list(db.scalars(query))
 
 
+_desks_cache: dict = {"at": 0.0, "rows": []}
+
+
+def desks() -> list[dict]:
+    """Every active agent as a desk a caller could mean: id, company, agent name, tagline. Cached a minute; read per live turn."""
+    import time as _time
+    if _time.monotonic() - _desks_cache["at"] < 60:
+        return _desks_cache["rows"]
+    rows = []
+    for aid in ids(active_only=True):
+        try:
+            p = get_profile(aid)
+        except Exception:  # noqa: BLE001 - a broken profile is not a desk to offer
+            continue
+        rows.append({"id": aid, "company_name": p.get("company_name") or "", "agent_name": p.get("agent_name") or "",
+                     "tagline": (p.get("company_tagline") or "").strip()})
+    _desks_cache.update(at=_time.monotonic(), rows=rows)
+    return rows
+
+
 def list_agents() -> list[dict]:
     today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
     today_utc = (today - timedelta(hours=5, minutes=30)).replace(tzinfo=None)
