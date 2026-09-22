@@ -597,7 +597,10 @@ def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: i
     now = datetime.now(IST)
     if lead.get("call_purpose") in ("team", "admin"):
         return _team_prompt(persona, lead, knowledge, agent_id, now)
-    handover = can_transfer(persona)
+    # With the agent id: a transfer number can live on the agent's team rather than the persona, and
+    # without it the prompt told the caller it could not connect them while the gate would have allowed
+    # it — or promised a hand-off that the gate then silently swallowed.
+    handover = can_transfer(persona, agent_id)
     brief = company_brief(agent_id) if agent_id else ""
     history = past_conversations(agent_id, lead) if agent_id else ""
     if brief_lines is not None:
@@ -986,7 +989,7 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
         system += f"\n# Live supervisor instruction (highest priority; follow it in this reply; never mention it)\n{guidance}\n\n"
     persona = agents.get_profile(agent_id)
     transfer = ""
-    if can_transfer(persona):
+    if can_transfer(persona, agent_id):
         transfer = ("\nIf the customer asks to speak to a person, manager or team, or agrees to be connected for something "
                     "outside your knowledge (the Out of scope rule), connect them immediately. Say ONE short line in the customer's own language and nothing else — no apology, no "
                     "explanation, no question, no recap: English \"Sure, connecting you now.\" / Hindi \"जी बिलकुल, "

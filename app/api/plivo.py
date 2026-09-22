@@ -42,6 +42,10 @@ PROMPTS = {
               "hi": "माफ़ कीजिए। हमारी team आपको अभी call करेगी। धन्यवाद।"},
     "handover": {"en": "One moment — let me put you through to someone from our team.",
                  "hi": "एक मिनट, मैं आपको अपनी team से जोड़ता हूँ।"},
+    # The model offered to connect someone but no line is configured. Saying nothing left the caller on a
+    # silent line after "connecting you now"; this at least promises the call back we can actually make.
+    "no_transfer": {"en": "I can't put you through right now, but I'll have someone from the team call you back shortly.",
+                    "hi": "अभी मैं आपको connect नहीं कर पा रहा, पर हमारी team आपको जल्दी call कर लेगी।"},
 }
 
 

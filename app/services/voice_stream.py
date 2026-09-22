@@ -150,6 +150,7 @@ REPEAT_GUIDANCE = ("You just said this. Do not say it again in any words: either
 # Higher than ECHO_OVERLAP (0.6, tuned for mangled phone echo): two of the agent's own replies share
 # vocabulary honestly, so only a near-restatement counts as a repeat.
 REPEAT_OVERLAP = 0.8
+MAX_TURNS_WITHOUT_SPEECH = 3   # empty or tool-only model replies in a row before the call is closed politely
 FAREWELL_SILENCE_SECONDS = 3.0     # after the agent said goodbye, this much quiet ends the call without another word
 STT_RETRY_BASE = 0.3               # reconnect backoff for Sarvam STT: 0.3s doubling to STT_RETRY_CAP, with jitter
 STT_RETRY_CAP = 5.0
@@ -752,6 +753,7 @@ class CallStream:
         self.hold_acked = False
         self.language_votes: list[str] = []     # consecutive auto-detected languages, for switch hysteresis
         self.repeated_replies = 0               # consecutive replies that said what the last one already said
+        self.no_speech = 0                      # consecutive turns where the model produced nothing speakable
         self.filler_audio: asyncio.Task | None = None   # "one moment", rendered at stream open, not mid-wait
         self.stt_failures = 0                   # consecutive failed Sarvam STT connects
 
@@ -1262,8 +1264,16 @@ class CallStream:
             try:
                 ws = await self.stt.connect()
                 self.stt_failures = 0
-                async for raw in ws:
-                    await self.on_stt(json.loads(raw))
+                try:
+                    async for raw in ws:
+                        await self.on_stt(json.loads(raw))
+                finally:
+                    # The socket that owned any START_SPEECH is gone, so its END_SPEECH never arrives.
+                    # Left set, caller_speaking keeps the silence loop believing someone is talking and
+                    # pending_bargein cancels the next reply on a barge-in that already ended.
+                    self.caller_speaking = False
+                    self.pending_bargein = False
+                    self.publish_state()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -1994,6 +2004,8 @@ class CallStream:
                                                                 self.persona.get("voice_speaker")))
 
             reply = " ".join("".join(spoken).split())
+            if reply:
+                self.no_speech = 0   # the model spoke: the run of empty turns (if any) is over
             if not reply and not cleaner.end_call:
                 # The model emitted a tool call instead of speech (typically when a meeting is agreed).
                 # Ask once more, streaming and short, with an explicit spoken-only instruction.
@@ -2021,6 +2033,15 @@ class CallStream:
                 # Still nothing to say (never hang up). "I didn't catch that" is only honest when they said
                 # nothing: after a caller has spoken, the failure is ours, so invite them to carry on instead.
                 from app.api.plivo import PROMPTS
+                # A model that answers with a tool call or an empty string can do it every turn, and the
+                # caller hears the same "sorry, go on" for ever. After three in a row, close politely.
+                # Counted only here, in the already-degenerate branch: a turn the model actually spoke
+                # resets it below, and neither costs a genuine turn anything.
+                self.no_speech += 1
+                if self.no_speech >= MAX_TURNS_WITHOUT_SPEECH:
+                    log.warning("No speech from the model for %s turns, closing session %s",
+                                self.no_speech, self.session_id[:8])
+                    cleaner.end_call = True
                 if text and is_caller_closing(text):
                     # They said bye and the model produced nothing: answer the goodbye, do not ask them to go on.
                     cleaner.end_call = True
@@ -2057,6 +2078,13 @@ class CallStream:
             if cleaner.transfer and self.can_transfer():
                 await self.checkpoint(transfer=True)
             else:
+                if cleaner.transfer:
+                    # The model promised a hand-off the operator has not configured a line for. Dropping
+                    # it silently left the caller holding a line that said "connecting you now" and then
+                    # went quiet. Say the truth instead, from the cached fixed line: no model round trip.
+                    log.warning("Transfer asked for but no line is configured, session=%s", self.session_id[:8])
+                    from app.api.plivo import PROMPTS
+                    await self.say_fixed(PROMPTS["no_transfer"][self.lang_key()])
                 await self.checkpoint(hangup=cleaner.end_call)
         except asyncio.CancelledError:
             # A barge-in during the retry, the fallback line or the checkpoint: the caller's words are
