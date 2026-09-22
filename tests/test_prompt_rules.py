@@ -18,6 +18,7 @@ RULES = {
     "character budget": r"Never over 200; average 100-130",
     "one question per turn": r"ONE question per turn",
     "greeting once": r"Greeting once, ever",
+    "no re-introduction after a stray line": r"Never say you did not understand and then re-introduce yourself",
     "never repeat a sentence": r"Never say a sentence you already said",
     "answered questions are done": r"is DONE",
     "two refusals stop": r"Two refusals",
