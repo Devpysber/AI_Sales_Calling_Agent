@@ -599,7 +599,10 @@ def embed(texts: list[str], timeout: float = 30) -> list[list[float]] | None:
         )
         if res.status_code >= 400:
             msg = f"{res.status_code}: {res.text[:200]}"
-            if res.status_code in (401, 402):
+            # A 402 saying the prompt was too long is about this one request's size, not the
+            # account's credit. Marking the provider dead for it cost live calls their tools.
+            oversized = "tokens limit exceeded" in res.text
+            if res.status_code in (401, 402) and not oversized:
                 _mark_openrouter_dead(msg)
             log.warning("Embeddings unavailable: %s", msg)
             return None

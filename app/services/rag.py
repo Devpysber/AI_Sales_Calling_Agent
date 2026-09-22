@@ -158,14 +158,48 @@ def add_text(agent_id: int, title: str, text: str, actor: str = "admin") -> dict
     return add_document(agent_id, title, f"{title[:60] or 'note'}.txt", text.encode("utf-8"), "text/plain", actor)
 
 
+# OpenRouter's free tier refuses a request whose prompt runs past ~2,500 tokens, so a fixed count
+# of chunks per request fails on a long document and takes the rest of it down with it. Batch by
+# characters instead, roughly four per token, well under the cap.
+EMBED_BATCH_CHARS = 6_000
+EMBED_MIN_BATCH = 4
+
+
+def _embed_batches(chunks: list[str]) -> list[list[str]]:
+    batches, current, size = [], [], 0
+    for chunk in chunks:
+        if current and size + len(chunk) > EMBED_BATCH_CHARS:
+            batches.append(current)
+            current, size = [], 0
+        current.append(chunk)
+        size += len(chunk)
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _embed_with_retry(batch: list[str]) -> list[list[float] | None] | None:
+    """Embed one batch, halving it when the provider refuses, so a single oversized or
+    rate-limited request costs a retry rather than the rest of the document."""
+    result = llm.embed(batch)
+    if result is not None or len(batch) <= EMBED_MIN_BATCH:
+        return result
+    half = len(batch) // 2
+    left = _embed_with_retry(batch[:half])
+    if left is None:
+        return None
+    right = _embed_with_retry(batch[half:])
+    return None if right is None else left + right
+
+
 def _process(agent_id: int, doc_id: int, text: str, actor: str):
     try:
         chunks = chunk_text(text)
         # Embed in batches; keyword search still works if this fails. A failed batch keeps chunks
         # already embedded rather than discarding every billed call made so far.
         collected = []
-        for batch in (chunks[i:i + 64] for i in range(0, len(chunks), 64)):
-            result = llm.embed(batch)
+        for batch in _embed_batches(chunks):
+            result = _embed_with_retry(batch)
             if result is None:
                 # Every remaining chunk gets its empty slot, not just this batch: a short list here
                 # blew up the indexing below and marked the whole document failed, so a document
