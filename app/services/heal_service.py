@@ -90,13 +90,14 @@ def report(kind: str, detail: str, *, agent_id: int | None = None, call_id: int 
     try:
         with _locked_issues() as issues:
             title = title or KINDS.get(kind, (kind, None))[0]
-            # Dedupe also on data["to"] when present: two email_failed reports for the same
-            # agent/title but different recipients must stay separate issues, else the later
-            # failure's data overwrites the earlier one's and heal only resends the last email.
-            data_to = (data or {}).get("to")
+            # Dedupe also on data["to"] and data["number"] when present: two email_failed reports for
+            # the same agent/title but different recipients, or two disconnected phone numbers, must stay
+            # separate issues — otherwise the later one overwrites the earlier and heal fixes only the last.
+            data_key = ((data or {}).get("to"), (data or {}).get("number"))
             for it in issues:
                 if (it["status"] == "open" and it["kind"] == kind and it.get("agent_id") == agent_id
-                        and it["title"] == title and (it.get("data") or {}).get("to") == data_to):
+                        and it["title"] == title
+                        and ((it.get("data") or {}).get("to"), (it.get("data") or {}).get("number")) == data_key):
                     it.update(count=int(it.get("count") or 1) + (1 if bump else 0),
                               last_at=_now() if bump else it["last_at"], detail=str(detail)[:1000],
                               data=data if data is not None else it.get("data"), call_id=call_id or it.get("call_id"))

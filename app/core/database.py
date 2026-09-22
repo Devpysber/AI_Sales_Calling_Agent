@@ -72,4 +72,14 @@ def run_migrations():
     cfg = Config(str(root / "alembic.ini"))
     cfg.set_main_option("script_location", str(root / "migrations"))
     cfg.set_main_option("sqlalchemy.url", settings.database_url)
+    if settings.database_url.startswith("postgres"):
+        # Every uvicorn worker boots at once and each used to run the DDL: concurrent upgrades race
+        # and one of them fails the boot. The rest wait here and then find themselves already at head.
+        with engine.connect() as conn:
+            conn.exec_driver_sql("SELECT pg_advisory_lock(778811)")
+            try:
+                command.upgrade(cfg, "head")
+            finally:
+                conn.exec_driver_sql("SELECT pg_advisory_unlock(778811)")
+        return
     command.upgrade(cfg, "head")

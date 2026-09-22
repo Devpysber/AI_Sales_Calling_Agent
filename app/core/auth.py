@@ -138,7 +138,7 @@ def login(body: Login, request: Request, response: Response):
     identifier = (body.email or body.username).strip().lower()
     expected = login_email()
     known = hmac.compare_digest(identifier, expected) if expected else hmac.compare_digest(identifier, settings.admin_username.lower())
-    target_user = settings.admin_username
+    target_user = "admin"   # the session carries the ROLE; deps.py and every guard compare against it
     if not (known and _password_ok(body.password)):
         # Check Multi-Member Team Logins
         from app.services.settings_service import SettingsService

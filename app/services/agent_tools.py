@@ -121,7 +121,11 @@ def team_quick_action(agent_id: int, text: str) -> tuple[str, str] | None:
     "auto dial band karo", "retry chalu karo". Returns (tool result, spoken confirmation key) or None when the
     words are not a plain switch command (the model handles anything with a question or a condition in it).
     """
-    if not text or "?" in text or re.search(r"\b(kya|kyu|kyun|why|what|kab|when|agar|if)\b|क्या|क्यों|कब|अगर", text, re.I):
+    # Anything with a second request in it goes to the model instead: this path answers the whole turn
+    # with one canned line, so "retry band karo AUR Rahul ko kal call karna" used to lose the callback.
+    if not text or "?" in text or re.search(
+            r"\b(kya|kyu|kyun|why|what|kab|when|agar|if|aur|and|then|phir|call|bhej|bhejna|send|sms|whatsapp"
+            r"|message|book|schedule|callback)\b|क्या|क्यों|कब|अगर|और|फिर|कॉल|भेज", text, re.I):
         return None
     on = bool(_ON_WORDS.search(text)) and not _OFF_WORDS.search(text)
     off = bool(_OFF_WORDS.search(text))
@@ -132,9 +136,26 @@ def team_quick_action(agent_id: int, text: str) -> tuple[str, str] | None:
         named = list(AUTOMATION_SWITCHES)
     elif not named and _AUTOMATION_WORD.search(text):
         named = [k for k in AUTOMATION_SWITCHES if k != "auto_emails"]   # "automation band karo" = the dialling ones
-    if not named:
-        return None
+    if not named or _names_another_agent(text, agent_id):
+        return None   # "Hairscope ka auto dial band karo": the model routes it with set_agent_automation
     return set_automation_tool(agent_id, named, not off), ("off" if off else "on")
+
+
+def _names_another_agent(text: str, agent_id: int) -> bool:
+    """True when the words name some other workspace, so the switch must not land on this one.
+
+    The admin rings whichever desk owns the number and says "Hairscope ka auto dial band karo": without
+    this the dialler of the desk that answered was switched off and the confirmation named neither."""
+    low = (text or "").lower()
+    from app.services import agents
+    try:
+        rows = agents.list_agents()
+    except Exception:  # noqa: BLE001 - cannot tell: let the model route it rather than guess a workspace
+        return True
+    return any(name and len(name) >= 3 and name in low
+               for r in rows if r.get("id") != agent_id
+               for name in (str(r.get("name") or "").strip().lower(),
+                            str((r.get("persona") or {}).get("company_name") or "").strip().lower()))
 
 
 def set_automation_tool(agent_id: int, switches: list[str] | str, on: bool) -> str:
@@ -299,6 +320,13 @@ def schedule_callback_tool(lead_id, date_time: str, agent_id: int, lead: str | N
     when = _valid_callback(_to_ist_text(date_time))
     if not when:
         return f"Invalid callback time '{date_time}': use 'YYYY-MM-DD HH:MM' in IST, not in the past and within 30 days."
+    # The callbacks job skips do-not-call leads, so booking one here was a promise nothing could keep.
+    current = crm.get(lead_id) or {}
+    if current.get("do_not_call"):
+        return (f"Lead {lead_id} is marked Do Not Call, so no callback was scheduled. "
+                "Take them off Do Not Call first if they asked us to ring back.")
+    if current.get("phone_valid") is False:
+        return f"Lead {lead_id} has an incomplete phone number, so no callback was scheduled. Fix the number first."
     try:
         crm.update(lead_id, {"callback_at": when, "call_status": "Pending"}, actor="team")
         return f"Callback scheduled for lead {lead_id} at {when} IST."

@@ -711,3 +711,44 @@ def test_the_default_line_is_the_same_number_everywhere(client):
     own = agents.create({"name": "Own line desk 2", "phone_number": "080 1234 5680"}, created_by="admin")
     assert own["id"] not in agents.on_line(settings.plivo_phone_number)
     assert agents.on_line("+918012345680") == [own["id"]]
+
+
+def test_a_manual_run_does_not_cancel_the_days_scheduled_run(client, monkeypatch):
+    """Pressing Send now at 10am used to satisfy the once-a-day check and kill the 6pm report."""
+    from app.services import agents, scheduler
+    from app.services.settings_service import SettingsService
+
+    desk = agents.create({"name": "Report desk"}, created_by="admin")
+    agents.update_automation(desk["id"], {"daily_report_enabled": True, "daily_report_hour": 0}, actor="test")
+    monkeypatch.setattr(scheduler, "JOBS", {**scheduler.JOBS, "daily_report": lambda *a, **k: "sent 1 report"})
+
+    scheduler.run_job(desk["id"], "daily_report", force=True)          # "Send now"
+    assert "daily_report" in scheduler._due(desk["id"], agents.get_automation(desk["id"]))
+    scheduler.run_job(desk["id"], "daily_report")                       # the scheduled run
+    assert "daily_report" not in scheduler._due(desk["id"], agents.get_automation(desk["id"]))
+    # A run that errored is not the day's run either: it has to be retried.
+    SettingsService().set_state(scheduler._state_key(desk["id"], "daily_report"),
+                                {"at": SettingsService().get_state(scheduler._state_key(desk["id"], "daily_report"))["at"],
+                                 "result": "error: smtp refused", "manual": False})
+    assert "daily_report" in scheduler._due(desk["id"], agents.get_automation(desk["id"]))
+
+
+def test_a_retry_is_never_booked_outside_calling_hours(client):
+    """The slot is stored on the lead and emailed to the customer, so it must be a time we will dial."""
+    from datetime import datetime, timedelta
+    from app.services.call_service import IST, next_calling_window, within_calling_hours
+
+    cfg = {"calling_hours_start": 9, "calling_hours_end": 21, "calling_days": [0, 1, 2, 3, 4]}
+    late = datetime.now(IST).replace(hour=20, minute=10, second=0, microsecond=0, tzinfo=None) + timedelta(minutes=180)
+    booked = next_calling_window(cfg, late)
+    assert within_calling_hours(cfg, booked), booked
+
+
+def test_a_member_reaches_the_workspace_they_made_without_a_passcode(client, monkeypatch):
+    from app.services import agents, team_service
+
+    monkeypatch.setattr(team_service, "members",
+                        lambda: [{"id": "own", "name": "Ritu", "phone": "+919812500041", "email": "r@b.c"}])
+    mine = agents.create({"name": "Ritu desk"}, created_by="own")
+    theirs = agents.create({"name": "Not Ritu desk"}, created_by="admin")
+    assert agents.made_by(mine["id"], "own") and not agents.made_by(theirs["id"], "own")

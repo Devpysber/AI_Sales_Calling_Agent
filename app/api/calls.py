@@ -99,8 +99,10 @@ async def monitor_call(websocket: WebSocket, call_id: int, agent_id: int):
 
     queue: asyncio.Queue = asyncio.Queue()
     stream.monitors[queue] = {"listen": True}
+    took_over = False
 
     async def receive():
+        nonlocal took_over
         try:
             while True:
                 msg = json.loads(await websocket.receive_text())
@@ -112,6 +114,8 @@ async def monitor_call(websocket: WebSocket, call_id: int, agent_id: int):
                 elif action:
                     try:
                         await stream.control(action, text=msg.get("text", ""), now=bool(msg.get("now")))
+                        if action in ("takeover", "release"):
+                            took_over = action == "takeover"
                     except ValueError as e:
                         await websocket.send_json({"type": "error", "message": str(e)})
         except (WebSocketDisconnect, RuntimeError):
@@ -136,3 +140,8 @@ async def monitor_call(websocket: WebSocket, call_id: int, agent_id: int):
             task.cancel()
     finally:
         stream.monitors.pop(queue, None)
+        # A supervisor who took the call over and then lost the socket left the call in human mode
+        # forever: the AI never spoke again and the caller sat on a silent line.
+        if took_over and not stream.monitors and getattr(stream, "mode", "ai") == "human":
+            with contextlib.suppress(Exception):
+                await stream.control("release", by="system")

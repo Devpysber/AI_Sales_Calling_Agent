@@ -49,7 +49,8 @@ def list_agents(request: Request):
         unlocked = payload.get("unlocked", [])
         reduced = []
         for a in all_a:
-            if a["id"] in unlocked:
+            # Their own workspaces are never locked to them, whatever passcode it does or does not carry.
+            if a["id"] in unlocked or a.get("created_by") == payload.get("team_id"):
                 reduced.append({**a, "locked": False})
                 continue
             # Locked workspace: name and colour for the switcher, nothing about its numbers or persona.

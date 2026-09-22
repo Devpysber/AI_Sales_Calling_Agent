@@ -61,6 +61,11 @@ export default function LiveSupervision({ callId }: { callId: number }) {
   // Last mode the server reported; the reconcile effect only reacts to a real human -> ai transition, not to the
   // window between clicking "Take over" and the server acknowledging it.
   const prevMode = useRef<LiveState['mode'] | null>(null)
+  // True only once the server itself sends {type: 'ended'}; onclose uses this to tell a real end apart from a
+  // transient drop (wifi blip, proxy idle timeout, worker restart) that should just reconnect.
+  const serverEnded = useRef(false)
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const retryAttempt = useRef(0)
 
   const send = useCallback((payload: Record<string, unknown>) => {
     if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify(payload))
@@ -92,32 +97,57 @@ export default function LiveSupervision({ callId }: { callId: number }) {
   }, [])
 
   useEffect(() => {
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${proto}//${window.location.host}${base}/calls/${callId}/monitor`)
-    socket.current = ws
-    // The server defaults every monitor to listen=true; mirror our initial (muted) state so audio is not streamed
-    // over the socket only to be dropped by play() until "Listen in" is pressed.
-    ws.onopen = () => { setStatus('live'); if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'listen', on: listenRef.current })) }
-    ws.onmessage = (e) => {
-      let msg: Record<string, any>
-      try { msg = JSON.parse(e.data) } catch { return }
-      if (!msg || typeof msg !== 'object') return
-      if (msg.type === 'state') setState((s) => ({ ...s, ...msg, type: 'state' } as LiveState))
-      else if (msg.type === 'audio' && typeof msg.pcm === 'string') play(msg.pcm)
-      else if (msg.type === 'heard') setLastHeard(String(msg.text ?? ''))
-      else if (msg.type === 'turn' && typeof msg.text === 'string' && msg.text.trim()) {
-        const role = String(msg.role ?? 'agent')
-        if (role === 'customer' || role === 'user' || role === 'caller') setLastHeard(msg.text)
-        else setLastTurn({ role, text: msg.text, by: typeof msg.by === 'string' ? msg.by : undefined })
+    let cancelled = false
+    const MAX_ATTEMPTS = 5
+
+    const connect = () => {
+      if (cancelled) return
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const ws = new WebSocket(`${proto}//${window.location.host}${base}/calls/${callId}/monitor`)
+      socket.current = ws
+      // The server defaults every monitor to listen=true; mirror our initial (muted) state so audio is not streamed
+      // over the socket only to be dropped by play() until "Listen in" is pressed.
+      ws.onopen = () => {
+        retryAttempt.current = 0
+        setStatus('live')
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'listen', on: listenRef.current }))
       }
-      else if (msg.type === 'error') toast.error(String(msg.message ?? 'Live supervision error'))
-      else if (msg.type === 'ended') setStatus('ended')
+      ws.onmessage = (e) => {
+        let msg: Record<string, any>
+        try { msg = JSON.parse(e.data) } catch { return }
+        if (!msg || typeof msg !== 'object') return
+        if (msg.type === 'state') setState((s) => ({ ...s, ...msg, type: 'state' } as LiveState))
+        else if (msg.type === 'audio' && typeof msg.pcm === 'string') play(msg.pcm)
+        else if (msg.type === 'heard') setLastHeard(String(msg.text ?? ''))
+        else if (msg.type === 'turn' && typeof msg.text === 'string' && msg.text.trim()) {
+          const role = String(msg.role ?? 'agent')
+          if (role === 'customer' || role === 'user' || role === 'caller') setLastHeard(msg.text)
+          else setLastTurn({ role, text: msg.text, by: typeof msg.by === 'string' ? msg.by : undefined })
+        }
+        else if (msg.type === 'error') toast.error(String(msg.message ?? 'Live supervision error'))
+        else if (msg.type === 'ended') { serverEnded.current = true; setStatus('ended') }
+      }
+      ws.onclose = (e) => {
+        stopMic()
+        if (cancelled || serverEnded.current) { setStatus('ended'); return }
+        if (e.code === 4401) { setStatus('error'); return }
+        if (retryAttempt.current >= MAX_ATTEMPTS) { setStatus('error'); return }
+        setStatus('connecting')
+        const delay = Math.min(500 * 2 ** retryAttempt.current, 8000)
+        retryAttempt.current += 1
+        retryTimer.current = setTimeout(connect, delay)
+      }
+      ws.onerror = () => setStatus((s) => (s === 'ended' ? s : 'error'))
     }
-    ws.onclose = (e) => { setStatus((s) => (s === 'connecting' || s === 'error' || e.code === 4401 ? 'error' : 'ended')); stopMic() }
-    ws.onerror = () => setStatus((s) => (s === 'ended' ? s : 'error'))
+
+    connect()
+
     return () => {
-      ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null
-      ws.close(); socket.current = null; stopMic()
+      cancelled = true
+      if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null }
+      const ws = socket.current
+      if (ws) { ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; ws.close() }
+      socket.current = null; stopMic()
       void playback.current?.ctx.close(); playback.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

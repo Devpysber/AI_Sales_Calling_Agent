@@ -167,7 +167,10 @@ def _process(agent_id: int, doc_id: int, text: str, actor: str):
         for batch in (chunks[i:i + 64] for i in range(0, len(chunks), 64)):
             result = llm.embed(batch)
             if result is None:
-                collected.extend([None] * len(batch))
+                # Every remaining chunk gets its empty slot, not just this batch: a short list here
+                # blew up the indexing below and marked the whole document failed, so a document
+                # longer than one batch lost even the keyword search this is meant to fall back to.
+                collected.extend([None] * (len(chunks) - len(collected)))
                 break
             collected.extend(result)
         vectors = collected

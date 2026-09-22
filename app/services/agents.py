@@ -6,6 +6,7 @@ knowledge base, leads, calls and activity. All data queries elsewhere are
 filtered by agent_id so workspaces never mix.
 """
 
+import contextlib
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -165,6 +166,13 @@ def is_paused(agent_id: int | None) -> bool:
         return bool(agent) and agent.status != "active"
 
 
+def made_by(agent_id: int | None, team_id: str | None) -> bool:
+    """True when this workspace was created by that team member (they never need its passcode)."""
+    if not agent_id or not team_id:
+        return False
+    return (get(agent_id) or {}).get("created_by") == team_id
+
+
 def exists(agent_id: int) -> bool:
     with get_db() as db:
         return db.get(Agent, agent_id) is not None
@@ -224,8 +232,12 @@ def list_agents() -> list[dict]:
         meetings = per_agent(select(Lead.agent_id, func.count(Lead.id))
                              .where(Lead.meeting_at.is_not(None), Lead.meeting_at != "").group_by(Lead.agent_id))
         calls_today = per_agent(select(Call.agent_id, func.count(Call.id)).where(Call.created_at >= today_utc).group_by(Call.agent_id))
+        # Same rule as CallService.stats: a dropped call with time on it was still a conversation.
         connected_today = per_agent(select(Call.agent_id, func.count(Call.id))
-                                    .where(Call.created_at >= today_utc, Call.status == "Completed").group_by(Call.agent_id))
+                                    .where(Call.created_at >= today_utc,
+                                           or_(Call.status == "Completed",
+                                               (Call.status == "Failed") & (Call.duration > 0)))
+                                    .group_by(Call.agent_id))
         live = per_agent(select(Call.agent_id, func.count(Call.id)).where(Call.status.in_(ACTIVE_CALL)).group_by(Call.agent_id))
         documents = per_agent(select(Document.agent_id, func.count(Document.id)).group_by(Document.agent_id))
         last_call = per_agent(select(Call.agent_id, func.max(Call.created_at)).group_by(Call.agent_id))
@@ -306,19 +318,49 @@ def _wire_own_number(agent_id: int, number: str | None, actor: str) -> None:
 
 def _creator_contact(created_by: str | None) -> dict | None:
     """The person making the workspace, as a team-member row: the first number its calls hand over to."""
+    from app.core.auth import _profile, login_email
     from app.services import team_service
+    people = []
     if created_by and created_by != "admin":
         member = team_service.by_id(created_by) or {}
-        person = {"name": member.get("name") or "", "phone": member.get("phone") or "", "email": member.get("email") or ""}
-    else:
-        from app.core.auth import _profile, login_email
-        owner = _profile()
-        person = {"name": owner.get("display_name") or owner.get("name") or "",
-                  "phone": owner.get("phone") or "", "email": owner.get("email") or login_email() or ""}
-    digits = phone_digits(person["phone"])
-    if not 11 <= len(digits) <= 15:
-        return None   # no number on file: nothing to ring, so the agent starts with an empty team
-    return {**person, "phone": f"+{digits}"}
+        people.append({"name": member.get("name") or "", "phone": member.get("phone") or "",
+                       "email": member.get("email") or ""})
+    owner = _profile()
+    # The account owner is the fallback whenever the workspace was made by the admin, or by a colleague
+    # whose account has since been deleted or never carried a number: an agent that can reach nobody is
+    # worse than one that reaches the owner.
+    people.append({"name": owner.get("display_name") or owner.get("name") or "",
+                   "phone": owner.get("phone") or "", "email": owner.get("email") or login_email() or ""})
+    for person in people:
+        digits = phone_digits(person["phone"])
+        if 11 <= len(digits) <= 15:
+            return {**person, "phone": f"+{digits}"}
+    return None   # no number on file anywhere: the agent starts with an empty team
+
+
+def _unwire_own_number(agent_id: int, number: str | None, actor: str) -> None:
+    """Hand a number this agent no longer uses back to the Plivo application it had before us."""
+    digits = phone_digits(number)
+    if not digits or digits == phone_digits(settings.plivo_phone_number):
+        return
+    with get_db() as db:
+        rows = db.execute(select(Agent.id, Agent.phone_number)).all()
+    if any(aid != agent_id and phone_digits(own) == digits for aid, own in rows):
+        return   # another agent still answers on it
+    from app.services.plivo_service import PlivoService
+    try:
+        svc = PlivoService()
+        if not hasattr(svc, "restore_inbound"):
+            return
+        svc.restore_inbound(digits)
+        events.record("inbound.released", f"+{digits} no longer sends incoming calls to this app",
+                      agent_id=agent_id, actor=actor)
+    except Exception as e:  # noqa: BLE001 - losing the old number must not block the rename
+        log.warning("Could not release +%s from agent %s: %s", digits, agent_id, e)
+    # Whatever happened on Plivo, the number is no longer designated to this agent here.
+    with contextlib.suppress(Exception):
+        if inbound_owner("+" + digits) == agent_id:
+            set_inbound_owner("+" + digits, None, actor=actor)
 
 
 def create(data: dict, actor: str = "admin", created_by: str | None = None) -> dict:
@@ -381,14 +423,19 @@ def update(agent_id: int, data: dict, actor: str = "admin") -> dict:
             raise AgentNotFound(f"Agent {agent_id} not found.")
         _assert_unique(db, meta, exclude_id=agent_id)
         changed = [k for k, v in meta.items() if getattr(agent, k) != v]
+        previous_number = agent.phone_number if "phone_number" in changed else None
         for key, value in meta.items():
             setattr(agent, key, value)
         result = agent.to_dict()
     if changed:
         store.delete(DESKS_KEY)
         events.record("settings.updated", "Agent details updated", ", ".join(changed), agent_id=agent_id, actor=actor)
-        if "phone_number" in changed and result.get("phone_number"):
-            _wire_own_number(agent_id, result["phone_number"], actor)
+        if "phone_number" in changed:
+            # A number the agent no longer owns must go back to whatever Plivo application had it, or
+            # this app keeps answering a line nobody here uses and the old owner never gets it back.
+            _unwire_own_number(agent_id, previous_number, actor)
+            if result.get("phone_number"):
+                _wire_own_number(agent_id, result["phone_number"], actor)
     return result
 
 

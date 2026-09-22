@@ -16,7 +16,10 @@ def workspace(request: Request, agent_id: int = Path(..., ge=1)) -> int:
     if user != "admin" and user != "api":
         if user == "team":
             payload = getattr(request.state, "token_payload", {})
-            if agent_id not in payload.get("unlocked", []):
+            # A member always reaches the workspaces they made: with no passcode set (the default) the
+            # unlock form was the only way in and it rejects every password, so their own agent was a
+            # dead end. Someone else's workspace still needs its passcode.
+            if agent_id not in payload.get("unlocked", []) and not agents.made_by(agent_id, payload.get("team_id")):
                 raise HTTPException(403, "LOCKED")
         else:
             raise HTTPException(403, "You do not have access to this agent workspace.")
