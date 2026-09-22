@@ -73,7 +73,13 @@ def test_a_draft_is_repaired_into_the_shape_the_form_and_the_prompt_expect():
     """The model returns these shapes often enough that repairing beats re-asking, which costs a turn."""
     tidy = persona_writer._tidy
 
-    # An objection and its answer split across two lines, bulleted or not, become one line each.
+    # A field the model returns as a JSON list becomes the lines a person would have typed, rather
+    # than Python syntax in the form: ['Open by welcoming them.', 'Ask which city.']
+    assert persona_writer._as_text(["Open by welcoming them.", "Ask which city."]) == "Open by welcoming them.\nAsk which city."
+    assert persona_writer._as_text({"Is it free?": "Yes, for couples."}) == "Is it free?: Yes, for couples."
+
+    # An objection and its answer split across two lines, under either labelling, become one line each.
+    assert tidy("objection_handling", "What they say: Is it free?\nWhat you answer: Yes, for couples.") == "Is it free?: Yes, for couples."
     assert tidy("objection_handling", "Objection: Is it free?\nAnswer: Yes, for couples.") == "Is it free?: Yes, for couples."
     assert tidy("objection_handling", "- Objection: I have a vendor.\n- Answer: We help with the rest.") == "I have a vendor: We help with the rest."
     # Several objections returned as one run-on line are split apart.
