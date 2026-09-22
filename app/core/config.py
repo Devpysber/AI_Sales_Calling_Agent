@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     # Characters of system prompt + history a live turn may carry (agent.build_messages trims knowledge first).
     # The rendered system prompt alone is ~27k chars, so a smaller budget silently drops every Knowledge passage.
     llm_prompt_char_budget: int = Field(32000, alias="LLM_PROMPT_CHAR_BUDGET")
+    # Cost lever, off by default. The rendered live prompt is ~27k characters — about 6,700 tokens a
+    # turn, which is the whole LLM line on the Analytics page whenever a paid model answers. Setting
+    # this drops the longest coaching sections from LIVE turns only, cheapest-to-lose first, until the
+    # prompt fits. The playground and the team/admin prompt always get the full text, so a call can be
+    # rehearsed against both. 0 keeps every section, which is what ships.
+    live_prompt_char_budget: int = Field(0, alias="LIVE_PROMPT_CHAR_BUDGET")
     # Wall clock for one live turn across every provider and model in LLM_PROVIDERS. Without it a dead
     # provider set walks the whole chain (13.5s per model, then again without tools) past the 45s reply
     # deadline, and the caller hears nothing at all. Inside this budget the turn falls back to a spoken line.
