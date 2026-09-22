@@ -259,3 +259,39 @@ def test_team_turns_only_pay_the_tool_round_for_commands():
         assert wants_tool(said), said
     for said in ("ठीक है, बाय", "tum kya kar sakte ho", "haan theek hai", "customer ko kaise handle karte ho", "bye"):
         assert not wants_tool(said), said
+
+
+def test_colleague_on_two_agents_is_asked_which_one_and_stays_internal(client, base, monkeypatch):
+    from app.services import agent, call_session, team_service
+    from app.services.call_service import CallService
+
+    a = client.post("/api/agents", json={"name": "Cars team"}).json()
+    b = client.post("/api/agents", json={"name": "Homes team"}).json()
+    member = {"name": "Priya", "role": "Sales", "phone": "+919812399001"}
+    client.put(f"/api/agents/{a['id']}/profile", json={"company_name": "Acme Cars", "team_members": [member]})
+    client.put(f"/api/agents/{b['id']}/profile", json={"company_name": "Blue Homes", "team_members": [member]})
+    # Some desk also has her number as a lead: she is still a colleague, never a customer.
+    client.post(f"/api/agents/{b['id']}/leads", json={"name": "Priya", "phone": "9812399001"})
+    monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
+
+    assert team_service.agents_for("+919812399001") == [a["id"], b["id"]]
+    session = CallService(None).create_inbound("919812399001", "918000000000", "team-2")
+    ctx = session["lead"]
+    assert ctx["call_purpose"] == "team" and [c["label"] for c in ctx["choices"]] == ["Acme Cars", "Blue Homes"]
+    assert session["lead_id"] is None, "a colleague's check-in never becomes a lead"
+    assert "Which agent" in agent.greeting(session["agent_id"], ctx, "en-IN")
+    assert agent.choose_agent("blue homes wala", ctx["choices"]) == b["id"]
+    from app.services.voice_stream import CallStream
+    stream = CallStream.__new__(CallStream)
+    stream.session, stream.session_id, stream.agent_id = call_session.get(session["id"]), session["id"], session["agent_id"]
+    stream.save_session = lambda **k: call_session.save(stream.session)
+    switched = stream.switch_agent(b["id"])
+    assert switched["call_purpose"] == "team" and "choices" not in switched and stream.session["lead_id"] is None
+
+
+def test_colleague_on_one_agent_goes_straight_there(client, base):
+    from app.services.call_service import CallService
+    a = client.post("/api/agents", json={"name": "Only desk"}).json()
+    client.put(f"/api/agents/{a['id']}/profile", json={"team_members": [{"name": "Raj", "role": "Sales", "phone": "+919812399002"}]})
+    session = CallService(None).create_inbound("919812399002", "918000000000", "team-1")
+    assert session["agent_id"] == a["id"] and session["lead"]["call_purpose"] == "team" and "choices" not in session["lead"]

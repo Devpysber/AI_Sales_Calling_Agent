@@ -108,6 +108,11 @@ def call_goal(lead: dict, purpose: str | None) -> str | None:
                 "name something else entirely, ask which of the options it is closest to.")
     if purpose in ("team", "admin"):
         who = (lead.get("team_name") or "").strip()
+        if lead.get("choices"):
+            options = "; ".join(c["label"] for c in lead["choices"])
+            return ("This caller is one of OUR OWN COLLEAGUES" + (f", {who}" if who else "") + " and works with several of our "
+                    f"agents: {options}. Your ONLY job right now is to ask, in one short line under 100 characters, which agent "
+                    "they want to check today. Do not sell, do not answer anything else yet.")
         return ("This caller is one of OUR OWN COLLEAGUES" + (f", {who}" if who else "") + ", not a customer. They are "
                 "ringing the agent to check how it works. Do NOT sell, do NOT qualify them, do NOT ask for their name, "
                 "city or requirement, and do NOT try to book a meeting.\n"
@@ -153,6 +158,9 @@ def spoken_datetime(value: str, hindi: bool) -> str:
 # A colleague checking their own agent: no company pitch, straight to what they want to look at.
 TEAM_GREETING = {"en": "Hi {name}, {agent} here. What would you like to check?",
                  "hi": "नमस्ते {name}, {agent} बोल रहा हूँ। बताइए, क्या check करना है?"}
+# The same colleague works with several agents: settle which one before anything else.
+TEAM_CHOOSE_GREETING = {"en": "Hi {name}, {agent} here. Which agent do you want to check today: {options}?",
+                        "hi": "नमस्ते {name}, {agent} बोल रहा हूँ। आज कौन सा agent check करना है: {options}?"}
 TEAM_GREETING_ANON = {"en": "Hi, {agent} here. What would you like to check?",
                       "hi": "नमस्ते, {agent} बोल रहा हूँ। बताइए, क्या check करना है?"}
 
@@ -259,8 +267,8 @@ def greeting(agent_id: int, lead: dict, language: str) -> str:
     returning = False
     if purpose in ("team", "admin"):
         team_name = (lead.get("team_name") or "").strip()
-        template = TEAM_GREETING[key] if team_name else TEAM_GREETING_ANON[key]
-        name = team_name or name
+        template = TEAM_CHOOSE_GREETING[key] if lead.get("choices") else TEAM_GREETING[key] if team_name else TEAM_GREETING_ANON[key]
+        name = team_name or name or ("" if not lead.get("choices") else "there")
     elif purpose == "inbound_choose":
         template = (INBOUND_CHOOSE_GREETING if name else INBOUND_CHOOSE_GREETING_ANON)[key]
     elif purpose == "inbound":

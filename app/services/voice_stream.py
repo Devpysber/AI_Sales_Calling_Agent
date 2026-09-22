@@ -1050,7 +1050,16 @@ class CallStream:
         if lead and language and not lead.get("language"):
             with contextlib.suppress(Exception):
                 lead = crm.update(lead["id"], {"language": language}, actor="ai") or lead
-        context = agent.inbound_context(self.persona, lead, phone or "")
+        previous = self.session.get("lead") or {}
+        if previous.get("call_purpose") in ("team", "admin"):
+            # A colleague picking one of their agents: still a check-in, never a sales call, no CRM lead.
+            purpose = previous["call_purpose"]
+            context = {"phone": phone or "", "call_purpose": purpose, "team_name": previous.get("team_name") or "",
+                       "name": previous.get("team_name") or ""}
+            context["call_goal"] = agent.call_goal(context, purpose)
+            lead = None
+        else:
+            context = agent.inbound_context(self.persona, lead, phone or "")
         self.session["agent_id"] = agent_id
         self.session["lead_id"] = lead and lead["id"]
         self.session["lead"] = context
@@ -1644,9 +1653,9 @@ class CallStream:
         self.publish_state()
         prompt_text = text if text is not None else "(The customer is listening. Continue the call now, following the supervisor instruction.)"
         lead = self.session.get("lead") or {}
-        if text and lead.get("call_purpose") == "inbound_choose":
+        if text and lead.get("choices") and lead.get("call_purpose") in ("inbound_choose", "team", "admin"):
             # The caller was asked which of our desks this call is about: once they say, the rest of the call
-            # runs as that agent (its persona, knowledge base and CRM record).
+            # runs as that agent (its persona, knowledge base and CRM record; a colleague keeps the team brief).
             chosen = await asyncio.to_thread(agent.choose_agent, text, lead.get("choices") or [])
             if chosen:
                 lead = await asyncio.to_thread(self.switch_agent, chosen)

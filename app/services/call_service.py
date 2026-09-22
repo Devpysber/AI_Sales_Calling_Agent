@@ -362,6 +362,7 @@ class CallService:
         # A caller some agent already knows gets that agent back (its persona and knowledge base); only an
         # unknown number is routed by the dialled number. Known to several agents: the first one answers,
         # asks which matter the call is about, and the live call switches to that agent (see agent.choose_agent).
+        from app.services import team_service
         known_per_agent = CRMService(None).find_by_phone_per_agent(from_number)
         choices = agents.inbound_choices([l["agent_id"] for l in known_per_agent]) if len(known_per_agent) > 1 else []
         known = known_per_agent[0] if known_per_agent else None
@@ -369,15 +370,22 @@ class CallService:
             # Prefer the agent designated for the dialled number when it is one of the candidates.
             preferred = agents.for_inbound(to_number)
             known = next((l for l in known_per_agent if l["agent_id"] == preferred), known)
-        agent_id = agents.for_inbound(to_number, lead_agent_id=known and known.get("agent_id"))
+        # A colleague rings THEIR agent, whatever some desk's CRM says about the number: one agent listing
+        # them answers directly; several list them -> the designated desk answers and asks which one they want.
+        is_admin = team_service.is_admin_number(from_number)
+        member_agents = [] if is_admin else team_service.agents_for(from_number)
+        team_choices = agents.inbound_choices(member_agents) if len(member_agents) > 1 else []
+        if member_agents:
+            preferred = agents.for_inbound(to_number)
+            agent_id = preferred if preferred in member_agents else member_agents[0]
+        else:
+            agent_id = agents.for_inbound(to_number, lead_agent_id=known and known.get("agent_id"))
         if agent_id is None:
             return None
         crm = CRMService(agent_id)
         # Checked before anything is saved: a colleague trying the agent out must not become a lead,
         # or every test call lands in the CRM and counts as a customer in the pipeline.
-        from app.services import team_service
-        is_admin = team_service.is_admin_number(from_number)
-        internal = is_admin or team_service.is_team_number(from_number, agent_id)
+        internal = is_admin or bool(member_agents) or team_service.is_team_number(from_number, agent_id)
         team_name = team_service.name_for(from_number, agent_id)
 
         lead = None if internal else crm.find_by_phone(from_number)
@@ -397,6 +405,8 @@ class CallService:
             purpose = "admin" if is_admin else "team"
             context = {"phone": from_number, "call_purpose": purpose, "team_name": team_name or "",
                        "name": team_name or ""}
+            if team_choices:
+                context["choices"] = team_choices
             context["call_goal"] = agent.call_goal(context, purpose)
         elif len(choices) > 1:
             context = {**(lead or {"phone": from_number}), "call_purpose": "inbound_choose", "choices": choices}

@@ -130,3 +130,20 @@ def is_admin_number(number: str | None) -> bool:
             if _digits(m.get("phone", "")) == wanted:
                 return True
     return False
+
+
+def agents_for(number: str | None) -> list[int]:
+    """Agents whose own team list carries this phone number, in id order; empty for a number no agent lists."""
+    wanted = _digits(number or "")
+    if not wanted:
+        return []
+    from app.services import agents
+    out = []
+    for aid in agents.ids():
+        try:
+            local = agents.get_profile(aid).get("team_members") or []
+        except Exception:  # noqa: BLE001 - a broken profile is simply not that colleague's agent
+            continue
+        if any(isinstance(m, dict) and _digits(str(m.get("phone") or "")) == wanted for m in local):
+            out.append(aid)
+    return out
