@@ -870,8 +870,8 @@ def respond_stream(agent_id: int, history: list[dict], customer_text: str, lead:
     persona = agents.get_profile(agent_id)
     transfer = ""
     if can_transfer(persona):
-        transfer = ("\nIf the customer asks to speak to a person, manager or team, or you cannot help them, connect them "
-                    "immediately. Say ONE short line in the customer's own language and nothing else — no apology, no "
+        transfer = ("\nIf the customer asks to speak to a person, manager or team, or agrees to be connected for something "
+                    "outside your knowledge (the Out of scope rule), connect them immediately. Say ONE short line in the customer's own language and nothing else — no apology, no "
                     "explanation, no question, no recap: English \"Sure, connecting you now.\" / Hindi \"जी बिलकुल, "
                     f"अभी connect करता हूँ.\" Then put {TRANSFER_MARK} at the very end. Never ask why they want a person "
                     "and never offer to help instead.")
