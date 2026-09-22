@@ -342,3 +342,35 @@ def test_mid_call_desk_change_needs_a_cue_and_a_name():
     assert DESK_SWITCH_CUE.search("actually beta hair ke baare mein") and not DESK_SWITCH_CUE.search("haan beta hair se hi liya tha")
     assert agent.choose_agent("actually beta hair ke baare mein", choices, use_llm=False) == 2
     assert agent.choose_agent("the second one please", choices, use_llm=False) is None  # ordinals need the model; not for a mid-call switch
+
+
+def test_colleague_tools_add_note_dnc_queue_meeting_hours(client, base, monkeypatch):
+    from app.services import agent_tools, agents
+    agent_id = int(base.rsplit("/", 1)[1])
+    run = lambda name, args: agent_tools.execute_tool(name, args, agent_id, role="team")
+    assert "Added" in run("add_lead", '{"name": "Sonu Verma", "phone": "98765 43299", "requirement": "Swift under 5 lakh"}')
+    assert "Already there" in run("add_lead", '{"phone": "+919876543299"}')
+    assert "Noted" in run("add_note", '{"lead": "Sonu", "note": "only call on Sunday"}')
+    lead = client.get(f"{base}/leads", params={"search": "Sonu"}).json()["items"][0]
+    assert "only call on Sunday" in (lead.get("notes") or "") and lead["requirements"] == "Swift under 5 lakh"
+    assert "Updated" in run("update_lead_details", '{"lead": "Sonu", "email": "sonu at gmail dot com", "city": "Bhopal"}')
+    lead = client.get(f"{base}/leads/{lead['id']}").json()
+    assert lead["email"] == "sonu@gmail.com" and lead["city"] == "Bhopal"
+    assert "queued" in run("dial_lead", '{"lead": "Sonu", "now": "false"}').lower()
+    assert client.get(f"{base}/leads/{lead['id']}").json()["call_status"] == "Pending"
+    from datetime import datetime, timedelta
+    when = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d 11:00")
+    assert "Meeting" in run("set_meeting", f'{{"lead": "Sonu", "date_time": "{when}"}}')
+    assert client.get(f"{base}/leads/{lead['id']}").json()["status"] == "Meeting Booked"
+    assert "will not be called" in run("set_do_not_call", '{"lead": "Sonu", "on": "true"}')
+    assert client.get(f"{base}/leads/{lead['id']}").json()["do_not_call"] is True
+    assert "Failed" in run("dial_lead", '{"lead": "Sonu"}')
+    assert "10:00 to 19:00" in run("set_calling_hours", '{"start": "10", "end": "7 baje shaam"}')
+    assert "9:00 to 20:00" in run("set_calling_hours", '{"start": 9, "end": 8}')  # a bare closing "8" means evening
+    assert "in the call queue" in run("pending_work", "{}")
+    assert "paused" in run("set_agent_paused", '{"paused": true}')
+    assert agents.get(agent_id)["status"] == "paused"
+    run("set_agent_paused", '{"paused": false}')
+    assert agents.get(agent_id)["status"] == "active"
+    names = {t["function"]["name"] for t in agent_tools.get_tools_for_role("team")}
+    assert {"add_lead", "add_note", "dial_lead", "set_meeting", "pending_work", "set_agent_paused"} <= names

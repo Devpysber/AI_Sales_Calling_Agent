@@ -327,6 +327,173 @@ def check_active_calls_tool() -> str:
     except Exception as e:
         return f"Failed to check active calls: {str(e)}"
 
+def add_lead_tool(agent_id: int, name: str | None, phone: str | None, requirement: str | None = None, city: str | None = None) -> str:
+    """Create a lead the colleague dictates on the call ("Rahul ka number add karo, 98765 43210, Swift chahiye")."""
+    from app.services.crm_service import normalize_phone
+    digits = normalize_phone(str(phone or ""))
+    if not digits:
+        return "Failed: I need a full phone number with country code (say it in groups, e.g. 98765 43210)."
+    crm = CRMService(agent_id)
+    existing = crm.find_by_phone(digits)
+    if existing:
+        return f"Already there: {existing.get('name') or 'unnamed'} ({digits}) is lead {existing['id']}, status {existing.get('status')}."
+    data = {"phone": digits, "name": (name or "").strip(), "source": "team call", "status": "New"}
+    if requirement:
+        data["requirements"] = str(requirement)[:500]
+    if city:
+        data["city"] = str(city)[:80]
+    try:
+        lead = crm.create(data, actor="team")
+    except Exception as e:  # noqa: BLE001 - spoken back as a failure
+        return f"Failed to add the lead: {e}"
+    return f"Added {lead.get('name') or digits} as lead {lead['id']}. Say 'call them now' or 'queue them' to dial."
+
+
+def add_note_tool(agent_id: int, lead_id, note: str | None, lead: str | None = None) -> str:
+    """Append a note the agent reads before every call to that lead."""
+    lead_id, msg = resolve_lead(agent_id, lead_id, lead)
+    if not lead_id:
+        return msg
+    text = (note or "").strip()
+    if not text:
+        return "Failed: what should the note say?"
+    crm = CRMService(agent_id)
+    current = (crm.get(lead_id) or {}).get("notes") or ""
+    stamp = datetime.now(IST).strftime("%d %b")
+    merged = (current + "\n" if current else "") + f"[{stamp}, team] {text[:400]}"
+    crm.update(lead_id, {"notes": merged[-2000:]}, actor="team", event_type="lead.note", title="Note added on a team call")
+    return f"Noted on lead {lead_id}: {text[:80]}"
+
+
+def update_lead_details_tool(agent_id: int, lead_id, lead: str | None = None, **fields) -> str:
+    """Change name, email, city, company or requirement on a lead (never the phone: that stays with the CRM)."""
+    lead_id, msg = resolve_lead(agent_id, lead_id, lead)
+    if not lead_id:
+        return msg
+    allowed = {"name": "name", "email": "email", "city": "city", "company": "company", "requirement": "requirements", "requirements": "requirements"}
+    data = {allowed[k]: str(v).strip()[:500] for k, v in fields.items() if k in allowed and v not in (None, "")}
+    if not data:
+        return "Failed: say which detail to change (name, email, city, company or requirement)."
+    if "email" in data:
+        from app.services.voice_stream import spoken_email
+        data["email"] = spoken_email(data["email"]) or data["email"]
+        if "@" not in data["email"]:
+            return f"Failed: '{data['email']}' does not look like an email. Spell it letter by letter."
+    try:
+        CRMService(agent_id).update(lead_id, data, actor="team", title="Details updated on a team call")
+    except Exception as e:  # noqa: BLE001
+        return f"Failed to update: {e}"
+    return f"Updated {', '.join(data)} on lead {lead_id}."
+
+
+def set_do_not_call_tool(agent_id: int, lead_id, on: bool, lead: str | None = None) -> str:
+    """Mark a lead do-not-call (or lift it): no manual, automated or callback dialling while it is on."""
+    lead_id, msg = resolve_lead(agent_id, lead_id, lead)
+    if not lead_id:
+        return msg
+    data = {"do_not_call": bool(on)}
+    if on:
+        data.update(status="Do Not Call", callback_at="", call_status=None)
+    else:
+        data["status"] = "Follow Up"
+    CRMService(agent_id).update(lead_id, data, actor="team", title=("Do not call" if on else "Calls allowed again") + " (team call)")
+    return f"Lead {lead_id} {'will not be called again' if on else 'can be called again'}."
+
+
+def dial_lead_tool(agent_id: int, lead_id, lead: str | None = None, now: bool = True) -> str:
+    """Call a lead right now, or put them at the front of the queue for the dialer."""
+    from app.services.call_service import CallError, CallService, within_calling_hours
+    from app.services.agents import get_automation
+    lead_id, msg = resolve_lead(agent_id, lead_id, lead)
+    if not lead_id:
+        return msg
+    crm = CRMService(agent_id)
+    row = crm.get(lead_id) or {}
+    if row.get("do_not_call"):
+        return f"Failed: lead {lead_id} is marked do-not-call."
+    if not now:
+        crm.update(lead_id, {"call_status": "Pending", "callback_at": ""}, actor="team", title="Queued on a team call")
+        return f"Queued {row.get('name') or lead_id}; the dialer picks them up next inside calling hours."
+    if not within_calling_hours(get_automation(agent_id)):
+        crm.update(lead_id, {"call_status": "Pending", "callback_at": ""}, actor="team", title="Queued on a team call")
+        return "Outside calling hours, so they are queued for the next open hour instead."
+    try:
+        call = CallService(agent_id).start(lead_id, trigger="manual", actor="team")
+    except CallError as e:
+        return f"Failed to call: {e}"
+    return f"Calling {row.get('name') or row.get('phone')} now (call {call.get('call_id') or call.get('id')})."
+
+
+def set_meeting_tool(agent_id: int, lead_id, date_time: str, lead: str | None = None) -> str:
+    """Book or move a meeting/visit for a lead; the reminder email and the pipeline stage follow."""
+    from app.services.call_service import _valid_meeting
+    lead_id, msg = resolve_lead(agent_id, lead_id, lead)
+    if not lead_id:
+        return msg
+    when = _valid_meeting(_to_ist_text(date_time))
+    if not when:
+        return f"Invalid meeting time '{date_time}': give a day and time in IST, not in the past."
+    CRMService(agent_id).update(lead_id, {"meeting_at": when, "status": "Meeting Booked", "callback_at": ""}, actor="team",
+                                event_type="meeting.booked", title=f"Meeting set for {when} on a team call")
+    return f"Meeting for lead {lead_id} set for {when} IST."
+
+
+def set_calling_hours_tool(agent_id: int, start: int | None, end: int | None) -> str:
+    """Change this agent's calling window (24h clock, IST)."""
+    from app.services.agents import get_automation, update_automation
+    cfg = get_automation(agent_id)
+
+    def hour(v, default):
+        # "7 baje shaam", "7 pm", "evening 7" -> 19; a bare "7" for the closing hour also means evening
+        n = _int(v, default)
+        text = str(v or "").lower()
+        if n is not None and n < 12 and re.search(r"pm|shaam|sham|evening|raat|night|शाम|रात", text):
+            n += 12
+        return n
+
+    values = {}
+    if start is not None:
+        values["calling_hours_start"] = hour(start, cfg.get("calling_hours_start", 9))
+    if end is not None:
+        e = hour(end, cfg.get("calling_hours_end", 21))
+        if e is not None and e <= values.get("calling_hours_start", cfg.get("calling_hours_start", 9)) and e < 12:
+            e += 12
+        values["calling_hours_end"] = e
+    if not values:
+        return "Failed: say the new start and/or end hour."
+    try:
+        update_automation(agent_id, values, actor="team")
+    except Exception as e:  # noqa: BLE001
+        return f"Failed: {e}"
+    new = get_automation(agent_id)
+    return f"Calling hours now {new['calling_hours_start']}:00 to {new['calling_hours_end']}:00 IST."
+
+
+def pending_work_tool(agent_id: int) -> str:
+    """What is waiting for this agent: queue size, callbacks due today, meetings today, hot leads not yet called."""
+    crm = CRMService(agent_id)
+    today = datetime.now(IST).strftime("%Y-%m-%d")
+    queue = crm.queue_size()
+    callbacks = crm.due_callbacks(f"{today} 23:59", 20)
+    meetings = crm.meetings_on(today)
+    parts = [f"{queue} in the call queue", f"{len(callbacks)} callback(s) due today"]
+    if callbacks:
+        parts.append("next: " + ", ".join(f"{c.get('name') or c.get('phone')} at {str(c.get('callback_at'))[11:16]}" for c in callbacks[:3]))
+    if meetings:
+        parts.append(f"{len(meetings)} meeting(s) today: " + ", ".join(f"{m.get('name') or m.get('phone')} {str(m.get('meeting_at'))[11:16]}" for m in meetings[:3]))
+    return "; ".join(parts) + "."
+
+
+def set_agent_paused_tool(target_agent_id: int, paused: bool) -> str:
+    """Pause (no calls at all) or resume an agent."""
+    from app.services import agents as _agents
+    try:
+        _agents.update(target_agent_id, {"status": "paused" if paused else "active"}, actor="team")
+    except Exception as e:  # noqa: BLE001
+        return f"Failed: {e}"
+    return f"Agent {target_agent_id} is now {'paused: no calls go out' if paused else 'active'}."
+
+
 TOOLS = [
     {
         "type": "function",
@@ -494,6 +661,29 @@ TOOLS = [
             }
         }
     }
+]
+
+TOOLS += [
+    {"type": "function", "function": {"name": "add_lead", "description": "Add a new lead the caller dictates: name and phone, optionally what they want and their city.",
+        "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "phone": {"type": "string", "description": "Full number with country code, digits only."},
+                                                        "requirement": {"type": "string"}, "city": {"type": "string"}}, "required": ["phone"]}}},
+    {"type": "function", "function": {"name": "add_note", "description": "Add a note to a lead that the agent reads before every call to them ('Rahul pe note karo: sirf Sunday ko call karna').",
+        "parameters": {"type": "object", "properties": {"lead": {"type": "string", "description": "Lead name or phone"}, "note": {"type": "string"}}, "required": ["lead", "note"]}}},
+    {"type": "function", "function": {"name": "update_lead_details", "description": "Change a lead's name, email, city, company or requirement. Never the phone number.",
+        "parameters": {"type": "object", "properties": {"lead": {"type": "string"}, "name": {"type": "string"}, "email": {"type": "string"}, "city": {"type": "string"},
+                                                        "company": {"type": "string"}, "requirement": {"type": "string"}}, "required": ["lead"]}}},
+    {"type": "function", "function": {"name": "set_do_not_call", "description": "Mark a lead do-not-call (on=true) or allow calls again (on=false).",
+        "parameters": {"type": "object", "properties": {"lead": {"type": "string"}, "on": {"type": "boolean"}}, "required": ["lead", "on"]}}},
+    {"type": "function", "function": {"name": "dial_lead", "description": "Call a lead right now (now=true) or queue them for the dialer (now=false). 'Rahul ko abhi call karo' / 'queue mein daal do'.",
+        "parameters": {"type": "object", "properties": {"lead": {"type": "string"}, "now": {"type": "boolean"}}, "required": ["lead"]}}},
+    {"type": "function", "function": {"name": "set_meeting", "description": "Book or move a meeting / showroom visit for a lead at a day and time (IST).",
+        "parameters": {"type": "object", "properties": {"lead": {"type": "string"}, "date_time": {"type": "string", "description": "YYYY-MM-DD HH:MM IST"}}, "required": ["lead", "date_time"]}}},
+    {"type": "function", "function": {"name": "set_calling_hours", "description": "Change the calling window: start and/or end hour on the 24h clock, IST ('10 se 7 tak call karo').",
+        "parameters": {"type": "object", "properties": {"start": {"type": "integer"}, "end": {"type": "integer"}}}}},
+    {"type": "function", "function": {"name": "pending_work", "description": "What is waiting: call queue size, callbacks due today, meetings today. Use for 'kya pending hai', 'aaj kya hai'.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "set_agent_paused", "description": "Pause this agent (no calls at all: manual, auto-dial, retries) or resume it. 'agent band karo' / 'chalu karo'.",
+        "parameters": {"type": "object", "properties": {"paused": {"type": "boolean"}}, "required": ["paused"]}}},
 ]
 
 ADMIN_TOOLS = [
@@ -706,6 +896,31 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
         return send_sms_tool(args.get("to"), args.get("message"))
     elif name == "book_calendar_event":
         return book_calendar_event_tool(args.get("email"), args.get("date_time"), args.get("duration_minutes", 30), agent_id)
+    # Own-agent actions a colleague needs on a call; an admin naming another agent ("Hairscope ka") works on that one.
+    target = agent_id
+    if role == "admin" and args.get("agent"):
+        target, note = resolve_agent(args.get("agent"), agent_id)
+        if note:
+            return note
+    if name == "add_lead":
+        return add_lead_tool(target, args.get("name"), args.get("phone"), args.get("requirement"), args.get("city"))
+    elif name == "add_note":
+        return add_note_tool(target, args.get("lead_id"), args.get("note") or args.get("text"), lead=args.get("lead") or args.get("name"))
+    elif name == "update_lead_details":
+        fields = {k: args.get(k) for k in ("name", "email", "city", "company", "requirement", "requirements") if args.get(k)}
+        return update_lead_details_tool(target, args.get("lead_id"), lead=args.get("lead"), **fields)
+    elif name == "set_do_not_call":
+        return set_do_not_call_tool(target, args.get("lead_id"), _on_flag(args.get("on", True)), lead=args.get("lead") or args.get("name"))
+    elif name == "dial_lead":
+        return dial_lead_tool(target, args.get("lead_id"), lead=args.get("lead") or args.get("name"), now=_on_flag(args.get("now", True)))
+    elif name == "set_meeting":
+        return set_meeting_tool(target, args.get("lead_id"), args.get("date_time") or args.get("time") or "", lead=args.get("lead") or args.get("name"))
+    elif name == "set_calling_hours":
+        return set_calling_hours_tool(target, args.get("start"), args.get("end"))
+    elif name == "pending_work":
+        return pending_work_tool(target)
+    elif name == "set_agent_paused":
+        return set_agent_paused_tool(target, _on_flag(args.get("paused", True)))
 
     # Admin tools
     if role == "admin":
