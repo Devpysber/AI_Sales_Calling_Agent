@@ -399,45 +399,47 @@ def team_brief(agent_id: int) -> str:
 
         lines: list[str] = []
         try:
-        stats = CallService(agent_id).stats(days=7)
-        today = stats.get("today") or {}
-        talk = int(today.get("talk_seconds") or 0)
-        lines.append(f"- Today: {today.get('total', 0)} call(s), {today.get('connected', 0)} answered, "
-                     f"{talk // 60}m {talk % 60}s on the phone. {stats.get('active', 0)} live right now.")
-        outcomes = stats.get("outcomes") or {}
-        if outcomes:
-            lines.append("- How last week's calls ended: "
-                         + ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in sorted(outcomes.items())))
-    except Exception:  # noqa: BLE001 - a colleague's call must not fail over a missing number
-        log.exception("Team brief: call stats unavailable")
+            stats = CallService(agent_id).stats(days=7)
+            today = stats.get("today") or {}
+            talk = int(today.get("talk_seconds") or 0)
+            lines.append(f"- Today: {today.get('total', 0)} call(s), {today.get('connected', 0)} answered, "
+                         f"{talk // 60}m {talk % 60}s on the phone. {stats.get('active', 0)} live right now.")
+            outcomes = stats.get("outcomes") or {}
+            if outcomes:
+                lines.append("- How last week's calls ended: "
+                             + ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in sorted(outcomes.items())))
+        except Exception:  # noqa: BLE001 - a colleague's call must not fail over a missing number
+            log.exception("Team brief: call stats unavailable")
 
-    try:
-        crm = CRMService(agent_id).stats()
-        lines.append(f"- Leads: {crm.get('total', 0)} in total, {crm.get('pending', 0)} waiting to be called, "
-                     f"{crm.get('meetings', 0)} with a meeting booked.")
-        hot = (crm.get("by_qualification") or {}).get("Hot", 0)
-        lines.append(f"- Qualified Hot so far: {hot}.")
-    except Exception:  # noqa: BLE001
-        log.exception("Team brief: lead stats unavailable")
+        try:
+            crm = CRMService(agent_id).stats()
+            lines.append(f"- Leads: {crm.get('total', 0)} in total, {crm.get('pending', 0)} waiting to be called, "
+                         f"{crm.get('meetings', 0)} with a meeting booked.")
+            hot = (crm.get("by_qualification") or {}).get("Hot", 0)
+            lines.append(f"- Qualified Hot so far: {hot}.")
+        except Exception:  # noqa: BLE001
+            log.exception("Team brief: lead stats unavailable")
 
-    try:
-        recent = CallService(agent_id).list_calls(page_size=3)["items"]
-        for call in recent:
-            who = call.get("lead_name") or call.get("from_number") or call.get("to_number") or "unknown number"
-            summary = (call.get("summary") or "no summary yet").strip()
-            lines.append(f"- Last call with {who} ({call.get('status', '')}): {summary[:160]}")
-    except Exception:  # noqa: BLE001
-        log.exception("Team brief: recent calls unavailable")
+        try:
+            recent = CallService(agent_id).list_calls(page_size=3)["items"]
+            for call in recent:
+                who = call.get("lead_name") or call.get("from_number") or call.get("to_number") or "unknown number"
+                summary = (call.get("summary") or "no summary yet").strip()
+                lines.append(f"- Last call with {who} ({call.get('status', '')}): {summary[:160]}")
+        except Exception:  # noqa: BLE001
+            log.exception("Team brief: recent calls unavailable")
 
-    try:
-        docs = rag.stats(agent_id)
-        count = docs.get("documents", 0)
-        lines.append(f"- Knowledge: {count} document(s), {docs.get('chunks', 0)} passage(s)."
-                     + ("" if count else " Nothing is loaded, so I cannot quote prices or specifics to a customer."))
-    except Exception:  # noqa: BLE001
-        log.exception("Team brief: knowledge stats unavailable")
+        try:
+            docs = rag.stats(agent_id)
+            count = docs.get("documents", 0)
+            lines.append(f"- Knowledge: {count} document(s), {docs.get('chunks', 0)} passage(s)."
+                         + ("" if count else " Nothing is loaded, so I cannot quote prices or specifics to a customer."))
+        except Exception:  # noqa: BLE001
+            log.exception("Team brief: knowledge stats unavailable")
 
-    return "\n".join(lines)
+        return "\n".join(lines)
+
+    return _cached(("team", agent_id), build)
 
 
 def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: int | None = None,
@@ -787,9 +789,10 @@ _TOOL_WORDS = re.compile(
     r"schedule|callback|call ?back|book|meeting|update|mark|status|stats|report|how many|kitn[aei]|count|calls?|leads?|"
     r"record|check|dekho|batao|bata\w*|last|recent|pichl[aei]|aaj|today|yesterday|kal|diagnos|credit|balance|config|setting|"
     r"automation|dialer|dial|reminder|nurture|retry|speed|agents?|overview|active|live|running|paused?|hours|"
-    r"rok|roko|ruko|shuru|dikhao|lagao|milao|hot|warm|cold|interested|qualif\w*)\b|"
+    r"rok|roko|ruko|shuru|dikhao|lagao|milao|hot|warm|cold|interested|qualif\w*|"
+    r"add|note|likh\w*|jod\w*|queue|pending|visit|dnc|do not call|number|naya|nayi|new)\b|"
     r"बंद|चालू|भेज|मेल|कॉल|लीड|कितन|स्टेटस|रिपोर्ट|आज|कल|पिछल|चेक|देखो|बताओ|ऑन|ऑफ|शेड्यूल|मीटिंग|अपडेट|"
-    r"रोक|शुरू|दिखा|बता|हॉट|वार्म|कोल्ड", re.I)
+    r"रोक|शुरू|दिखा|बता|हॉट|वार्म|कोल्ड|नोट|जोड़|लिख|नंबर|पेंडिंग|नया|नई", re.I)
 
 
 def wants_tool(text: str) -> bool:
@@ -1151,11 +1154,11 @@ Return ONLY JSON:
   "team_action": "what the customer asked a human on the team to DO, in one sentence, if they asked for anything at all (e.g. 'Customer is standing outside the Bhopal showroom now and wants someone to come out and meet him'), else empty",
   "urgent": "true only when the customer needs a person within the hour (waiting at a location, angry, blocked), else false",
   "email": "",
-  "send_email": [
+  "send_email": [ // empty list [] unless the agent promised an email on the call or the call needs an escalation
     {{
       "to": "lead | team | admin",
       "subject": "Subject of the email to send",
-      "body": "Body of the email to send (generate professional text based on what the agent promised on the call or if the call warrants an escalation alert to the team); empty list [] unless the agent promised an email on the call or the call needs an escalation"
+      "body": "Body of the email to send (generate professional text based on what the agent promised on the call or if the call warrants an escalation alert to the team)"
     }}
   ]
 }}"""
@@ -1194,7 +1197,7 @@ def summarize(history: list[dict]) -> dict:
     orders = [providers] + ([reversed_providers] if reversed_providers != providers else [])
     for attempt, order in enumerate(orders):
         try:
-            result = llm.complete(messages, json_mode=True, max_tokens=1200, temperature=0.1, providers=order, timeout=25)
+            result = llm.complete(messages, json_mode=True, max_tokens=800, temperature=0.1, providers=order, timeout=25)
             log.info("Call summary by %s/%s in %sms", result.provider, result.model, result.latency_ms)
             return llm.parse_json(result.text)
         except Exception as e:  # noqa: BLE001 - one retry with the provider order reversed

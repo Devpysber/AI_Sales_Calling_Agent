@@ -97,6 +97,11 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(recover_knowledge_state)
     except Exception as e:  # noqa: BLE001 - housekeeping must never block startup
         log.warning("Knowledge state recovery skipped: %s", e)
+    try:
+        from app.services.heal_service import seed_issues_row
+        await asyncio.to_thread(seed_issues_row)
+    except Exception as e:  # noqa: BLE001 - the row is also created lazily on first report
+        log.warning("Heal issues row seed skipped: %s", e)
 
     # Warm up TTS in background so startup isn't blocked, but it's ready quickly
     from app.services import tts, llm

@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, CalendarCheck, Clock, Flame, Gauge, IndianRupee, PhoneCall, Printer, TrendingUp, UserPlus } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button, Card, CardHeader, EmptyState, Meter, PageHeader, Skeleton, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
@@ -279,6 +280,7 @@ export default function Analytics() {
 }
 
 function UsageCard({ usage: u }: { usage: AnalyticsUsage }) {
+  const { path } = useAgent()
   const cost = u.cost ?? { telephony: 0, tts: 0, stt: 0, llm: 0 }
   const money = (v: number | null | undefined) => `${u.currency ?? '₹'}${(v ?? 0).toLocaleString('en-IN', { maximumFractionDigits: (v ?? 0) < 10 ? 2 : 0 })}`
   const rows: [string, string, number][] = [
@@ -324,7 +326,7 @@ function UsageCard({ usage: u }: { usage: AnalyticsUsage }) {
       </div>
       {!u.rates_configured && (
         <p className="border-t border-border px-4 py-3 text-xs break-words text-muted sm:px-5">
-          Add your provider rates on the server (COST_PER_CALL_MINUTE, COST_PER_10K_TTS_CHARS, COST_PER_STT_HOUR, COST_PER_LLM_REQUEST) to see rupee estimates.
+          <Link to={path('/settings')} className="underline hover:text-fg">Add your provider rates under Settings → Secrets (Plivo per minute, Sarvam TTS per 10k chars, STT per hour, LLM per request) to see rupee estimates.</Link>
         </p>
       )}
     </Card>

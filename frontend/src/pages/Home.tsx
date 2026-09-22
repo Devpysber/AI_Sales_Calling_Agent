@@ -244,8 +244,8 @@ export default function Home() {
   const { data, isLoading, isError, error, refetch, dataUpdatedAt, isFetching } = useQuery({
     queryKey: ['agents', 'overview'],
     queryFn: () => api<AgentsOverview>('/api/agents/overview'),
-    refetchInterval: 6000,
-    refetchIntervalInBackground: true,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
     staleTime: 0,
   })
   // While something is on the line, read the light /api/agents/live feed faster (3s) so the header badge and live-calls

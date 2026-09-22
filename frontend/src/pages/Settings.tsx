@@ -58,7 +58,7 @@ export default function Settings() {
   return (
     <>
       <PageHeader eyebrow={<><PlugZap className="size-3.5" />Workspace · Shared by every agent</>} title="Integrations & system"
-        description="Telephony, AI providers and deployment used by all agents. Secrets are configured on the server and never exposed here."
+        description="Telephony, AI providers and deployment used by all agents. Keys and tuning values can be entered below; saved secrets are masked and never shown again. Empty fields fall back to the server .env."
         visual={s ? <HealthRing ok={checks.filter(Boolean).length} total={checks.length} checking={isFetching} /> : undefined}
         actions={<Button onClick={() => refetch()} disabled={isFetching}><RefreshCw className={cn(isFetching && 'animate-spin')} />{isFetching ? 'Checking…' : 'Re-check'}</Button>}>
         {s && (() => {
@@ -97,7 +97,7 @@ export default function Settings() {
             </Stagger>
 
             <Card>
-              <CardHeader title="Inbound calls" description="Customers who call your Plivo number talk to the agent that owns that number (set under Agent settings); other numbers go to the first active agent." />
+              <CardHeader title="Inbound calls" description="Customers who call your Plivo number talk to the agent that owns that number (set under Agent settings); other numbers go to the first active agent. A caller known to more than one agent is asked once which desk they mean; a caller who asks for another desk is passed to it and that team is notified." />
               <div className="space-y-3 p-4 text-sm sm:p-5">
                 <InboundSetup />
                 <p className="pt-2 text-xs text-muted">Manual setup: in Plivo (Voice → Applications) use these URLs and attach the application to your number.</p>

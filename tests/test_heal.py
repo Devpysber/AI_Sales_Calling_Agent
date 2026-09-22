@@ -61,6 +61,13 @@ def test_export_and_fix_ack(client):
     assert next(i for i in heal_service.list_issues() if i["id"] == issue["id"])["fix_pr"].endswith("/pull/1")
 
 
+def test_export_rejects_wrong_token(client):
+    heal_service.report("turn_error", "nope", data={"error": "nope"})
+    token = client.get("/api/system/issues/token").json()["token"]
+    bad = token[:-1] + ("0" if token[-1] != "0" else "1")
+    assert client.get("/api/system/issues/export", headers={"X-Heal-Token": bad}).status_code == 401
+
+
 def test_export_redacts_customer_data(client):
     issue = heal_service.report("turn_error", "KeyError at rahul@x.com (caller said: call +91 98765 43210)",
                                 data={"error": "KeyError", "text": "call +91 98765 43210", "body": "rahul@x.com"})
@@ -69,6 +76,33 @@ def test_export_redacts_customer_data(client):
     row = next(i for i in client.get("/api/system/issues/export", headers={"X-Heal-Token": token}).json()["issues"] if i["id"] == issue["id"])
     dumped = str(row)
     assert "rahul@x.com" not in dumped and "98765" not in dumped and row["data"]["body"] == "<omitted>"
+
+
+def test_detect_bump_false_does_not_inflate_count_or_last_at(client):
+    issue = heal_service.report("turn_error", "first", data={"error": "first"})
+    assert issue["count"] == 1
+    first_last_at = issue["last_at"]
+    bumped = heal_service.report("turn_error", "second", agent_id=issue.get("agent_id"), data={"error": "second"}, bump=False)
+    assert bumped["id"] == issue["id"]
+    assert bumped["count"] == 1  # not incremented
+    assert bumped["last_at"] == first_last_at  # not refreshed
+
+
+def test_heal_does_not_clobber_a_report_that_lands_during_a_remedy(client, monkeypatch):
+    """A remedy that reports a fresh issue mid-run must survive heal()'s own final write (see heal_service.heal)."""
+    issue = heal_service.report("turn_error", "slow one", data={"error": "slow"})
+
+    from app.services import heal_service as hs
+    real_heal_one = hs._heal_one
+
+    def fake_heal_one(it):
+        if it["id"] == issue["id"]:
+            hs.report("scheduler_error", "landed mid-remedy", data={"job": "x"})
+        return real_heal_one(it)
+
+    monkeypatch.setattr(hs, "_heal_one", fake_heal_one)
+    hs.heal(issue["id"])
+    assert any(i["kind"] == "scheduler_error" and i["detail"] == "landed mid-remedy" for i in hs.list_issues())
 
 
 def test_summary_heal_closes_silent_calls_and_reports_the_rest(client, base, monkeypatch):

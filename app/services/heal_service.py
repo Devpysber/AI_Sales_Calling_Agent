@@ -53,26 +53,54 @@ def _save(issues: list[dict]) -> None:
     SettingsService().set_state(ISSUES_KEY, issues[-MAX_ISSUES:])
 
 
+def seed_issues_row() -> None:
+    """Ensure the state.issues row exists so `_locked_issues`'s FOR UPDATE always has a row to lock;
+    call once at startup so two concurrent first-ever reports never both INSERT the same PK."""
+    from app.core.database import get_db
+    from app.models.app_setting import AppSetting
+    with get_db() as db:
+        if db.get(AppSetting, f"state.{ISSUES_KEY}") is None:
+            db.add(AppSetting(key=f"state.{ISSUES_KEY}", value="[]"))
+
+
+@contextlib.contextmanager
+def _locked_issues():
+    """Read-modify-write the issues list in one transaction under a row lock, so concurrent
+    reporters/healers across processes (uvicorn workers, scheduler worker) never clobber each other."""
+    from sqlalchemy import select
+    from app.core.database import get_db
+    from app.models.app_setting import AppSetting
+    with get_db() as db:
+        key = f"state.{ISSUES_KEY}"
+        row = db.execute(select(AppSetting).where(AppSetting.key == key).with_for_update()).scalar_one_or_none()
+        if row is None:
+            row = AppSetting(key=key, value="[]")
+            db.add(row)
+            db.flush()
+        issues = list(json.loads(row.value or "[]"))
+        yield issues
+        row.value = json.dumps(issues[-MAX_ISSUES:])
+
+
 def report(kind: str, detail: str, *, agent_id: int | None = None, call_id: int | None = None,
-           data: dict | None = None, title: str | None = None) -> dict:
+           data: dict | None = None, title: str | None = None, bump: bool = True) -> dict:
     """Record (or bump) an open issue; the same kind + agent + title counts up rather than piling up."""
     try:
-        issues = _load()
-        title = title or KINDS.get(kind, (kind, None))[0]
-        for it in issues:
-            if it["status"] == "open" and it["kind"] == kind and it.get("agent_id") == agent_id and it["title"] == title:
-                it.update(count=int(it.get("count") or 1) + 1, last_at=_now(), detail=str(detail)[:1000],
-                          data=data if data is not None else it.get("data"), call_id=call_id or it.get("call_id"))
-                _save(issues)
-                return it
-        issue = {"id": uuid.uuid4().hex[:12], "kind": kind, "title": title, "detail": str(detail)[:1000],
-                 "agent_id": agent_id, "call_id": call_id, "data": data, "status": "open", "count": 1,
-                 "first_at": _now(), "last_at": _now(), "healable": bool(KINDS.get(kind, (None, None))[1]),
-                 "remedy": KINDS.get(kind, (None, None))[1], "result": None}
-        issues.append(issue)
-        _save(issues)
-        events.record("issue.reported", title, str(detail)[:500], agent_id=agent_id, call_id=call_id, actor="system")
-        return issue
+        with _locked_issues() as issues:
+            title = title or KINDS.get(kind, (kind, None))[0]
+            for it in issues:
+                if it["status"] == "open" and it["kind"] == kind and it.get("agent_id") == agent_id and it["title"] == title:
+                    it.update(count=int(it.get("count") or 1) + (1 if bump else 0),
+                              last_at=_now() if bump else it["last_at"], detail=str(detail)[:1000],
+                              data=data if data is not None else it.get("data"), call_id=call_id or it.get("call_id"))
+                    return it
+            issue = {"id": uuid.uuid4().hex[:12], "kind": kind, "title": title, "detail": str(detail)[:1000],
+                     "agent_id": agent_id, "call_id": call_id, "data": data, "status": "open", "count": 1,
+                     "first_at": _now(), "last_at": _now(), "healable": bool(KINDS.get(kind, (None, None))[1]),
+                     "remedy": KINDS.get(kind, (None, None))[1], "result": None}
+            issues.append(issue)
+            events.record("issue.reported", title, str(detail)[:500], agent_id=agent_id, call_id=call_id, actor="system")
+            return issue
     except Exception:  # noqa: BLE001 - reporting a problem must never create one
         log.exception("Failed to report issue %s", kind)
         return {}
@@ -86,13 +114,12 @@ def list_issues(include_closed: bool = False) -> list[dict]:
 
 
 def dismiss(issue_id: str) -> bool:
-    issues = _load()
-    for it in issues:
-        if it["id"] == issue_id:
-            it.update(status="dismissed", result="Dismissed by admin")
-            _save(issues)
-            return True
-    return False
+    with _locked_issues() as issues:
+        for it in issues:
+            if it["id"] == issue_id:
+                it.update(status="dismissed", result="Dismissed by admin")
+                return True
+        return False
 
 
 # ---------------- detection ----------------
@@ -140,7 +167,7 @@ def detect() -> list[dict]:
         if not public_url_reachable():
             checks.append(("public_url", "The app's public URL does not answer; Plivo cannot reach calls or audio.", {}))
     for kind, detail, data in checks:
-        report(kind, detail, agent_id=data.get("agent_id"), data=data)
+        report(kind, detail, agent_id=data.get("agent_id"), data=data, bump=False)
     return list_issues()
 
 
@@ -199,26 +226,26 @@ def _heal_one(issue: dict) -> tuple[bool, str]:
         if not data.get("job"):
             return False, "No job recorded."
         out = run_job(int(data.get("agent_id") or issue.get("agent_id")), data["job"], force=True, actor="heal")
-        return True, out[:300]
+        return (not out.startswith("error:")), out[:300]
     return False, "No automatic remedy: escalated with details for a developer."
 
 
 def heal(issue_id: str | None = None) -> list[dict]:
     """Heal one issue, or every open one; each result says what happened in plain words."""
-    issues = _load()
+    todo = [it for it in _load() if it["status"] in ("open", "escalated") and (not issue_id or it["id"] == issue_id)]
     results = []
-    for it in issues:
-        if it["status"] not in ("open", "escalated") or (issue_id and it["id"] != issue_id):
-            continue
+    for it in todo:
         try:
             ok, note = _heal_one(it)
         except Exception as e:  # noqa: BLE001 - a remedy that throws is a failed remedy, reported as such
             log.exception("Heal failed for %s", it["kind"])
             ok, note = False, f"Remedy failed: {str(e)[:300]}"
-        it.update(status="healed" if ok else "escalated", result=note, healed_at=_now() if ok else None)
+        with _locked_issues() as issues:
+            cur = next((i for i in issues if i["id"] == it["id"]), None)
+            if cur:
+                cur.update(status="healed" if ok else "escalated", result=note, healed_at=_now() if ok else None)
         events.record("issue.healed" if ok else "issue.escalated", it["title"], note, agent_id=it.get("agent_id"), call_id=it.get("call_id"), actor="admin")
         results.append({"id": it["id"], "kind": it["kind"], "title": it["title"], "ok": ok, "note": note})
-    _save(issues)
     return results
 
 
@@ -285,11 +312,10 @@ def export() -> dict:
 
 def ack_fix(issue_id: str, pr_url: str, note: str | None = None) -> bool:
     """The fix agent opened a PR for this issue: link it so the panel shows 'Fix PR' instead of a red row."""
-    issues = _load()
-    for it in issues:
-        if it["id"] == issue_id:
-            it.update(fix_pr=pr_url, result=(note or f"Fix proposed: {pr_url}")[:500])
-            _save(issues)
-            events.record("issue.fix_proposed", it["title"], pr_url, agent_id=it.get("agent_id"), call_id=it.get("call_id"), actor="fix-agent")
-            return True
-    return False
+    with _locked_issues() as issues:
+        for it in issues:
+            if it["id"] == issue_id:
+                it.update(fix_pr=pr_url, result=(note or f"Fix proposed: {pr_url}")[:500])
+                events.record("issue.fix_proposed", it["title"], pr_url, agent_id=it.get("agent_id"), call_id=it.get("call_id"), actor="fix-agent")
+                return True
+        return False

@@ -1018,7 +1018,7 @@ class CallStream:
         async def store():
             summary = await asyncio.to_thread(run)
             if summary:
-                self.save_session(summary=summary)
+                self.save_session(summary=summary, compacted_upto=agent.compacted_upto(history))
                 log.info("Compacted %s turns into a summary, session=%s", len(history), self.session_id[:8])
 
         asyncio.create_task(store())
@@ -1700,7 +1700,8 @@ class CallStream:
         def pump():
             try:
                 for delta in agent.respond_stream(self.agent_id, history, prompt_text, lead, guidance, language,
-                                                  summary=self.session.get('summary')):
+                                                  summary=self.session.get('summary'),
+                                                  compacted_upto=self.session.get("compacted_upto")):
                     if stop.is_set():
                         return
                     loop.call_soon_threadsafe(deltas.put_nowait, delta)
@@ -1878,7 +1879,8 @@ class CallStream:
                     def spoken_retry() -> str:
                         parts = []
                         for d in agent.respond_stream(self.agent_id, history, prompt_text, lead, spoken_only, language,
-                                                      summary=self.session.get("summary")):
+                                                      summary=self.session.get("summary"),
+                                                      compacted_upto=self.session.get("compacted_upto")):
                             (self.meter_llm(d) if isinstance(d, dict) else parts.append(d))
                         return "".join(parts)
                     raw = await asyncio.to_thread(spoken_retry)

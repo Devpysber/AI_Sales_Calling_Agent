@@ -60,6 +60,51 @@ def test_a_prefetched_query_embedding_is_reused_without_a_second_round_trip(monk
     assert embeds == ["what does a service cost"]  # second turn paid nothing
 
 
+def test_reply_path_joins_an_inflight_prefetch_instead_of_a_second_embed_call(monkeypatch):
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
+    embeds = []
+
+    def fake_embed(queries, timeout=None):
+        embeds.append(queries[0])
+        started.set()
+        release.wait(2)
+        return [[0.4, 0.5, 0.6]]
+
+    monkeypatch.setattr(rag.llm, "embed", fake_embed)
+    monkeypatch.setattr(rag, "_load_index", lambda agent_id: None)
+    rag._embed_cache.clear()
+    rag._inflight.clear()
+
+    rag.prefetch(1, "what is the warranty", timeout=2.0)
+    assert started.wait(2)  # prefetch is now mid-flight
+
+    release.set()
+    assert rag._embed_query("what is the warranty", 2.0) == [0.4, 0.5, 0.6]
+    assert embeds == ["what is the warranty"]  # the reply path never started a second embed
+
+
+def test_search_only_upgrades_to_embeddings_when_the_caller_allowed_a_real_budget(monkeypatch):
+    calls = []
+    monkeypatch.setattr(rag, "_embed_query", lambda q, t: calls.append(t) or [1.0, 0.0])
+    monkeypatch.setattr(rag, "_load_index", lambda agent_id: type("Idx", (), {
+        "ids": ["c1"], "texts": ["t"], "titles": ["d"], "tfs": [{}],
+        "lengths": __import__("numpy").array([1.0]), "df": {},
+        "vectors": __import__("numpy").array([[1.0, 0.0]], dtype="float32"),
+        "has_vector": __import__("numpy").array([True]),
+    })())
+
+    # Live-path budget (0.3s, matches LIVE_EMBED_TIMEOUT): no BM25 hit must not trigger a synchronous upgrade.
+    rag.search(1, "haan theek hai", use_embeddings=False, embed_timeout=0.3)
+    assert calls == []
+
+    # A caller that already allowed a real round trip still gets the cross-language upgrade.
+    rag.search(1, "haan theek hai", use_embeddings=False, embed_timeout=1.0)
+    assert calls == [1.5]
+
+
 def test_slow_agents_uses_p95_and_needs_a_sample():
     class FakeDB:
         def __init__(self, rows):

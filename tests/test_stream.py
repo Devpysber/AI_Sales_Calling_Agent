@@ -130,3 +130,28 @@ def test_silence_gate_sends_speech_with_preroll_and_tail():
     assert len(burst) == 1 + SilenceGate.PREROLL                        # onset keeps 200 ms pre-roll
     tail = sum(len(gate.process(quiet)) for _ in range(200))
     assert tail == SilenceGate.TAIL                                      # trailing silence for END_SPEECH
+
+
+def test_compact_history_soon_saves_compacted_upto(monkeypatch):
+    """After a background compaction, the next turn's window must anchor on compacted_upto,
+    not resend the turns compact_history already summarised."""
+    from app.services import agent, voice_stream
+
+    stream = voice_stream.CallStream.__new__(voice_stream.CallStream)
+    stream.session_id = "compact-test"
+    stream.session = {"history": [{"role": "customer", "text": f"turn {i}"} for i in range(agent.COMPACT_AFTER_TURNS)],
+                       "summary": None}
+    stream.compacted_at = 0
+    saved = {}
+    stream.save_session = lambda **k: saved.update(k)
+
+    monkeypatch.setattr(agent, "compact_history", lambda history, prior=None: "caller wants pricing")
+    captured = []
+    monkeypatch.setattr(voice_stream.asyncio, "create_task", lambda coro: captured.append(coro))
+
+    stream.compact_history_soon()
+    assert captured, "compaction should have been scheduled"
+    asyncio.run(captured[0])
+
+    assert saved.get("summary") == "caller wants pricing"
+    assert saved.get("compacted_upto") == agent.compacted_upto(stream.session["history"])

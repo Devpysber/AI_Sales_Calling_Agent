@@ -16,7 +16,7 @@ import re
 import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -293,24 +293,40 @@ EMBED_CACHE_TTL = 120.0
 _embed_cache: dict[str, tuple[float, list[float]]] = {}
 _embed_lock = threading.Lock()
 _prefetch_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rag-prefetch")
+# Query -> the prefetch future still computing its embedding. The reply path joins this instead of
+# firing a second, separately-billed embed call when the prefetch hasn't finished yet.
+_inflight: dict[str, Future] = {}
+
+
+def _do_embed(query: str, timeout: float) -> list[float] | None:
+    """The actual embed call, cached on success. Never joins `_inflight` itself, so a prefetch thread
+    computing an entry can't deadlock waiting on its own not-yet-finished future."""
+    vectors = llm.embed([query], timeout=timeout)
+    if not vectors:
+        return None
+    with _embed_lock:
+        _embed_cache[query] = (time.monotonic(), vectors[0])
+    return vectors[0]
 
 
 def _embed_query(query: str, timeout: float) -> list[float] | None:
-    """The query embedding, from cache when it was prefetched while the caller was still speaking."""
+    """The query embedding, from cache when it was prefetched while the caller was still speaking, or
+    joined from a still-running prefetch instead of paying for a second, separately-billed embed call."""
     now = time.monotonic()
     with _embed_lock:
         for key, (at, _) in list(_embed_cache.items()):
             if now - at > EMBED_CACHE_TTL:
                 _embed_cache.pop(key, None)
         hit = _embed_cache.get(query)
+        fut = None if hit else _inflight.get(query)
     if hit:
         return hit[1]
-    vectors = llm.embed([query], timeout=timeout)
-    if not vectors:
-        return None
-    with _embed_lock:
-        _embed_cache[query] = (now, vectors[0])
-    return vectors[0]
+    if fut is not None:
+        try:
+            return fut.result(timeout=timeout)
+        except Exception:  # noqa: BLE001 - still running or failed; the caller falls back to BM25
+            return None
+    return _do_embed(query, timeout)
 
 
 def prefetch(agent_id: int, query: str, timeout: float = 2.5) -> None:
@@ -325,12 +341,19 @@ def prefetch(agent_id: int, query: str, timeout: float = 2.5) -> None:
     def run():
         try:
             _load_index(agent_id)
-            _embed_query(query, timeout)
+            return _do_embed(query, timeout)
         except Exception as e:  # noqa: BLE001 - a warm cache is an optimisation, never a failure
             log.debug("RAG prefetch failed: %s", e)
+            return None
+        finally:
+            with _embed_lock:
+                _inflight.pop(query, None)
 
-    with contextlib.suppress(RuntimeError):  # pool shut down during reload
-        _prefetch_pool.submit(run)
+    with _embed_lock:
+        if query in _inflight:
+            return  # already prefetching this exact query
+        with contextlib.suppress(RuntimeError):  # pool shut down during reload
+            _inflight[query] = _prefetch_pool.submit(run)
 
 
 def search(agent_id: int, query: str, top_k: int = 4, use_embeddings: bool = True, embed_timeout: float = 2.5) -> list[dict]:
@@ -358,8 +381,11 @@ def search(agent_id: int, query: str, top_k: int = 4, use_embeddings: bool = Tru
     scores = bm25
     # Keyword search is language-bound: a Hindi question never overlaps an English knowledge base, so
     # BM25 alone returns nothing on Hindi calls. Embeddings match across languages, so pay for them
-    # when keywords found nothing — the live path skips them only as a latency optimisation.
-    if not use_embeddings and bm25.max() <= 0 and index.vectors is not None and index.has_vector.any():
+    # when keywords found nothing — but only when the caller already allowed a real budget (embed_timeout
+    # >= 1.0); the live path's 0.3s budget means the turn was marked as not needing knowledge, and almost
+    # every short reply has bm25.max() == 0, so upgrading unconditionally made every such turn pay a
+    # synchronous, un-prefetched embed call.
+    if not use_embeddings and embed_timeout >= 1.0 and bm25.max() <= 0 and index.vectors is not None and index.has_vector.any():
         use_embeddings = True
         # Nothing to lose: without this the turn has no knowledge at all, so allow a longer round trip.
         embed_timeout = max(embed_timeout, 1.5)

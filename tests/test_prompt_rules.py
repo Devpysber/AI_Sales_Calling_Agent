@@ -48,6 +48,14 @@ def test_every_live_call_rule_is_in_the_prompt():
     assert not missing, f"rules dropped from the prompt: {missing}"
 
 
+def test_call_goal_is_sent_only_once():
+    """call_goal must appear once in the prompt (GOAL OF THIS CALL block), not again in the Caller lines — cost regression."""
+    persona = Persona(agents.PROFILE_DEFAULTS)
+    lead = Persona({"call_goal": "Confirm the booked meeting for tomorrow at 11am."})
+    text = agent._system_prompt(persona, lead, [], None)
+    assert text.count(lead["call_goal"]) == 1
+
+
 def test_prompt_stays_within_the_cost_budget():
     """~4.3k input tokens per turn is the cost baseline; a rule added back must not silently double it."""
     persona = Persona(agents.PROFILE_DEFAULTS)

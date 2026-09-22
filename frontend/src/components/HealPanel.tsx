@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Copy, ExternalLink, Eye, EyeOff, HeartPulse, RefreshCw, Wrench } from 'lucide-react'
+import { ChevronDown, CircleAlert, Copy, ExternalLink, Eye, EyeOff, HeartPulse, RefreshCw, Wrench } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, EmptyState, Input, Textarea } from '@/components/ui'
@@ -96,7 +96,7 @@ export default function HealPanel() {
   const [tokenVisible, setTokenVisible] = useState(false)
   const [rotating, setRotating] = useState(false)
 
-  const { data, isFetching, refetch } = useQuery({
+  const { data, isFetching, isError, error, refetch } = useQuery({
     queryKey: KEY,
     queryFn: () => api<IssuesResponse>('/api/system/issues', { params: { detect: true } }),
     staleTime: 15_000,
@@ -210,7 +210,14 @@ export default function HealPanel() {
       <div className="px-4 pb-2 text-sm text-muted sm:px-5">
         {openCount} open · {escalatedCount} escalated{lastCheck ? ` · last check ${timeAgo(lastCheck)}` : ''}
       </div>
-      {issues.length === 0 ? (
+      {isError ? (
+        <EmptyState
+          icon={<CircleAlert />}
+          title="Could not check health"
+          description={(error as Error).message}
+          action={<Button size="sm" onClick={() => refetch()}>Try again</Button>}
+        />
+      ) : issues.length === 0 ? (
         <EmptyState icon={<HeartPulse />} title="All clear" description="Nothing failed recently." />
       ) : (
         <div className="divide-y divide-border">

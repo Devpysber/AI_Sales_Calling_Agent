@@ -300,12 +300,10 @@ def test_colleague_on_one_agent_goes_straight_there(client, base):
 def test_unknown_caller_asking_for_the_other_desk_reaches_that_desk(client, base, monkeypatch):
     from app.services import agents, llm
     from app.services.call_service import CallService
-    agents._desks_cache["at"] = 0.0
     a = client.post("/api/agents", json={"name": "Cars A"}).json()
     b = client.post("/api/agents", json={"name": "Hair B"}).json()
     client.put(f"/api/agents/{a['id']}/profile", json={"company_name": "Acme Cars"})
     client.put(f"/api/agents/{b['id']}/profile", json={"company_name": "Hairscope", "team_members": [{"name": "Neha", "role": "Sales", "phone": "+919812399100", "email": "neha@hairscope.test"}]})
-    agents._desks_cache["at"] = 0.0
     from app.services import agent
     text = agent._system_prompt(agents.get_profile(a["id"]), {"call_purpose": "inbound"}, [], a["id"])
     assert "Other desks of ours" in text and "Hairscope" in text
@@ -317,6 +315,17 @@ def test_unknown_caller_asking_for_the_other_desk_reaches_that_desk(client, base
     lead = client.post(f"/api/agents/{a['id']}/leads", json={"name": "Wrong Desk", "phone": "9812399101"}).json()
     CallService(a["id"])._summarize_inner(0, lead["id"], [{"role": "customer", "text": "Hairscope ke baare mein call kiya"}])
     assert any(to == "neha@hairscope.test" and "[Hairscope]" in subject for to, subject in sent), sent
+
+
+def test_desks_cache_is_invalidated_on_profile_update(client, base):
+    from app.services import agents
+
+    a = client.post("/api/agents", json={"name": "Cache Co A"}).json()
+    client.put(f"/api/agents/{a['id']}/profile", json={"company_name": "Old Name"})
+    assert any(d["id"] == a["id"] and d["company_name"] == "Old Name" for d in agents.desks())
+
+    client.put(f"/api/agents/{a['id']}/profile", json={"company_name": "New Name"})
+    assert any(d["id"] == a["id"] and d["company_name"] == "New Name" for d in agents.desks())
 
 
 def test_shared_family_phone_is_not_greeted_by_one_desks_name(client, base, monkeypatch):

@@ -121,3 +121,26 @@ def test_the_agent_can_report_on_itself_to_a_colleague(client, monkeypatch):
 
     customer_prompt = agent_service._system_prompt(persona, {"call_purpose": "inbound"}, [], made["id"])
     assert "How this agent is doing right now" not in customer_prompt, "a customer must never hear our numbers"
+
+
+def test_the_brief_is_cached_within_a_call(client, monkeypatch):
+    """team_brief must not re-run its ~9 stats queries on every turn / trim pass."""
+    from app.services import agent as agent_service
+    from app.services.call_service import CallService
+
+    made = client.post("/api/agents", json={"name": "Cache desk"}).json()
+
+    calls = {"n": 0}
+    real_stats = CallService.stats
+
+    def counting_stats(self, *a, **kw):
+        calls["n"] += 1
+        return real_stats(self, *a, **kw)
+
+    monkeypatch.setattr(CallService, "stats", counting_stats)
+
+    agent_service._memory_cache.clear()
+    first = agent_service.team_brief(made["id"])
+    second = agent_service.team_brief(made["id"])
+    assert first == second
+    assert calls["n"] == 1, "a repeat call within the TTL must reuse the cached brief"

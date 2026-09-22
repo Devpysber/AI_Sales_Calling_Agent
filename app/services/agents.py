@@ -165,23 +165,22 @@ def ids(active_only: bool = False) -> list[int]:
         return list(db.scalars(query))
 
 
-_desks_cache: dict = {"at": 0.0, "rows": []}
+DESKS_KEY = "desks"
 
 
 def desks() -> list[dict]:
-    """Every active agent as a desk a caller could mean: id, company, agent name, tagline. Cached a minute; read per live turn."""
-    import time as _time
-    if _time.monotonic() - _desks_cache["at"] < 60:
-        return _desks_cache["rows"]
-    rows = []
-    for aid in ids(active_only=True):
-        try:
-            p = get_profile(aid)
-        except Exception:  # noqa: BLE001 - a broken profile is not a desk to offer
-            continue
-        rows.append({"id": aid, "company_name": p.get("company_name") or "", "agent_name": p.get("agent_name") or "",
-                     "tagline": (p.get("company_tagline") or "").strip()})
-    _desks_cache.update(at=_time.monotonic(), rows=rows)
+    """Every active agent as a desk a caller could mean: id, company, agent name, tagline. Cached a minute in the shared store; read per live turn."""
+    rows = store.get_json(DESKS_KEY)
+    if rows is None:
+        rows = []
+        for aid in ids(active_only=True):
+            try:
+                p = get_profile(aid)
+            except Exception:  # noqa: BLE001 - a broken profile is not a desk to offer
+                continue
+            rows.append({"id": aid, "company_name": p.get("company_name") or "", "agent_name": p.get("agent_name") or "",
+                         "tagline": (p.get("company_tagline") or "").strip()})
+        store.set_json(DESKS_KEY, rows, ttl=60)
     return rows
 
 
@@ -266,6 +265,7 @@ def create(data: dict, actor: str = "admin", created_by: str | None = None) -> d
         db.add(agent)
         db.flush()
         result = agent.to_dict()
+    store.delete(DESKS_KEY)
     events.record("agent.created", f"Agent created: {result['name']}", agent_id=result["id"], actor=actor)
     return result
 
@@ -282,6 +282,7 @@ def update(agent_id: int, data: dict, actor: str = "admin") -> dict:
             setattr(agent, key, value)
         result = agent.to_dict()
     if changed:
+        store.delete(DESKS_KEY)
         events.record("settings.updated", "Agent details updated", ", ".join(changed), agent_id=agent_id, actor=actor)
     return result
 
@@ -299,6 +300,7 @@ def delete(agent_id: int, actor: str = "admin") -> bool:
         db.delete(agent)
     for group in DEFAULTS:
         store.delete(_cache_key(agent_id, group))
+    store.delete(DESKS_KEY)
     SettingsService().delete_state(f"last_run.{agent_id}.")
     events.record("agent.deleted", f"Agent deleted: {name}", actor=actor)
     return True
@@ -356,6 +358,8 @@ def _update_group(agent_id: int, group: str, values: dict, label: str, actor: st
         before = {**DEFAULTS[group], **agent.stored(group)}
         setattr(agent, group, json.dumps({**agent.stored(group), **clean}, ensure_ascii=False))
     store.delete(_cache_key(agent_id, group))
+    if group == "profile":
+        store.delete(DESKS_KEY)
     changed = [k for k, v in clean.items() if before.get(k) != v]
     if changed:
         events.record("settings.updated", f"{label} updated", ", ".join(changed), agent_id=agent_id, actor=actor)

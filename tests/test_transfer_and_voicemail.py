@@ -60,3 +60,15 @@ def test_live_calls_feed_is_cheap_and_shaped_for_the_banner(client, base):
     for call in body["live_calls"]:
         assert call["status"] in ("Queued", "Ringing", "In Progress")
         assert "agent_name" in call
+
+
+def test_live_calls_does_not_rebuild_full_agent_stats(client, base, monkeypatch):
+    """The 3s-polled banner must not pay for list_agents()'s aggregate queries."""
+    from app.services import agents
+
+    def boom(*a, **k):
+        raise AssertionError("live_calls must not call list_agents")
+
+    monkeypatch.setattr(agents, "list_agents", boom)
+    res = client.get("/api/agents/live")
+    assert res.status_code == 200
