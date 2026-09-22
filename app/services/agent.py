@@ -225,7 +225,7 @@ def choice_options(choices: list[dict], english: bool) -> str:
     return (", ".join(labels[:-1]) + joiner + labels[-1]) if len(labels) > 1 else labels[0]
 
 
-def choose_agent(text: str, choices: list[dict]) -> int | None:
+def choose_agent(text: str, choices: list[dict], use_llm: bool = True) -> int | None:
     """
     Which of the offered desks the caller means. Cheap word overlap first (the caller usually repeats a
     company or agent name), then a tiny LLM classification; None when they still have not said.
@@ -241,6 +241,8 @@ def choose_agent(text: str, choices: list[dict]) -> int | None:
     scored.sort(reverse=True)
     if scored and scored[0][0] and (len(scored) == 1 or scored[0][0] > scored[1][0]):
         return scored[0][1]
+    if not use_llm:
+        return None
     # Ordinal answers ("the first one", "second") and paraphrases go to the model.
     menu = "\n".join(f"{i + 1}. {c['label']}" + (f" — {c['about']}" if c.get("about") else "") for i, c in enumerate(choices))
     try:

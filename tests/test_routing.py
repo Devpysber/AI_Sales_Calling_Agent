@@ -317,3 +317,28 @@ def test_unknown_caller_asking_for_the_other_desk_reaches_that_desk(client, base
     lead = client.post(f"/api/agents/{a['id']}/leads", json={"name": "Wrong Desk", "phone": "9812399101"}).json()
     CallService(a["id"])._summarize_inner(0, lead["id"], [{"role": "customer", "text": "Hairscope ke baare mein call kiya"}])
     assert any(to == "neha@hairscope.test" and "[Hairscope]" in subject for to, subject in sent), sent
+
+
+def test_shared_family_phone_is_not_greeted_by_one_desks_name(client, base, monkeypatch):
+    from app.services import agent
+    from app.services.call_service import CallService
+    a = client.post("/api/agents", json={"name": "Desk A"}).json()
+    b = client.post("/api/agents", json={"name": "Desk B"}).json()
+    client.put(f"/api/agents/{a['id']}/profile", json={"company_name": "Alpha Cars"})
+    client.put(f"/api/agents/{b['id']}/profile", json={"company_name": "Beta Hair"})
+    client.post(f"/api/agents/{a['id']}/leads", json={"name": "Rahul", "phone": "9812300222"})
+    client.post(f"/api/agents/{b['id']}/leads", json={"name": "Priya", "phone": "9812300222"})
+    monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
+    session = CallService(None).create_inbound("919812300222", "918000000000", "fam-1")
+    text = agent.greeting(session["agent_id"], session["lead"], "en-IN")
+    assert "Rahul" not in text and "Priya" not in text and "Alpha Cars or Beta Hair" in text
+
+
+def test_mid_call_desk_change_needs_a_cue_and_a_name():
+    from app.services import agent
+    from app.services.voice_stream import DESK_SWITCH_CUE
+    choices = [{"agent_id": 1, "label": "Alpha Cars", "company": "Alpha Cars", "agent_name": "Ashish"},
+               {"agent_id": 2, "label": "Beta Hair", "company": "Beta Hair", "agent_name": "Neha"}]
+    assert DESK_SWITCH_CUE.search("actually beta hair ke baare mein") and not DESK_SWITCH_CUE.search("haan beta hair se hi liya tha")
+    assert agent.choose_agent("actually beta hair ke baare mein", choices, use_llm=False) == 2
+    assert agent.choose_agent("the second one please", choices, use_llm=False) is None  # ordinals need the model; not for a mid-call switch

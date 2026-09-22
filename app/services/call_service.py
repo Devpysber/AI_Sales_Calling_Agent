@@ -410,6 +410,10 @@ class CallService:
             context["call_goal"] = agent.call_goal(context, purpose)
         elif len(choices) > 1:
             context = {**(lead or {"phone": from_number}), "call_purpose": "inbound_choose", "choices": choices}
+            names = {str(l.get("name") or "").strip().lower() for l in known_per_agent if str(l.get("name") or "").strip()}
+            if len(names) > 1:
+                # The desks know this number as different people (a shared family phone): greet nobody by name.
+                context["name"] = ""
             context["call_goal"] = agent.call_goal(context, "inbound_choose")
         else:
             context = agent.inbound_context(persona, lead, from_number)

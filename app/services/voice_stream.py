@@ -91,6 +91,8 @@ VOICEMAIL = re.compile(
     r"बंद है|संदेश (छोड़|रिकॉर्ड)|पहुंच से बाहर|पहुँच से बाहर|कवरेज क्षेत्र", re.I)
 VOICEMAIL_WINDOW_SECONDS = 15.0    # only the opening of a call can be a recording
 # The caller asks for a moment ("ek minute", "hold on", "रुकिए"): the silence loop waits instead of prompting.
+# A caller changing desk mid-call says so with a correction or a topic cue, never just the name in passing.
+DESK_SWITCH_CUE = re.compile(r"\b(actually|instead|regarding|about|nahi|nhi|galat|wala|wale|wali|ke liye|ke baare|baare|liye)\b|के बारे|के लिए|नहीं|वाला|वाली|असल में", re.I)
 HOLD = re.compile(r"(ek|one|एक) (minute|second|sec|min|मिनट|सेकंड)|hold on|hold kar|रुकिए|रुको|\bruko\b|rukiye|ek min\b|"
                   r"थोड़ा रुक|just a (sec|second|moment)|one moment|\bwait\b", re.I)
 HOLD_SECONDS = 45.0
@@ -1051,6 +1053,9 @@ class CallStream:
             with contextlib.suppress(Exception):
                 lead = crm.update(lead["id"], {"language": language}, actor="ai") or lead
         previous = self.session.get("lead") or {}
+        if previous.get("choices"):
+            # Remembered so a plain "actually, the other one" later in the call can still change desk.
+            self.session["desk_choices"] = previous["choices"]
         if previous.get("call_purpose") in ("team", "admin"):
             # A colleague picking one of their agents: still a check-in, never a sales call, no CRM lead.
             purpose = previous["call_purpose"]
@@ -1063,14 +1068,17 @@ class CallStream:
         self.session["agent_id"] = agent_id
         self.session["lead_id"] = lead and lead["id"]
         self.session["lead"] = context
-        self.session.setdefault("original_agent_id", old)
-        self.session["switch_history"] = (self.session.get("switch_history") or []) + [{"from": old, "to": agent_id, "reason": "caller_selection"}]
+        if old != agent_id:
+            self.session.setdefault("original_agent_id", old)
+            self.session["switch_history"] = (self.session.get("switch_history") or []) + [{"from": old, "to": agent_id, "reason": "caller_selection"}]
         if self.session.get("call_id"):
             with get_db() as db:
                 call = db.get(Call, self.session["call_id"])
                 if call:
                     call.agent_id, call.lead_id = agent_id, lead and lead["id"]
         self.save_session()
+        if old == agent_id:
+            return context   # the caller never said which desk: same agent, now an ordinary inbound call
         events.record("call.rerouted", f"Call moved to {self.persona['agent_name']} ({self.persona['company_name']})",
                       f"The caller chose this desk; agent {old} greeted them.", agent_id=agent_id,
                       lead_id=lead and lead["id"], call_id=self.session.get("call_id"))
@@ -1663,6 +1671,22 @@ class CallStream:
                 lead = await asyncio.to_thread(self.switch_agent, chosen)
                 guidance = " ".join(g for g in (guidance, f"The caller chose {self.persona['company_name']}. Acknowledge in a few "
                                                           "words and continue as that agent; whole reply under 120 characters.") if g)
+            else:
+                # Asked once, unclear once more: stop asking and carry on as the desk that answered.
+                attempts = int(self.session.get("choose_attempts") or 0) + 1
+                self.session["choose_attempts"] = attempts
+                if attempts >= 2 and lead.get("call_purpose") == "inbound_choose":
+                    lead = await asyncio.to_thread(self.switch_agent, self.agent_id)
+                    guidance = " ".join(g for g in (guidance, "They did not say which desk: help them as this desk, no more asking.") if g)
+                self.save_session()
+        elif text and self.session.get("desk_choices") and DESK_SWITCH_CUE.search(text):
+            # Mid-call "actually, Hairscope ke baare mein": a caller known to several desks may change desk once
+            # they have named it plainly; cheap name match only, never a guess.
+            chosen = agent.choose_agent(text, self.session["desk_choices"], use_llm=False)
+            if chosen and chosen != self.agent_id:
+                lead = await asyncio.to_thread(self.switch_agent, chosen)
+                guidance = " ".join(g for g in (guidance, f"The caller now wants {self.persona['company_name']}. Say so in a few words "
+                                                          "and continue as that agent; whole reply under 120 characters.") if g)
         if self.session.get("lead_id"):
             with contextlib.suppress(Exception):
                 fresh = await asyncio.to_thread(CallService(self.agent_id).crm.get, self.session["lead_id"])
