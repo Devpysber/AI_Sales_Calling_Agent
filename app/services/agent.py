@@ -392,12 +392,13 @@ def team_brief(agent_id: int) -> str:
     Read live at the start of the call. Every line is a fact from the workspace, so the agent can
     answer "how is it going?" without guessing — and can say plainly when something is not set up.
     """
-    from app.services import rag
-    from app.services.call_service import CallService
-    from app.services.crm_service import CRMService
+    def build() -> str:
+        from app.services import rag
+        from app.services.call_service import CallService
+        from app.services.crm_service import CRMService
 
-    lines: list[str] = []
-    try:
+        lines: list[str] = []
+        try:
         stats = CallService(agent_id).stats(days=7)
         today = stats.get("today") or {}
         talk = int(today.get("talk_seconds") or 0)
@@ -475,8 +476,7 @@ def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: i
         ("name", "Name"), ("company", "Company"), ("city", "City"), ("status", "Current status"),
         ("qualification", "Previous qualification"), ("summary", "Previous call summary"),
         ("requirements", "Known requirements"), ("objections", "Known objections"),
-        ("meeting_at", "Booked meeting"), ("notes", "Notes"),
-        ("call_goal", "GOAL OF THIS CALL (follow this first)")] if lead.get(key))
+        ("meeting_at", "Booked meeting"), ("notes", "Notes")] if lead.get(key))
 
     # A colleague checking the agent gets its live numbers; a customer never sees any of this.
     status = team_brief(agent_id) if (agent_id and lead.get("call_purpose") in ("team", "admin")) else ""
@@ -1155,7 +1155,7 @@ Return ONLY JSON:
     {{
       "to": "lead | team | admin",
       "subject": "Subject of the email to send",
-      "body": "Body of the email to send (generate professional text based on what the agent promised on the call or if the call warrants an escalation alert to the team)"
+      "body": "Body of the email to send (generate professional text based on what the agent promised on the call or if the call warrants an escalation alert to the team); empty list [] unless the agent promised an email on the call or the call needs an escalation"
     }}
   ]
 }}"""

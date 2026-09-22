@@ -178,17 +178,16 @@ def _did_nothing(result: str) -> bool:
     return text.startswith("0 reminder") or any(text.startswith(q) or q in text for q in QUIET_RESULTS)
 
 
-_last_job: dict[int, str] = {}   # the job each agent ran last; a crashed tick reports it so heal can re-run it
-
-
 def run_job(agent_id: int, name: str, force: bool = False, actor: str = "scheduler") -> str:
-    _last_job[agent_id] = name
     cfg = agents.get_automation(agent_id)
     try:
         result = JOBS[name](agent_id, cfg, force=force)
     except Exception as e:
         log.exception("Job %s failed for agent %s", name, agent_id)
         result = f"error: {e}"
+        from app.services.heal_service import report
+        report("scheduler_error", f"Agent {agent_id}: {LABELS[name]}: {type(e).__name__}: {str(e)[:300]}",
+               agent_id=agent_id, data={"agent_id": agent_id, "job": name})
     SettingsService().set_state(_state_key(agent_id, name), {"at": datetime.now(IST).isoformat(timespec="seconds"), "result": result})
     # A job that ran every minute and did nothing buried the real history under hundreds of identical
     # lines. The "Last run" state above still shows it ran; only outcomes worth reading are recorded.
@@ -242,7 +241,7 @@ def tick():
             log.exception("Tick failed for agent %s", agent_id)
             from app.services.heal_service import report
             report("scheduler_error", f"Agent {agent_id}: {type(e).__name__}: {str(e)[:300]}", agent_id=agent_id,
-                   data={"agent_id": agent_id, "job": _last_job.get(agent_id)})
+                   data={"agent_id": agent_id, "job": None})
             continue
     CallService().expire_stale()
     from app.services.heal_service import SCHEDULER_TICK_KEY

@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import time
 from pathlib import Path
 
@@ -448,7 +449,7 @@ def system_issue_dismiss(issue_id: str):
 def _check_export_token(request: Request):
     from app.services import heal_service
     token = request.headers.get("X-Heal-Token") or request.query_params.get("token") or ""
-    if not token or token != heal_service.export_token():
+    if not token or not hmac.compare_digest(token, heal_service.export_token()):
         raise HTTPException(401, "Bad heal token")
 
 

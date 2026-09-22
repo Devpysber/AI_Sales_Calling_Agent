@@ -546,9 +546,9 @@ def live_calls(unlocked_ids: list[int] | None = None) -> list[dict]:
         rows = db.execute(select(Call, Lead.name).outerjoin(Lead, Lead.id == Call.lead_id)
                           .where(Call.status.in_(ACTIVE_CALL)).order_by(Call.id.desc()).limit(20)).all()
         calls = [c.to_dict(n, with_transcript=False) for c, n in rows]
+        names = dict(db.execute(select(Agent.id, Agent.name)).all())
     if unlocked_ids is not None:
         calls = [c for c in calls if c["agent_id"] in unlocked_ids]
-    names = {a["id"]: a["name"] for a in list_agents()}
     for call in calls:
         call["agent_name"] = names.get(call["agent_id"])
     return calls
