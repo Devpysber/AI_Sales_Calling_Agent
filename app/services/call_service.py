@@ -533,33 +533,41 @@ class CallService:
                 log.error("Post-call summary for call %s crashed: %r", call_id, f.exception())
         _turn_pool.submit(self._summarize, call_id, lead_id, history).add_done_callback(_done)
 
-    def resummarize_pending(self, hours: int = 48, max_attempts: int = 3) -> int:
+    def resummarize_pending(self, hours: int = 48, max_attempts: int = 3, force: bool = False) -> int:
         """
         Re-run the post-call summary for completed calls that never got one (provider out of credit, timeout).
         Meant for an hourly scheduler job; attempts are counted in the error column so it stops after max_attempts.
+        force (the admin's Heal button): retry past the attempt cap, and close out calls that have nothing to
+        summarise (no customer speech) so they stop being reported as missing.
         """
         cutoff = _utcnow() - timedelta(hours=hours)
-        todo = []
+        todo, silent = [], []
         with get_db() as db:
             query = self._scoped(select(Call).where(Call.status == "Completed", Call.summary.is_(None),
                                                     Call.trigger != "internal", Call.created_at >= cutoff))
             for call in db.scalars(query):
                 error = call.error or ""
-                if not error.startswith("summary_pending"):
+                if not error.startswith("summary_pending") and not force:
                     continue
                 attempts = int((re.search(r"summary_pending:(\d+)", error) or [None, "0"])[1])
-                if attempts >= max_attempts or not call.transcript:
+                if attempts >= max_attempts and not force:
                     continue
                 try:
-                    history = json.loads(call.transcript)
+                    history = json.loads(call.transcript or "[]")
                 except ValueError:
-                    continue
+                    history = []
                 if any(t.get("role") in ("customer", "user") for t in history):
                     todo.append((call.id, call.lead_id, call.agent_id, history))
+                elif force:
+                    silent.append(call.id)
+            for call_id in silent:
+                call = db.get(Call, call_id)
+                call.summary = "No conversation: the caller did not speak."
+                call.outcome = call.outcome or "no_conversation"
         for call_id, lead_id, agent_id, history in todo:
             with contextlib.suppress(Exception):
                 CallService(agent_id)._summarize(call_id, lead_id, history)
-        return len(todo)
+        return len(todo) + len(silent)
 
     def _team_handover(self, call_id: int, lead_id: int | None, summary: dict):
         """

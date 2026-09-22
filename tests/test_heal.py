@@ -69,3 +69,22 @@ def test_export_redacts_customer_data(client):
     row = next(i for i in client.get("/api/system/issues/export", headers={"X-Heal-Token": token}).json()["issues"] if i["id"] == issue["id"])
     dumped = str(row)
     assert "rahul@x.com" not in dumped and "98765" not in dumped and row["data"]["body"] == "<omitted>"
+
+
+def test_summary_heal_closes_silent_calls_and_reports_the_rest(client, base, monkeypatch):
+    from app.core.database import get_db
+    from app.models.call import Call
+    from app.services import llm
+    agent_id = int(base.rsplit("/", 1)[1])
+    with get_db() as db:
+        db.add(Call(agent_id=agent_id, direction="inbound", trigger="inbound", status="Completed", session_id="s-90", from_number="+919000000090",
+                    to_number="+918000000000", transcript='[{"role":"assistant","text":"Hello?"}]', error="summary_pending:3 x"))
+        db.add(Call(agent_id=agent_id, direction="inbound", trigger="inbound", status="Completed", session_id="s-91", from_number="+919000000091",
+                    to_number="+918000000000", transcript='[{"role":"customer","text":"hi"}]', error="summary_pending:3 402 credits"))
+    monkeypatch.setattr(llm, "complete", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("402 no credits")))
+    issue = next(i for i in heal_service.detect() if i["kind"] == "summary_pending")
+    result = heal_service.heal(issue["id"])[0]
+    assert result["ok"] is False and "402" in result["note"]
+    with get_db() as db:
+        silent = db.scalar(__import__("sqlalchemy").select(Call).where(Call.from_number == "+919000000090"))
+        assert silent.summary.startswith("No conversation")

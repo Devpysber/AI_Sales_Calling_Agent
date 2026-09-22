@@ -178,9 +178,18 @@ def _heal_one(issue: dict) -> tuple[bool, str]:
         CallService().expire_stale()
         return True, "Stuck calls closed."
     if kind == "summary_pending":
-        from app.services.call_service import CallService
-        n = CallService().resummarize_pending()
-        return True, f"Re-queued {n} summaries."
+        from sqlalchemy import select
+        from app.core.database import get_db
+        from app.models.call import Call
+        from app.services.call_service import CallService, _utcnow
+        n = CallService().resummarize_pending(force=True)
+        with get_db() as db:
+            left = db.execute(select(Call.id, Call.error).where(Call.status == "Completed", Call.summary.is_(None), Call.trigger != "internal",
+                                                                Call.created_at >= _utcnow() - timedelta(hours=48))).all()
+        if not left:
+            return True, f"Summaries written for {n} call(s)."
+        why = next((e for _, e in left if e), "") or "provider gave no summary"
+        return False, f"{n} retried, {len(left)} still without a summary: {why[:200]}. Check the Summary LLM order / provider credits in Runtime tuning."
     if kind == "scheduler_stalled":
         from app.services.scheduler import tick
         tick()
