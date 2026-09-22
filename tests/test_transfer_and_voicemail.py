@@ -96,4 +96,5 @@ def test_plivo_machine_verdict_hangs_up_and_ends_as_no_answer(client, base, monk
     cid2 = client.post(f"{base}/calls", json={"lead_id": lead["id"]}).json()["call_id"]
     with get_db() as db:
         sid2 = db.get(Call, cid2).session_id
-    assert "<Hangup" not in client.post(f"/api/plivo/answer?sid={sid2}&cid={cid2}", data={"CallUUID": "u-n", "Machine": "true"}).text
+    client.post(f"/api/plivo/answer?sid={sid2}&cid={cid2}", data={"CallUUID": "u-n", "Machine": "true"})
+    assert not call_session.get(sid2).get("voicemail")
