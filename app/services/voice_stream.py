@@ -742,6 +742,7 @@ class CallStream:
         self.hold_acked = False
         self.language_votes: list[str] = []     # consecutive auto-detected languages, for switch hysteresis
         self.repeated_replies = 0               # consecutive replies that said what the last one already said
+        self.filler_audio: asyncio.Task | None = None   # "one moment", rendered at stream open, not mid-wait
         self.stt_failures = 0                   # consecutive failed Sarvam STT connects
 
         # Live supervision
@@ -1152,6 +1153,12 @@ class CallStream:
         LIVE[self.session_id] = self
         self.bridge.start()
         self.tts.warm()
+        # Render "one moment" now, while nobody is waiting. Synthesising it at the moment a reply runs
+        # late meant the apology for the delay was itself delayed, behind the same busy TTS provider,
+        # and it blocked the loop that was waiting for the real audio.
+        self.filler_audio = asyncio.create_task(asyncio.to_thread(
+            tts.cached_pcm, STREAM_PROMPTS["filler"][self.lang_key()],
+            self.session.get("language") or "en-IN", self.persona.get("voice_speaker"), self.usage))
         try:
             await self.stt.connect()
         except Exception as e:
@@ -1887,8 +1894,9 @@ class CallStream:
                     filler_sent = True
                     line = STREAM_PROMPTS["filler"][self.lang_key()]
                     try:
-                        pcm = await asyncio.to_thread(tts.cached_pcm, line, self.session.get("language") or "en-IN",
-                                                      self.persona.get("voice_speaker"), self.usage)
+                        pcm = (await self.filler_audio if self.filler_audio
+                               else await asyncio.to_thread(tts.cached_pcm, line, self.session.get("language") or "en-IN",
+                                                            self.persona.get("voice_speaker"), self.usage))
                         self.note_spoken(line)  # its echo must not come back as a caller turn
                         await self.play_pcm(pcm)
                         log.info("Slow reply on session %s: played filler", self.session_id[:8])

@@ -411,35 +411,47 @@ def _load_index(agent_id: int) -> _Index:
 
 
 EMBED_CACHE_TTL = 120.0
-_embed_cache: dict[str, tuple[float, list[float]]] = {}
+# Keyed by (provider, query), never the query alone: the same sentence embedded by two providers lands
+# in unrelated coordinate systems and at different widths, so one agent's cached vector scored as noise
+# against another's passages, or crashed the dot product outright. Agents sharing a provider still share
+# the cache, which is the saving worth having.
+_embed_cache: dict[tuple[str, str], tuple[float, list[float]]] = {}
 _embed_lock = threading.Lock()
-_prefetch_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rag-prefetch")
-# Query -> the prefetch future still computing its embedding. The reply path joins this instead of
+# One worker per concurrent call, near enough: two meant a third caller's prefetch sat in the queue and
+# the 0.3s live budget expired before it ran, paying for the embed twice over.
+_prefetch_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="rag-prefetch")
+# Cache key -> the prefetch future still computing its embedding. The reply path joins this instead of
 # firing a second, separately-billed embed call when the prefetch hasn't finished yet.
-_inflight: dict[str, Future] = {}
+_inflight: dict[tuple[str, str], Future] = {}
 
 
-def _do_embed(query: str, timeout: float, provider: str | None = None) -> list[float] | None:
+def _cache_key(agent_id: int, provider: str | None) -> str:
+    """What a cached query vector belongs to: its provider, or the agent when no provider is pinned yet."""
+    return provider or f"agent:{agent_id}"
+
+
+def _do_embed(query: str, timeout: float, provider: str | None = None, agent_id: int | None = None) -> list[float] | None:
     """The actual embed call, cached on success. Never joins `_inflight` itself, so a prefetch thread
     computing an entry can't deadlock waiting on its own not-yet-finished future."""
     vectors = llm.embed([query], timeout=timeout, task="query", provider=provider)
     if not vectors:
         return None
     with _embed_lock:
-        _embed_cache[query] = (time.monotonic(), vectors[0])
+        _embed_cache[(_cache_key(agent_id, provider), query)] = (time.monotonic(), vectors[0])
     return vectors[0]
 
 
-def _embed_query(query: str, timeout: float, provider: str | None = None) -> list[float] | None:
+def _embed_query(query: str, timeout: float, provider: str | None = None, agent_id: int | None = None) -> list[float] | None:
     """The query embedding, from cache when it was prefetched while the caller was still speaking, or
     joined from a still-running prefetch instead of paying for a second, separately-billed embed call."""
     now = time.monotonic()
     with _embed_lock:
-        for key, (at, _) in list(_embed_cache.items()):
+        for cached, (at, _) in list(_embed_cache.items()):
             if now - at > EMBED_CACHE_TTL:
-                _embed_cache.pop(key, None)
-        hit = _embed_cache.get(query)
-        fut = None if hit else _inflight.get(query)
+                _embed_cache.pop(cached, None)
+        key = (_cache_key(agent_id, provider), query)
+        hit = _embed_cache.get(key)
+        fut = None if hit else _inflight.get(key)
     if hit:
         return hit[1]
     if fut is not None:
@@ -447,7 +459,7 @@ def _embed_query(query: str, timeout: float, provider: str | None = None) -> lis
             return fut.result(timeout=timeout)
         except Exception:  # noqa: BLE001 - still running or failed; the caller falls back to BM25
             return None
-    return _do_embed(query, timeout, provider)
+    return _do_embed(query, timeout, provider, agent_id)
 
 
 def prefetch(agent_id: int, query: str, timeout: float = 2.5) -> None:
@@ -464,19 +476,20 @@ def prefetch(agent_id: int, query: str, timeout: float = 2.5) -> None:
             idx = _load_index(agent_id)
             if idx.vectors is None or not idx.has_vector.any():
                 return None  # no embedded chunks to search; don't pay for a query embedding
-            return _do_embed(query, timeout, embed_provider(agent_id))
+            return _do_embed(query, timeout, embed_provider(agent_id), agent_id)
         except Exception as e:  # noqa: BLE001 - a warm cache is an optimisation, never a failure
             log.debug("RAG prefetch failed: %s", e)
             return None
         finally:
             with _embed_lock:
-                _inflight.pop(query, None)
+                _inflight.pop(key, None)
 
+    key = (_cache_key(agent_id, embed_provider(agent_id)), query)
     with _embed_lock:
-        if query in _inflight:
-            return  # already prefetching this exact query
+        if key in _inflight:
+            return  # already prefetching this exact query for this provider
         with contextlib.suppress(RuntimeError):  # pool shut down during reload
-            _inflight[query] = _prefetch_pool.submit(run)
+            _inflight[key] = _prefetch_pool.submit(run)
 
 
 def search(agent_id: int, query: str, top_k: int = 4, use_embeddings: bool = True, embed_timeout: float = 2.5) -> list[dict]:
@@ -513,7 +526,12 @@ def search(agent_id: int, query: str, top_k: int = 4, use_embeddings: bool = Tru
         # Nothing to lose: without this the turn has no knowledge at all, so allow a longer round trip.
         embed_timeout = max(embed_timeout, 1.5)
     if use_embeddings and index.vectors is not None and index.has_vector.any():
-        qv = _embed_query(query, embed_timeout, embed_provider(agent_id))
+        qv = _embed_query(query, embed_timeout, embed_provider(agent_id), agent_id)
+        if qv and len(qv) != index.vectors.shape[1]:
+            # A vector of another width — a re-ingest under a different provider, or a cache entry that
+            # outlived one — would make the dot product raise and lose the turn its keyword hits too.
+            log.debug("Query vector is %s wide, index is %s: keyword search only", len(qv), index.vectors.shape[1])
+            qv = None
         if qv:
             q = np.asarray(qv, dtype=np.float32)
             q = q / (np.linalg.norm(q) or 1)

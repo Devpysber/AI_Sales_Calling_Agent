@@ -996,9 +996,13 @@ class CallService:
             # The CRM row carries no call_goal/call_purpose/collect: merge, so gather-mode turns keep the call's brief.
             fresh = self.crm.get(session["lead_id"]) if session.get("lead_id") else None
             lead = merge_call_context(session.get("lead") or {}, fresh) or {}
-            # Live calls skip the embedding round-trip (~1s); keyword search answers instantly
-            result = agent.respond(agent_id, session["history"], text, lead, use_embeddings=False,
-                                   summary=session.get("summary"))
+            # Gather mode has no prefetch window — Plivo hands over only the final transcript — so the
+            # embedding is paid for on the turn. It is still worth it: with embeddings off, this path
+            # answered every question of every non-streaming call on keyword search alone, and a Hindi
+            # caller asking about an English knowledge base matched nothing at all. respond() still
+            # skips the round trip for "haan"/"ok" turns that need no knowledge.
+            result = agent.respond(agent_id, session["history"], text, lead, use_embeddings=True,
+                                   embed_timeout=1.2, summary=session.get("summary"))
             language = result["language"] or tts.detect_language(result["reply"], session["language"])
             audio_id = tts.store_audio(tts.synthesize(result["reply"], language, persona["voice_speaker"]))
 

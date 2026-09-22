@@ -332,9 +332,11 @@ async def playground(body: PlaygroundMessage, request: Request, agent_id: int = 
     elif char_budget and spoken >= 0.75 * char_budget:
         guidance = STEER_GUIDANCE
     try:
-        # Same knowledge path as a live turn (keyword search, no embedding round-trip): the rehearsal shows the
-        # latency and answers a real call gets, and a turn is not held up to a second for a paid embedding.
-        res = await asyncio.to_thread(agent.respond, agent_id, history, body.message, lead, use_embeddings=False, guidance=guidance)
+        # Same knowledge path as a live turn: respond() applies the same needs_knowledge gate, so "haan"
+        # rehearses without a paid embedding while a real question rehearses with the passages a call
+        # would retrieve. Rehearsing on keyword search alone showed answers the phone never gives.
+        res = await asyncio.to_thread(agent.respond, agent_id, history, body.message, lead,
+                                      use_embeddings=True, embed_timeout=1.2, guidance=guidance)
     except LLMError as e:
         raise HTTPException(502, str(e))
     res["spoken_chars"] = spoken + len(res.get("reply") or "")

@@ -47,7 +47,10 @@ MAX_CAP_TRIMS = 2
 _CAP_RE = re.compile(r"Prompt tokens limit exceeded: (\d+) > (\d+)")
 _CAP_HINTS = ("prompt tokens limit", "context length", "maximum context", "context_length_exceeded")
 # Sections of the system prompt that can go before anything else, in order (least important first).
-_DROPPABLE_SECTIONS = ("# Knowledge", "# Earlier conversations", "# Company brief")
+# Dropped in this order, least useful to the answer first. Knowledge is last because the passages are
+# what the turn was retrieved for: a free model with the brief but no passages answers confidently and
+# wrongly, which is worse than a shorter prompt.
+_DROPPABLE_SECTIONS = ("# Earlier conversations", "# Company brief", "# Knowledge")
 # Everything from here on (Caller record, Earlier conversations, brief, Output format) survives a raw cut.
 _KEEP_FROM = "\n# Today"
 
@@ -181,6 +184,8 @@ def _compact(messages: list[dict]) -> list[dict]:
         i = system[0]
         content = out[i].get("content") or ""
         for heading in _DROPPABLE_SECTIONS:
+            if len(content) <= budget:
+                break   # only drop what the budget actually requires
             content = _drop_section(content, heading)
         if len(content) > budget:
             idx = content.rfind(_KEEP_FROM)
