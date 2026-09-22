@@ -5,6 +5,7 @@ Knowledge page shows exactly what is missing. Recomputed in the background after
 upload or delete; runs on the summary (free-first) models.
 """
 
+import contextlib
 import threading
 from datetime import datetime
 
@@ -150,6 +151,12 @@ def rebuild(agent_id: int) -> dict:
         log.warning("Knowledge coverage failed for agent %s: %s", agent_id, e)
         profile = {**get(agent_id), "status": "failed", "error": str(e)[:300]}
     state.set_state(_key(agent_id), profile)
+    if profile.get("status") == "ready":
+        # The documents have just been read, so anything still empty in the playbook can be written
+        # from them. Only empty fields, and never the identity the operator chose.
+        with contextlib.suppress(Exception):
+            from app.services import persona_writer
+            persona_writer.autofill(agent_id)
     return profile
 
 

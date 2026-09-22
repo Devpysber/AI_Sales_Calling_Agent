@@ -41,3 +41,31 @@ def test_fields_are_capped_to_what_the_profile_accepts(agent_id, monkeypatch):
     drafted = persona_writer.draft(agent_id)["fields"]
     assert len(drafted["objective"]) == 600      # PROFILE_LIMITS["objective"]
     assert drafted["customer_noun"] == "couple"
+
+
+def test_autofill_writes_only_empty_fields_and_never_the_identity(client, agent_id, monkeypatch):
+    """The agent may write its own playbook from the documents, but not over a person's words."""
+    base = f"/api/agents/{agent_id}"
+    client.put(f"{base}/profile", json={"objective": "Book demos for the Indore showroom.", "agent_name": "Priya"})
+
+    monkeypatch.setattr(persona_writer, "draft", lambda _id: {"fields": {
+        "objective": "Something the model made up",
+        "call_to_action": "Ask which wedding services they need.",
+        "agent_role": "wedding planning advisor",
+    }})
+    filled = persona_writer.autofill(agent_id)
+
+    profile = client.get(f"{base}/profile").json()["profile"]
+    assert "call_to_action" in filled and profile["call_to_action"] == "Ask which wedding services they need."
+    assert profile["objective"] == "Book demos for the Indore showroom."   # the person's words, untouched
+    assert profile["agent_name"] == "Priya"                                 # identity is never written
+    assert "objective" not in filled
+
+
+def test_autofill_does_nothing_when_the_playbook_is_already_written(agent_id, monkeypatch):
+    monkeypatch.setattr(persona_writer, "draft", lambda _id: {"fields": {"objective": "x"}})
+    for field in persona_writer.AUTOFILL:
+        pass
+    from app.services import agents as agent_service
+    agent_service.update_profile(agent_id, {f: "already written" for f in persona_writer.AUTOFILL}, actor="test")
+    assert persona_writer.autofill(agent_id) == {}
