@@ -324,16 +324,23 @@ async def update_secrets(body: dict):
     return {"ok": True, "saved": saved, "cleared": sorted(k for k, v in credentials.items() if not v)}
 
 @router.post("/system/email/test", dependencies=[Depends(require_admin)])
-async def send_test_email():
+async def send_test_email(agent_id: int | None = None):
     """Send a one-line test email to the logged-in admin, so the provider can be verified from the
-    UI instead of on the first real customer email."""
+    UI instead of on the first real customer email.
+
+    Recorded against a workspace when one is given: an email written with no agent is shown in no
+    Email Centre at all, because each of them lists its own workspace's mail.
+    """
     from app.core.auth import login_email
+    from app.services import agents as agent_service
     from app.services.notification_service import send_email
     to = login_email()
     if not to:
         raise HTTPException(400, "No admin email on file to send the test to.")
+    if agent_id is not None and not agent_service.exists(agent_id):
+        raise HTTPException(404, "Agent not found.")
     status = send_email(to, "Test email", "This is a test email from your AI Voice Agent system.",
-                         actor="system")
+                        agent_id=agent_id, actor="system")
     return {"ok": True, "to": to, "status": status}
 
 @router.get("/system/team-members", dependencies=[Depends(require_admin)])

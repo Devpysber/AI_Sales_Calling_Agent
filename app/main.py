@@ -97,12 +97,15 @@ async def lifespan(app: FastAPI):
         # reaches no one and the routing page reads "Not set".
         from app.services import agents as agent_service
         agent_service.backfill_team_members()
-    try:
-        await asyncio.to_thread(migrate_speed_to_lead)
-        await asyncio.to_thread(migrate_team_members)
-        await asyncio.to_thread(recover_knowledge_state)
-    except Exception as e:  # noqa: BLE001 - housekeeping must never block startup
-        log.warning("Knowledge state recovery skipped: %s", e)
+    # One step failing must not strand the others: a migration error used to leave every document
+    # stuck on "processing" because the recovery below never ran.
+    for step, label in ((migrate_speed_to_lead, "Speed-to-lead default migration"),
+                        (migrate_team_members, "Team member backfill"),
+                        (recover_knowledge_state, "Knowledge state recovery")):
+        try:
+            await asyncio.to_thread(step)
+        except Exception as e:  # noqa: BLE001 - housekeeping must never block startup
+            log.warning("%s skipped: %s", label, e)
     try:
         from app.services.heal_service import seed_issues_row
         await asyncio.to_thread(seed_issues_row)

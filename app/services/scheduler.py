@@ -191,7 +191,8 @@ def run_job(agent_id: int, name: str, force: bool = False, actor: str = "schedul
         from app.services.heal_service import report
         report("scheduler_error", f"Agent {agent_id}: {LABELS[name]}: {type(e).__name__}: {str(e)[:300]}",
                agent_id=agent_id, data={"agent_id": agent_id, "job": name})
-    SettingsService().set_state(_state_key(agent_id, name), {"at": datetime.now(IST).isoformat(timespec="seconds"), "result": result})
+    SettingsService().set_state(_state_key(agent_id, name),
+                                {"at": datetime.now(IST).isoformat(timespec="seconds"), "result": result, "manual": force})
     # A job that ran every minute and did nothing buried the real history under hundreds of identical
     # lines. The "Last run" state above still shows it ran; only outcomes worth reading are recorded.
     if force or not _did_nothing(result):
@@ -213,6 +214,16 @@ def _due(agent_id: int, cfg: dict) -> list[str]:
         value = state.get_state(_state_key(agent_id, job))
         return datetime.fromisoformat(value["at"]) if value else None
 
+    def last_scheduled(job):
+        """The last run that counts as today's run: a "Run now" press, or a run that errored, does not.
+
+        Pressing Send now at 10am used to satisfy the once-a-day check and silently cancel the 6pm
+        report, while the card truthfully showed a recent last run."""
+        value = state.get_state(_state_key(agent_id, job))
+        if not value or value.get("manual") or str(value.get("result", "")).startswith("error:"):
+            return None
+        return datetime.fromisoformat(value["at"])
+
     due = []
     # Callbacks are checked every tick but only logged when something was due (see tick()).
     cfg = {**cfg, "nurture_interval_minutes": 60}
@@ -223,7 +234,8 @@ def _due(agent_id: int, cfg: dict) -> list[str]:
             due.append(job)
     for job, enabled, hour in (("meeting_reminder", "meeting_reminder_enabled", "meeting_reminder_hour"),
                                ("daily_report", "daily_report_enabled", "daily_report_hour")):
-        if cfg[enabled] and now.hour >= cfg[hour] and (not last(job) or last(job).date() < now.date()):
+        done_today = last_scheduled(job)
+        if cfg[enabled] and now.hour >= cfg[hour] and (not done_today or done_today.date() < now.date()):
             due.append(job)
     return due
 

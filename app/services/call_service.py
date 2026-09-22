@@ -531,7 +531,12 @@ class CallService:
                         # never tell the customer "we called at the time you asked for" — they didn't.
                         self_scheduled = trigger != "callback" or lead.get("call_status") in RETRIABLE
                         delay = cfg.get("retry_min_gap_minutes", 180) if self_scheduled else cfg.get("retry_interval_minutes", 60)
-                        next_at = (_utcnow() + timedelta(minutes=delay) + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M")
+                        # Clamped to the calling window, like every other slot this module books: an
+                        # unclamped retry stored a time the callbacks job refuses, and emailed the
+                        # customer that exact time.
+                        slot = (_utcnow() + timedelta(minutes=delay)
+                                + timedelta(hours=5, minutes=30)).replace(second=0, microsecond=0)
+                        next_at = next_calling_window(cfg, slot).strftime("%Y-%m-%d %H:%M")
                         updates["callback_at"] = next_at
                         # A time the customer was promised and we could not keep: tell them in writing.
                         if trigger == "callback" and not self_scheduled:
@@ -1194,19 +1199,26 @@ class CallService:
             series[day] = {"date": day, "total": 0, "connected": 0, "unanswered": 0, "meetings": 0}
         outcomes = {}
         today_total = today_connected = today_talk = 0
+
+        def connected(status, duration) -> bool:
+            """A call someone actually talked on. Analytics has always counted a dropped-but-spoken
+            call (Failed with time on it); the tiles counted only Completed, so the same day read
+            differently on two pages."""
+            return status == "Completed" or (status == "Failed" and (duration or 0) > 0)
+
         for created, status, duration, outcome in calls:
             day = (created + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
             if day in series:
                 series[day]["total"] += 1
-                series[day]["connected"] += status == "Completed"
+                series[day]["connected"] += connected(status, duration)
                 series[day]["unanswered"] += status in RETRIABLE
                 series[day]["meetings"] += outcome == "meeting_booked"
             if outcome:
                 outcomes[outcome] = outcomes.get(outcome, 0) + 1
             if created >= today_utc:
                 today_total += 1
-                today_connected += status == "Completed"
-                today_talk += duration or 0
+                today_connected += connected(status, duration)
+                today_talk += (duration or 0) if connected(status, duration) else 0
         return {
             "active": active,
             "today": {"total": today_total, "connected": today_connected, "talk_seconds": today_talk},

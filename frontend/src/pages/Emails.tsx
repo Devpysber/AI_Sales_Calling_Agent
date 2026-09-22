@@ -297,7 +297,7 @@ export default function Emails() {
                 <div className="relative mb-3">
                   <h3 className="flex items-center gap-2 text-sm font-bold">
                     {aiAutoEmails ? <VoiceOrb state="listening" size={22} /> : <Bot className="size-4 text-brand" />}Autonomous AI Emails</h3>
-                  <p className="mt-1 text-xs text-muted leading-relaxed">AI sends personalised follow-ups after every call automatically.</p>
+                  <p className="mt-1 text-xs text-muted leading-relaxed">AI sends a personalised follow-up when a call promises one, books a meeting or sets a callback.</p>
                 </div>
                 <label className="relative flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-border bg-surface-2 px-3 py-2.5">
                   <span className="flex items-center gap-2 text-sm font-medium">{aiAutoEmails && <Waveform bars={4} className="h-3 text-success" />}{autoStateLabel}</span>
@@ -505,7 +505,7 @@ export default function Emails() {
               </Card>
               <Card className="p-5">
                 <h3 className="flex items-center gap-2 text-sm font-bold mb-2"><Bot className="size-4 text-brand" />Auto-Emails</h3>
-                <p className="text-xs text-muted mb-3">AI automatically sends follow-ups after every call.</p>
+                <p className="text-xs text-muted mb-3">AI sends a follow-up when a call promises one, books a meeting or sets a callback.</p>
                 <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-border bg-surface-2 px-3 py-2.5">
                   <span className="text-sm font-medium">{autoStateLabel}</span>
                   <Switch checked={aiAutoEmails} onChange={(v) => saveAuto.mutate(v)} disabled={autoBusy} label="Autonomous AI emails" />

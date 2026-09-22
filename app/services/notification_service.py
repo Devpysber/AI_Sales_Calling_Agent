@@ -150,20 +150,28 @@ def send_email(to: str, subject: str, body: str, lead_id: int | None = None, age
     return status
 
 
-def team_recipients(role: str | None = None) -> list[str]:
+def team_recipients(role: str | None = None, agent_id: int | None = None) -> list[str]:
     """
     Everyone who should hear when a caller needs a person: the account owner plus the team members.
 
-    Without this only the admin login address was told, so a message a caller left for "the team"
-    never reached the people who could act on it.
+    With an agent_id, "the team" means that workspace's own people — the colleagues it lists and the
+    member who created it. Every Sales Team Account used to be mailed about every agent, so members
+    read the callers, requests and CRM details of workspaces they cannot even open.
     """
     from app.core.auth import login_email
     from app.services.settings_service import SettingsService
 
-    seen: list[str] = []
-    for address in [login_email()] + [
+    if agent_id is not None:
+        from app.services import team_service
+        people = [m for m in team_service.people_for(agent_id)
+                  if not role or (m.get("role") or "").lower() == role.lower()]
+        addresses = [login_email()] + [m.get("email", "") for m in people]
+    else:
+        addresses = [login_email()] + [
             m.get("email", "") for m in (SettingsService().get_state("team_members") or [])
-            if not role or (m.get("role") or "").lower() == role.lower()]:
+            if not role or (m.get("role") or "").lower() == role.lower()]
+    seen: list[str] = []
+    for address in addresses:
         address = (address or "").strip().lower()
         if address and address not in seen:
             seen.append(address)
@@ -184,7 +192,7 @@ def notify_team(subject: str, body: str, lead_id: int | None = None, agent_id: i
                 role: str | None = None) -> list[str]:
     """Send one message to every team recipient. Returns the addresses that accepted it."""
     delivered = []
-    for address in team_recipients(role):
+    for address in team_recipients(role, agent_id):
         if email_sent(send_email(address, subject, body, lead_id=lead_id, agent_id=agent_id, actor="ai")):
             delivered.append(address)
     return delivered
