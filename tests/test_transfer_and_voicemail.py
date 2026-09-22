@@ -29,6 +29,7 @@ def test_a_colleague_calling_their_own_agent_gets_the_ai(monkeypatch):
     from app.api import plivo
 
     monkeypatch.setattr(plivo.agents, "get_automation", lambda _id: {})
+    monkeypatch.setattr(plivo.agents, "is_paused", lambda _id: False)
     persona = {"transfer_number": "919584516352", "inbound_mode": "forward"}
     assert inbound_route(persona, 1, "+919584516352") == "ai"
     assert inbound_route({"transfer_number": "", "inbound_mode": "forward"}, 1, "+917879417266") == "ai"
@@ -141,3 +142,15 @@ def test_missed_transfer_books_a_callback_emails_the_team_and_tells_the_caller(c
     assert client.get(f"{base}/calls/{cid}").json()["outcome"] == "callback_requested"
     to, subject, body = next(m for m in sent if m[0] == "neha@team.test")
     assert "Callback needed" in subject and "inspection report" in body and f"Call ID: {cid}" in body and "+919477777777" in body
+
+
+def test_a_paused_agent_does_not_let_the_ai_answer_a_customer(monkeypatch):
+    """Paused means on hold: a person takes the call if a number is set, else the caller leaves a message."""
+    from app.api import plivo
+
+    monkeypatch.setattr(plivo.agents, "get_automation", lambda _id: {})
+    monkeypatch.setattr(plivo.agents, "is_paused", lambda _id: True)
+    assert inbound_route({"transfer_number": "919584516352", "inbound_mode": "ai"}, 1, "+917879417266") == "forward"
+    assert inbound_route({"transfer_number": "", "inbound_mode": "ai"}, 1, "+917879417266") == "message"
+    # The team can still ring in to test the agent they paused.
+    assert inbound_route({"transfer_number": "", "inbound_mode": "ai"}, 1, "+917879417266", internal=True) == "ai"

@@ -24,7 +24,8 @@ def test_health_and_auth(client, base):
 def test_agent_crud(client):
     created = client.post("/api/agents", json={"name": "Temp", "color": "#0e8a5e", "phone_number": "080 1234 5678"}).json()
     assert created["color"] == "#0e8a5e"
-    assert created["phone_number"] == "+08012345678" and created["status"] == "active"
+    # Stored in the one form every comparison uses: the country code is added, as phone_digits and the CRM do.
+    assert created["phone_number"] == "+918012345678" and created["status"] == "active"
     aid = created["id"]
     assert client.patch(f"/api/agents/{aid}", json={"status": "paused"}).json()["status"] == "paused"
     assert client.patch(f"/api/agents/{aid}", json={"status": "nope"}).status_code == 400

@@ -139,12 +139,18 @@ def hangup_with(r, session: dict, text: str):
 TRANSFER_LINES = {"en": "Please hold, I am connecting you to our team.", "hi": "कृपया लाइन पर बने रहिए, मैं आपको हमारी टीम से जोड़ रहा हूँ।"}
 
 
-def transfer_numbers(persona: dict) -> list[str]:
-    raw = persona.get("transfer_number") or ""
-    return [n for n in (agents.phone_digits(x) for x in raw.replace(" ", "").split(",")) if n]
+def transfer_numbers(persona: dict, agent_id: int | None = None) -> list[str]:
+    """The agent's own transfer list, or the member who created the workspace when it has none."""
+    from app.services import team_service
+    return team_service.transfer_digits(persona, agent_id)
 
 
-def transfer_targets(persona: dict, session: dict | None = None) -> list[str]:
+def transfer_line(persona: dict, agent_id: int | None = None) -> str:
+    """What was dialled, for the call record and the missed-transfer email."""
+    return ", ".join("+" + n for n in transfer_numbers(persona, agent_id))
+
+
+def transfer_targets(persona: dict, session: dict | None = None, agent_id: int | None = None) -> list[str]:
     """The numbers to ring, in order, for this call.
 
     The agent's own transfer number rings first (it contains all its team members).
@@ -152,17 +158,18 @@ def transfer_targets(persona: dict, session: dict | None = None) -> list[str]:
     someone is speaking on reaches their own busy line, never a person. /transfer-done indexes
     into this same list, so both sides must build it identically.
     """
-    numbers = transfer_numbers(persona)
+    numbers = transfer_numbers(persona, agent_id if agent_id is not None else session_agent(session or {}))
     speaking_from = agents.phone_digits(((session or {}).get("lead") or {}).get("phone") or "")
     if speaking_from:
         numbers = [n for n in numbers if n != speaking_from]
     return numbers
 
 
-def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = None, idx: int = 0) -> bool:
+def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = None, idx: int = 0,
+               agent_id: int | None = None) -> bool:
     """<Dial> the next transfer target. Returns False when there is nobody left to ring,
     so the caller gets a spoken fallback instead of silence followed by a dead line."""
-    numbers = transfer_targets(persona, session)
+    numbers = transfer_targets(persona, session, agent_id)
     if idx >= len(numbers):
         return False
 
@@ -178,10 +185,15 @@ def dial_human(r, persona: dict, caller_id: str | None, session: dict | None = N
     return True
 
 
-def inbound_route(persona: dict, agent_id: int, caller: str | None = None) -> str:
+def inbound_route(persona: dict, agent_id: int, caller: str | None = None, internal: bool = False) -> str:
     """ai | forward | message for an incoming call right now."""
     from app.services.call_service import within_calling_hours
-    numbers = transfer_numbers(persona)
+    numbers = transfer_numbers(persona, agent_id)
+
+    # A paused agent is on hold for customers: the AI does not take the call. A human number takes it
+    # if one is set, otherwise the caller leaves a message. The team can still ring in and test it.
+    if not internal and agents.is_paused(agent_id):
+        return "forward" if numbers else "message"
 
     open_now = within_calling_hours(agents.get_automation(agent_id))
     mode = persona.get("inbound_mode", "ai") if open_now else persona.get("after_hours_mode", "ai")
@@ -223,15 +235,16 @@ async def answer(request: Request):
         r.add(plivoxml.HangupElement())
         return xml(r)
     if not p.get("sid"):
-        route = inbound_route(persona, agent_id, p.get("From"))
+        internal = (session.get("lead") or {}).get("call_purpose") in ("admin", "team")
+        route = inbound_route(persona, agent_id, p.get("From"), internal=internal)
         # Nobody left to ring (e.g. the only transfer number is the line calling in): the AI
         # answers instead of the caller hearing a hold line and then dead air.
         if route == "forward" and not transfer_targets(persona, session):
             route = "ai"
         if route == "forward":
             await asyncio.to_thread(calls.mark_transferred, session["call_id"],
-                                    "Forwarded to " + calls.transfer_label(persona["transfer_number"]),
-                                    "forward", persona["transfer_number"])
+                                    "Forwarded to " + calls.transfer_label(transfer_line(persona, agent_id)),
+                                    "forward", transfer_line(persona, agent_id))
             
             key = lang_key(session)
             text = TRANSFER_LINES[key]
@@ -338,7 +351,7 @@ async def _reply_or_hold(session_id: str, max_wait: float) -> plivoxml.ResponseE
             if handed_over and session.get("call_id"):
                 await asyncio.to_thread(CallService().mark_transferred, int(session["call_id"]),
                                         "Handed to team after an AI error", "error",
-                                        persona.get("transfer_number"))
+                                        transfer_line(persona, agent_id))
         if not handed_over:
             await asyncio.to_thread(hangup_with, r, session, PROMPTS["error"][lang_key(session)])
     else:
@@ -473,7 +486,7 @@ def _notify_missed(session: dict, persona: dict, status: str):
     lead = session.get("lead") or {}
     who = lead.get("name") or lead.get("phone") or "Unknown caller"
     request_text = (session.get("transfer_reason") or "").strip()
-    lines = [f"{who} called {persona.get('company_name')} and asked for the team; the transfer to {persona.get('transfer_number')} was not answered ({status}).",
+    lines = [f"{who} called {persona.get('company_name')} and asked for the team; the transfer to {transfer_line(persona, session_agent(session))} was not answered ({status}).",
              "", f"Phone: {lead.get('phone') or '—'}", f"Request: {request_text or 'not captured — see the transcript'}",
              f"Call ID: {session.get('call_id') or '—'}", f"Agent: {persona.get('agent_name')} · {persona.get('company_name')}"]
     for key, label in (("company", "Company"), ("status", "Stage"), ("summary", "Last summary"), ("meeting_at", "Meeting")):

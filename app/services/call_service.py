@@ -364,17 +364,36 @@ class CallService:
         # asks which matter the call is about, and the live call switches to that agent (see agent.choose_agent).
         from app.services import team_service
         known_per_agent = CRMService(None).find_by_phone_per_agent(from_number)
-        choices = agents.inbound_choices([l["agent_id"] for l in known_per_agent]) if len(known_per_agent) > 1 else []
-        known = known_per_agent[0] if known_per_agent else None
+        # A paused agent takes no customer calls, so a caller it knows continues with an agent that is
+        # running, and is only offered agents that can actually answer.
+        line_ids = agents.on_line(to_number)
+        routable = [l for l in known_per_agent
+                    if not agents.is_paused(l["agent_id"]) and (not line_ids or l["agent_id"] in line_ids)]
+        choices = agents.inbound_choices([l["agent_id"] for l in routable]) if len(routable) > 1 else []
+        known = routable[0] if routable else None
         if choices:
             # Prefer the agent designated for the dialled number when it is one of the candidates.
             preferred = agents.for_inbound(to_number)
-            known = next((l for l in known_per_agent if l["agent_id"] == preferred), known)
+            known = next((l for l in routable if l["agent_id"] == preferred), known)
         # A colleague rings THEIR agent, whatever some desk's CRM says about the number: one agent listing
         # them answers directly; several list them -> the designated desk answers and asks which one they want.
         is_admin = team_service.is_admin_number(from_number)
         member_agents = [] if is_admin else team_service.agents_for(from_number)
+        # ...but only on a line their agent actually answers. Ringing another desk's own number makes them
+        # that desk's caller, not its colleague, so the check-in must not pull the call across.
+        if line_ids:
+            member_agents = [a for a in member_agents if a in line_ids]
+        # A paused desk cannot host the check-in; another of their own agents can.
+        member_agents = [a for a in member_agents if not agents.is_paused(a)] or member_agents
         team_choices = agents.inbound_choices(member_agents) if len(member_agents) > 1 else []
+        # A number nobody knows, on a line several agents share: ask the caller which of them the call is
+        # about instead of dropping them on whichever desk happens to be designated. The designated desk
+        # greets, and the call moves the moment they say (voice_stream.switch_agent). Nothing is written to
+        # a CRM until then, so the lead is created on the desk they actually chose.
+        if not routable and not member_agents and not is_admin:
+            live_line = [a for a in line_ids if not agents.is_paused(a)]
+            if len(live_line) > 1:
+                choices = agents.inbound_choices(live_line)
         if member_agents:
             preferred = agents.for_inbound(to_number)
             agent_id = preferred if preferred in member_agents else member_agents[0]
@@ -388,8 +407,9 @@ class CallService:
         internal = is_admin or bool(member_agents) or team_service.is_team_number(from_number, agent_id)
         team_name = team_service.name_for(from_number, agent_id)
 
+        choosing = bool(choices) and not routable   # a new caller being asked which desk: no lead yet
         lead = None if internal else crm.find_by_phone(from_number)
-        if lead is None and not internal:
+        if lead is None and not internal and not choosing:
             # Unknown to this agent: reuse what another agent already knows about the number, then save the caller
             known_elsewhere = CRMService(None).find_by_phone(from_number) or {}
             seed = {k: known_elsewhere[k] for k in ("name", "company", "city", "email", "language") if known_elsewhere.get(k)}
@@ -409,7 +429,8 @@ class CallService:
                 context["choices"] = team_choices
             context["call_goal"] = agent.call_goal(context, purpose)
         elif len(choices) > 1:
-            context = {**(lead or {"phone": from_number}), "call_purpose": "inbound_choose", "choices": choices}
+            context = {**(lead or {"phone": from_number}), "call_purpose": "inbound_choose", "choices": choices,
+                       **({"new_caller": True} if choosing else {})}
             names = {str(l.get("name") or "").strip().lower() for l in known_per_agent if str(l.get("name") or "").strip()}
             if len(names) > 1:
                 # The desks know this number as different people (a shared family phone): greet nobody by name.
@@ -898,9 +919,8 @@ class CallService:
         from app.services import agents, call_session
         
         profile = agents.get_profile(self.agent_id)
-        raw_numbers = profile.get("transfer_number", "")
-        transfer_numbers = [agents.phone_digits(n) for n in raw_numbers.replace(" ", "").split(",")]
-        transfer_numbers = [n for n in transfer_numbers if n]
+        from app.services import team_service
+        transfer_numbers = team_service.transfer_digits(profile, self.agent_id)
         if not transfer_numbers:
             return
             

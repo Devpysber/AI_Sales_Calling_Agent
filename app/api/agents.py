@@ -129,8 +129,8 @@ def overview(request: Request, days: int = Query(14, ge=7, le=60)):
 
 
 @router.get("/{agent_id}")
-def get_agent(agent_id: int = Depends(workspace)):
-    return {**agents.get(agent_id), "profile": agents.get_profile(agent_id)}
+def get_agent(request: Request, agent_id: int = Depends(workspace)):
+    return {**agents.get(agent_id), "profile": _visible_profile(request, agent_id)}
 
 
 @router.patch("/{agent_id}")
@@ -181,20 +181,26 @@ def delete_agent(request: Request, agent_id: int = Depends(workspace)):
 
 # ---------------- profile & playground ----------------
 
+def _visible_profile(request: Request, agent_id: int) -> dict:
+    """The persona as this caller may see it: the vault password gates team members, so they never get it."""
+    profile = dict(agents.get_profile(agent_id))
+    if getattr(request.state, "user", "") not in ("admin", "api"):
+        profile.pop("agent_password", None)
+    return profile
+
+
 @router.get("/{agent_id}/profile")
 def get_profile(request: Request, agent_id: int = Depends(workspace)):
     from app.services import team_service
-    profile = dict(agents.get_profile(agent_id))
-    if getattr(request.state, "user", "") not in ("admin", "api"):
-        profile.pop("agent_password", None)  # the vault password gates team members; they never see it
+    profile = _visible_profile(request, agent_id)
     # Who the transfer number actually reaches. The names live in Sales Team Accounts, so a routing
     # page reading the profile alone could only ever show a bare number, or an empty row.
-    contacts = []
-    for part in str(profile.get("transfer_number") or "").split(","):
-        number = part.strip()
-        if number:
-            contacts.append({"phone": number, "name": team_service.name_for(number, agent_id)})
-    return {"profile": profile, "transfer_contacts": contacts,
+    own = [p.strip() for p in str(profile.get("transfer_number") or "").split(",") if p.strip()]
+    # What the call actually rings: this agent's own numbers, or the workspace team when it has none.
+    dialled = own or ["+" + n for n in team_service.transfer_digits(profile, agent_id)]
+    contacts = [{"phone": number, "name": team_service.name_for(number, agent_id),
+                 "source": "agent" if own else "creator"} for number in dialled]
+    return {"profile": profile, "transfer_contacts": contacts, "transfer_from_workspace": not own and bool(contacts),
             "voices": tts.SPEAKERS, "languages": tts.LANGUAGES}
 
 
@@ -208,9 +214,14 @@ def update_profile(values: dict, request: Request, agent_id: int = Depends(works
         if not (payload.get("team_id") and owner == payload["team_id"]):
             raise HTTPException(403, "Only an administrator, or the team member who created this workspace, can change its passcode.")
     try:
-        return agents.update_profile(agent_id, values, actor=actor(request))
+        saved = dict(agents.update_profile(agent_id, values, actor=actor(request)))
     except (ValueError, TypeError) as e:
         raise HTTPException(400, str(e))
+    # Saving must not hand back what the GET withholds: any routing save used to return the workspace
+    # passcode to a team member. Echoing one they just set themselves tells them nothing new.
+    if getattr(request.state, "user", "") not in ("admin", "api") and "agent_password" not in values:
+        saved.pop("agent_password", None)
+    return saved
 
 
 class Preview(BaseModel):
@@ -420,8 +431,11 @@ def get_inbound_owner(agent_id: int = Depends(workspace)):
     owner = agents.inbound_owner(number) if number else None
     if owner is None and number and number != default:
         owner = next((a["id"] for a in sharing if digits(a) == number), None)
-    return {"number": number, "owner_id": owner, "own_number": bool(number and number != default),
-            "sharing": [{"id": a["id"], "name": a["name"]} for a in sharing]}
+    # Who takes the next call for real: a paused designated agent hands the line to another agent on it.
+    answering = agents.for_inbound(number) if number else None
+    return {"number": number, "owner_id": owner, "answering_id": answering,
+            "own_number": bool(number and number != default),
+            "sharing": [{"id": a["id"], "name": a["name"], "paused": a.get("status") != "active"} for a in sharing]}
 
 
 @router.put("/{agent_id}/inbound-owner")

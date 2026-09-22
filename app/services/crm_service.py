@@ -109,6 +109,24 @@ def _now_utc():
     return datetime.utcnow()
 
 
+# A caller the agent never got a name from must stay unnamed: the model used to write "Unknown",
+# "customer" or the number itself into the name, and from then on the CRM looked like it knew them —
+# the next inbound call skipped the "may I have your name" step and the lead list read "Unknown".
+JUNK_NAMES = {"unknown", "unknown caller", "unknown customer", "no name", "noname", "not provided",
+              "not given", "n/a", "na", "none", "null", "nil", "customer", "caller", "lead", "unnamed",
+              "anonymous", "test", "sir", "madam", "-", "--"}
+
+
+def clean_name(value) -> str | None:
+    """A usable lead name, or None. Placeholders and bare numbers are not names."""
+    name = str(value or "").strip()
+    if not name or name.lower().strip(".") in JUNK_NAMES:
+        return None
+    if not any(c.isalpha() for c in name):  # "+919584516352", "12345"
+        return None
+    return name
+
+
 class CRMService:
     """Leads of one agent. agent_id=None is unscoped: only for webhooks that already hold a trusted lead id."""
 
@@ -348,7 +366,7 @@ class CRMService:
     # ---------------- write ----------------
 
     @staticmethod
-    def _apply(lead: Lead, data: dict, actor: str = "admin") -> dict:
+    def _apply(lead: Lead, data: dict, actor: str = "admin") -> dict:  # noqa: C901
         # The "Do Not Call" stage and the do_not_call flag must agree: every dial gate checks the flag,
         # so a lead moved to the stage from the pipeline or edit form was still being auto-dialled.
         if data.get("status") == "Do Not Call":
@@ -368,6 +386,8 @@ class CRMService:
                 value = normalize_phone(value)
                 if not value:
                     raise ValueError("Invalid phone number.")
+            elif key == "name":
+                value = clean_name(value)
             elif key == "language":
                 value = normalize_language(value)
             elif key == "tags" and isinstance(value, list):

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bot, Clock, MoonStar, PhoneForwarded, PhoneIncoming, PhoneMissed, Save, UserRound, X } from 'lucide-react'
+import { Bot, ChevronDown, ChevronUp, Clock, MoonStar, PhoneForwarded, PhoneIncoming, PhoneMissed, Save, UserRound, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -14,7 +14,7 @@ import { useAgent } from '@/lib/agent'
 import type { AgentProfile, AutomationSettings, Call, Page } from '@/lib/types'
 import { callParty, cn, formatDuration, timeAgo } from '@/lib/utils'
 
-type ProfileResponse = { profile: AgentProfile; transfer_contacts?: { phone: string; name: string | null }[] }
+type ProfileResponse = { profile: AgentProfile; transfer_contacts?: { phone: string; name: string | null; source?: 'agent' | 'workspace' }[]; transfer_from_workspace?: boolean }
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
 const hourLabel = (h: number) => `${((h + 11) % 12) + 1}:00 ${h < 12 ? 'AM' : 'PM'}`
 type Routing = Pick<AgentProfile, 'transfer_number' | 'team_members' | 'inbound_mode' | 'transfer_on_request' | 'after_hours_mode' | 'after_hours_message' | 'forward_fallback' | 'notify_missed_calls' | 'inbound_collect'>
@@ -22,7 +22,7 @@ const KEYS: (keyof Routing)[] = ['transfer_number', 'team_members', 'inbound_mod
 
 export default function Inbound() {
   const { agent, base, path } = useAgent()
-  const ownerQ = useQuery({ queryKey: ['inbound-owner', base], queryFn: () => api<{ number: string; owner_id: number | null; own_number?: boolean; sharing: { id: number; name: string }[] }>(`${base}/inbound-owner`) })
+  const ownerQ = useQuery({ queryKey: ['inbound-owner', base], queryFn: () => api<{ number: string; owner_id: number | null; answering_id: number | null; own_number?: boolean; sharing: { id: number; name: string; paused: boolean }[] }>(`${base}/inbound-owner`) })
   const setOwner = useMutation({
     mutationFn: () => api(`${base}/inbound-owner`, { method: 'PUT' }),
     onSuccess: () => { toast.success(`${agent?.name} now answers inbound calls on this line`); void qc.invalidateQueries({ queryKey: ['inbound-owner'] }) },
@@ -118,8 +118,12 @@ export default function Inbound() {
   // legacy comma list only counts when there are no rows at all: blanking every phone must read as "Not set".
   const legacyNums = (form.transfer_number || '').split(',').map((n) => n.trim()).filter((n) => n)
   const tNums = form.team_members?.length ? memberNums : legacyNums
-  const hasNumber = tNums.length > 0 && tNums.every(n => { const d = n.replace(/\D/g, ''); return d.length >= 11 && d.length <= 15 })
-  const ringsLabel = tNums.join(', ')
+  const ownHasNumber = tNums.length > 0 && tNums.every(n => { const d = n.replace(/\D/g, ''); return d.length >= 11 && d.length <= 15 })
+  // No number of its own: the backend falls back to the colleague who created this workspace (nobody
+  // else's line is ever dialled), so that fallback counts as a usable number here too.
+  const usingWorkspaceFallback = !tNums.length && !!data.transfer_from_workspace
+  const hasNumber = ownHasNumber || usingWorkspaceFallback
+  const ringsLabel = usingWorkspaceFallback ? (data.transfer_contacts?.map((c) => c.name || c.phone).join(', ') || 'the colleague who made this agent') : tNums.join(', ')
   // The server drops any row without a phone, so a name or email typed without one would vanish on save.
   const blankPhoneRow = (form.team_members ?? []).some((m) => !(m?.phone ?? '').trim() && ((m?.name ?? '').trim() || (m?.email ?? '').trim()))
   const numberError = tNums.length > 0 && !hasNumber
@@ -141,7 +145,12 @@ export default function Inbound() {
     return data.profile.team_members?.find((m) => digits(m?.phone) === d)?.name || data.transfer_contacts?.find((t) => digits(t.phone) === d)?.name || null
   }
 
-  const routeNow = automation.data?.within_calling_hours === false ? form.after_hours_mode : form.inbound_mode
+  // A paused agent takes no customer calls: the line hands over to a person if there is one, else the
+  // closed message. The card has to say that, or it promises an AI that will never pick up.
+  const paused = agent?.status === 'paused'
+  const routeNow = paused
+    ? (hasNumber ? 'forward' : 'message')
+    : (automation.data?.within_calling_hours === false ? form.after_hours_mode : form.inbound_mode)
   const flow: Record<string, { icon: ReactNode; label: string; detail: string }> = {
     ai: { icon: <Bot />, label: `${data.profile.agent_name} (AI) answers`, detail: form.transfer_on_request && hasNumber ? `Hands over to ${ringsLabel} when asked` : 'Answers from the knowledge base' },
     forward: { icon: <PhoneForwarded />, label: 'Your team answers', detail: hasNumber ? `Rings ${ringsLabel}` : 'Needs a transfer number' },
@@ -171,24 +180,29 @@ export default function Inbound() {
 
       <Card className="mb-4">
         <CardHeader title="Who answers this line" description={ownerQ.data?.own_number
-          ? `This agent has its own number: every call to it is answered here, with this agent's persona, knowledge and CRM. Its team members are recognised by their number and get check-in mode.`
-          : "Several agents can dial out from one number. A customer who is already in an agent's CRM gets that agent back (its persona and knowledge); one known to several agents is asked which matter the call is about, then handed to that agent. A new number goes to the agent chosen here. Your own team members are recognised by their number and get their agent in check-in mode (asked which one, if they work with several). Give an agent its own number under Agent settings when you get one."} />
+          ? `This agent has its own number: every call to it is answered here, with this agent's persona, knowledge and CRM. The colleagues it lists, and the one who created it, are recognised by their number and get check-in mode.`
+          : "A customer who is already in an agent's CRM gets that agent back, with its persona, knowledge and CRM. A colleague — the one who created an agent, or anyone listed on it — is recognised by their number and gets that agent's check-in mode (asked which one, if they made several). Any other caller, when several agents share the line, is asked which of them the call is about and handed to the one they name, with no lead saved until they say. The agent designated here only greets and takes the call when the caller never names a desk. Give an agent its own number under Agent settings when you get one."} />
         <div className="flex flex-wrap items-center gap-3 px-4 pb-4 text-sm sm:px-5 sm:pb-5">
           {ownerQ.data ? (
             <>
               <span className="font-mono">+{ownerQ.data.number || '—'}</span>
               <span className="text-muted">·</span>
               {ownerQ.data.owner_id === agent?.id
-                ? <Badge tone="success">This agent answers</Badge>
+                ? <Badge tone="success">This agent answers unnamed callers</Badge>
                 : ownerQ.data.owner_id
-                  ? <span>Answered by <strong>{ownerQ.data.sharing.find((a) => a.id === ownerQ.data!.owner_id)?.name ?? `agent #${ownerQ.data.owner_id}`}</strong></span>
-                  : <span className="text-muted">No agent designated: known callers reach their own agent, new numbers reach the first agent on this line</span>}
+                  ? <span>Greets unnamed callers: <strong>{ownerQ.data.sharing.find((a) => a.id === ownerQ.data!.owner_id)?.name ?? `agent #${ownerQ.data.owner_id}`}</strong></span>
+                  : <span className="text-muted">No agent designated: known callers reach their own agent, others are asked which desk they want</span>}
               {ownerQ.data.owner_id !== agent?.id && (
                 <Button size="sm" variant="primary" className="ml-auto" loading={setOwner.isPending} onClick={() => setOwner.mutate()}>
-                  <PhoneIncoming />Make {agent?.name} answer
+                  <PhoneIncoming />Make {agent?.name} greet unnamed callers
                 </Button>
               )}
               {ownerQ.data.sharing.length > 1 && <span className="basis-full text-xs text-muted">Sharing this line: {ownerQ.data.sharing.map((a) => a.name).join(', ')}</span>}
+              {ownerQ.data.answering_id && ownerQ.data.answering_id !== ownerQ.data.owner_id && (
+                <span className="basis-full text-xs font-medium text-warning">
+                  {ownerQ.data.sharing.find((a) => a.id === ownerQ.data!.owner_id)?.name ?? `agent #${ownerQ.data.owner_id}`} is paused — {ownerQ.data.sharing.find((a) => a.id === ownerQ.data!.answering_id)?.name ?? `agent #${ownerQ.data.answering_id}`} answers this line for now.
+                </span>
+              )}
             </>
           ) : <Skeleton className="h-6 w-64" />}
         </div>
@@ -213,7 +227,7 @@ export default function Inbound() {
                 <div className="truncate text-xs text-danger">
                   Couldn't load hours · <button type="button" onClick={() => automation.refetch()} disabled={automation.isFetching} className="inline-flex min-h-10 items-center px-1 font-semibold underline disabled:opacity-50 sm:min-h-0">Retry</button>
                 </div>
-              ) : <div className="truncate text-xs text-muted">{automation.data ? `${automation.data.within_calling_hours ? 'Open' : 'Closed'} · ${hours}` : '…'}</div>}
+              ) : <div className="truncate text-xs text-muted">{paused ? `Paused · ${hours}` : automation.data ? `${automation.data.within_calling_hours ? 'Open' : 'Closed'} · ${hours}` : '…'}</div>}
             </div>
           </div>
           {/* A signal travelling from the caller to whoever answers right now: the route, shown working. */}
@@ -238,7 +252,9 @@ export default function Inbound() {
           </Card>
 
           <Card>
-            <CardHeader title="2 · Your team's number" description="Where calls go when a person should take over."
+            <CardHeader title="2 · Your team's number" description={usingWorkspaceFallback
+              ? 'This agent lists nobody of its own, so calls ring the colleague who created it. Add a member here to send them elsewhere.'
+              : "Where calls go when a person should take over."}
               action={<Badge tone={hasNumber ? 'success' : 'warning'} dot>{hasNumber ? 'Set' : 'Not set'}</Badge>} />
             <div className="space-y-3 px-4 pb-5 sm:px-5">
               <div className="space-y-2">
@@ -246,7 +262,7 @@ export default function Inbound() {
                   <div className="font-semibold">Team members</div>
                   <button type="button" disabled={busy} onClick={() => { setRowKeys((k) => (k.length >= memberRows.length ? [...k.slice(0, memberRows.length), nextKey.current++] : [...k, ...Array.from({ length: memberRows.length + 1 - k.length }, () => nextKey.current++)])); set('team_members', [...memberRows, { name: '', phone: '', email: '' }]) }} className="min-h-10 px-2 text-xs font-semibold text-fg hover:underline disabled:opacity-50">+ Add team member</button>
                 </div>
-                <div className="text-[13px] text-muted mb-2">Team members who should receive urgent alerts and fallback calls.</div>
+                <div className="text-[13px] text-muted mb-2">Team members who should receive urgent alerts and fallback calls. They are rung in this order, top first.</div>
                 {numberError && <div className="text-xs font-medium break-words text-danger">{numberError}</div>}
                 {/* What is saved right now, named from Sales Team Accounts. Without this the page could
                     only show a bare number, or — with a half-filled row — nothing at all. */}
@@ -280,8 +296,28 @@ export default function Inbound() {
                     // falls back to transfer_number, so a stale list would bring every removed row straight back.
                     set('transfer_number', rest.map((m) => (m?.phone ?? '').trim()).filter(Boolean).join(', '))
                   }
+                  const move = (dir: -1 | 1) => {
+                    const j = i + dir
+                    if (j < 0 || j >= arr.length) return
+                    const rest = arr.slice()
+                    ;[rest[i], rest[j]] = [rest[j], rest[i]]
+                    set('team_members', rest)
+                    setRowKeys((k) => {
+                      const next = k.slice()
+                      ;[next[i], next[j]] = [next[j], next[i]]
+                      return next
+                    })
+                    // Ring order is now this row order, so the legacy comma list has to match — same reason
+                    // the delete handler above rewrites it.
+                    set('transfer_number', rest.map((m) => (m?.phone ?? '').trim()).filter(Boolean).join(', '))
+                  }
                   return (
                     <div key={rowKeys[i] ?? `row-${i}`} className="flex items-start gap-2 rounded-xl border border-border bg-surface-2 p-3">
+                      <div className="flex shrink-0 flex-col items-center gap-1 pt-1">
+                        <span className="grid size-6 place-items-center rounded-full bg-surface text-[11px] font-bold text-fg-2">{i + 1}</span>
+                        <button type="button" disabled={busy || i === 0} onClick={() => move(-1)} aria-label="Move up" className="grid size-6 place-items-center rounded text-muted hover:bg-surface hover:text-fg disabled:opacity-30"><ChevronUp className="size-3.5" /></button>
+                        <button type="button" disabled={busy || i === arr.length - 1} onClick={() => move(1)} aria-label="Move down" className="grid size-6 place-items-center rounded text-muted hover:bg-surface hover:text-fg disabled:opacity-30"><ChevronDown className="size-3.5" /></button>
+                      </div>
                       <div className="min-w-0 flex-1 space-y-2">
                         <Input type="text" value={member?.name ?? ''} disabled={busy} onChange={(e) => edit({ name: e.target.value })} placeholder="Name (e.g. Alice)" aria-label="Team member name" className="text-sm sm:h-8" />
                         <Input type="tel" value={member?.phone ?? ''} disabled={busy} onChange={(e) => edit({ phone: e.target.value })} placeholder="Phone (e.g. +91 98765 43210)" aria-label="Team member phone" maxLength={20} className="text-sm sm:h-8" />
