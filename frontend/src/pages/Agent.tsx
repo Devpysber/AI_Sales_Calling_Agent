@@ -317,7 +317,7 @@ function ProfileEditor({ section, draft, setDraft, data }: {
         <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
           <div className="text-sm">
             <div className="font-medium">Write this from the knowledge base</div>
-            <p className="text-muted">Reads your documents and drafts the goal, instructions, objections and guardrails for what this agent actually sells. You review before anything is saved.</p>
+            <p className="text-muted">The agent fills anything left empty here from your documents, on its own, once they are read. Press this to draft the rest — including fields you have already written, which it will replace in the form for you to keep or undo. Nothing is saved until you press Save.</p>
           </div>
           <Button variant="secondary" onClick={() => suggest.mutate()} disabled={suggest.isPending}>
             {suggest.isPending ? 'Reading your documents…' : 'Draft from knowledge base'}

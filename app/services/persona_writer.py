@@ -87,3 +87,33 @@ def draft(agent_id: int) -> dict:
             drafted[name] = value[:limits.get(name, 3000)]
     return {"fields": drafted, "reason": "", "model": f"{result.provider}/{result.model}",
             "sources": [label for label, text in covered.items() if text]}
+
+
+# Fields the agent may fill for itself, and only while they are empty. Identity — name, company, voice,
+# language, greeting — is the operator's and is never written by a machine.
+AUTOFILL = ("company_tagline", "agent_role", "customer_noun", "objective", "call_to_action",
+            "instructions", "objection_handling", "qualification_criteria", "forbidden_topics")
+
+
+def autofill(agent_id: int) -> dict:
+    """Fill the empty playbook fields from the knowledge base, once the documents have been read.
+
+    Runs after the coverage audit, so a workspace whose operator uploaded documents and never opened
+    the Playbook tab still calls with a playbook about its own business rather than an empty one.
+    Only empty fields are written: anything a person typed is left exactly as they left it, and the
+    change is recorded so it can be seen and undone.
+    """
+    profile = agents.get_profile(agent_id)
+    empty = [f for f in AUTOFILL if not str(profile.get(f) or "").strip()]
+    if not empty:
+        return {}
+    drafted = draft(agent_id).get("fields") or {}
+    filling = {f: drafted[f] for f in empty if drafted.get(f)}
+    if not filling:
+        return {}
+    agents.update_profile(agent_id, filling, actor="ai")
+    from app.services import events
+    events.record("agent.updated", f"Playbook written from the knowledge base ({len(filling)} fields)",
+                  ", ".join(filling), agent_id=agent_id, actor="ai")
+    log.info("Autofilled %s persona fields for agent %s from its documents", len(filling), agent_id)
+    return filling
