@@ -65,7 +65,7 @@ def test_a_summary_reaches_the_prompt_as_earlier_in_this_call(monkeypatch):
 def test_a_prefetched_query_embedding_is_reused_without_a_second_round_trip(monkeypatch):
     embeds = []
 
-    def fake_embed(queries, timeout=None):
+    def fake_embed(queries, timeout=None, task="document", provider=None):
         embeds.append(queries[0])
         return [[0.1, 0.2, 0.3]]
 
@@ -83,7 +83,7 @@ def test_reply_path_joins_an_inflight_prefetch_instead_of_a_second_embed_call(mo
     release = threading.Event()
     embeds = []
 
-    def fake_embed(queries, timeout=None):
+    def fake_embed(queries, timeout=None, task="document", provider=None):
         embeds.append(queries[0])
         started.set()
         release.wait(2)
@@ -107,7 +107,7 @@ def test_reply_path_joins_an_inflight_prefetch_instead_of_a_second_embed_call(mo
 
 def test_search_only_upgrades_to_embeddings_when_the_caller_allowed_a_real_budget(monkeypatch):
     calls = []
-    monkeypatch.setattr(rag, "_embed_query", lambda q, t: calls.append(t) or [1.0, 0.0])
+    monkeypatch.setattr(rag, "_embed_query", lambda q, t, provider=None: calls.append(t) or [1.0, 0.0])
     monkeypatch.setattr(rag, "_load_index", lambda agent_id: type("Idx", (), {
         "ids": ["c1"], "texts": ["t"], "titles": ["d"], "tfs": [{}],
         "lengths": __import__("numpy").array([1.0]), "df": {},

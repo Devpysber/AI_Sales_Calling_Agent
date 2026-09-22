@@ -27,18 +27,19 @@ def test_extract_text_corrupt_docx_raises_valueerror():
 def test_partial_embed_failure_keeps_completed_vectors(client, monkeypatch):
     chunks = [f"chunk number {i} " + "padding text to fill the batch budget. " * 8 for i in range(70)]
     monkeypatch.setattr(rag, "chunk_text", lambda text: chunks)
+    monkeypatch.setattr(rag, "EMBED_RETRY_WAITS", ())  # no real sleeping in the suite
     first_batch = len(rag._embed_batches(chunks)[0])
     assert first_batch < len(chunks)  # the document must span more than one request
 
     calls = []
 
-    def fake_embed(batch, timeout=30):
+    def fake_embed(batch, timeout=30, task="document", provider=None):
         calls.append(len(batch))
         if len(calls) == 1:
-            return [[0.1, 0.2]] * len(batch)
+            return ("openrouter", [[0.1, 0.2]] * len(batch))
         return None
 
-    monkeypatch.setattr(rag.llm, "embed", fake_embed)
+    monkeypatch.setattr(rag.llm, "embed_with_provider", fake_embed)
 
     # A dedicated agent, so writing real vectors here doesn't pollute the shared `base` agent's index.
     agent_id = client.post("/api/agents", json={"name": "RAG partial-embed test"}).json()["id"]

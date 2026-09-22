@@ -9,6 +9,12 @@ import re, sys, unicodedata
 
 SRC = sys.argv[1]
 OUT = sys.argv[2]
+# Sections that tell the agent how to behave — intent labels, objection scripts, tool rules, call
+# examples, editorial notes about missing data. They belong in the persona prompt, not in a corpus
+# of facts the agent may state, and they outrank real answers because they are written in the same
+# words a caller uses. Pass --all to keep them.
+KEEP_PLAYBOOK = "--all" in sys.argv[3:]
+PLAYBOOK = re.compile(r"^(1|18|19|20|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37)\.|^DATA (GAPS|CONFLICTS)")
 MAX_CHARS = 380
 MIN_CHARS = 215
 
@@ -83,6 +89,8 @@ def parse(src: str):
             del stack[depth - 1:]
             stack.append(m.group(2).strip())
             continue
+        if stack and not KEEP_PLAYBOOK and PLAYBOOK.match(stack[0]):
+            continue
         # "**8. PRICING / 8.1 Customer charges — Browsing**" opens a labelled block
         m = re.match(r"^\*\*(.+?)\*\*\s*$", line)
         if re.fullmatch(r"[-*_]{3,}", line.strip()):  # horizontal rule, not content
@@ -127,9 +135,9 @@ def merge_short(out):
     the passage an author reads here. Only within one breadcrumb."""
     NL = chr(10)
     passages = [p for p in out if p.strip()]
-    head = passages[:1] if passages and passages[0].startswith("<!--") else []
+    head = []
     merged = []
-    for p in passages[len(head):]:
+    for p in passages:
         if merged:
             prev = merged[-1]
             key = lambda x: x.split(NL, 1)[0].split(" (part ")[0]
@@ -148,8 +156,6 @@ def main():
     src = open(SRC, encoding="utf-8").read()
     blocks = parse(src)
     out, count = [], 0
-    out.append("<!-- Generated for hybrid (BM25 + embedding) retrieval. One passage per blank-line block: self-contained, breadcrumb-prefixed, under 380 chars. Source: " + SRC.split("/")[-1] + " -->")
-    out.append("")
     for breadcrumb, title, body in blocks:
         head = f"{breadcrumb}" + (f" — {title}" if title else "")
         head = re.sub(r"\s+", " ", head).strip(" /")
