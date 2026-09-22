@@ -9,6 +9,8 @@ business actually does, so the persona can be written from it rather than from a
 Returns a draft for a person to read and accept; nothing is saved here.
 """
 
+import re
+
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services import agents, knowledge_profile, llm, rag
@@ -18,15 +20,26 @@ log = get_logger(__name__)
 # Only the fields that describe the business and how to sell it. Identity (agent name, company, voice,
 # language, greeting) is the operator's own and is never rewritten from documents.
 FIELDS = {
-    "company_tagline": "One line on what the business does, under 60 characters, in the words a customer would use.",
+    "company_tagline": "What the business is, in one line under 60 characters, said the way a customer would say it.",
     "agent_role": "What this agent is on the phone, 2-4 words: 'wedding planning advisor', 'clinic front desk'.",
-    "customer_noun": "What the person on the line is to this business, one word: customer, couple, patient, vendor.",
-    "objective": "What a successful call achieves for THIS business, one or two sentences, under 300 characters.",
-    "call_to_action": "The single next step the agent asks for, one sentence, under 120 characters.",
-    "instructions": "How to run the call for this business: opening, what to ask, what to explain. 3-5 short lines.",
-    "objection_handling": "The objections THIS business actually hears, one per line as 'Objection: how to answer'. 3-4 lines.",
-    "qualification_criteria": "What makes a lead Hot, Warm or Cold for this business, one line.",
-    "forbidden_topics": "What this agent must never promise or claim, from the documents' own limits. 1-2 lines.",
+    "customer_noun": "What the person on the line is to this business, ONE word: customer, couple, patient, vendor.",
+    "objective": ("What a successful call achieves, in one or two sentences under 300 characters. Name the ONE "
+                  "outcome the agent is steering toward, not a list of everything the business does. If the "
+                  "business serves two different kinds of caller, write the outcome for the one this agent rings."),
+    "call_to_action": ("The single next step the agent ASKS FOR, as a statement of that step, under 120 characters. "
+                       "It is a thing that happens after the call — a callback, a visit, details sent, a name passed "
+                       "to a team. Never a question, and never 'tell me what you need', which is just talking."),
+    "instructions": ("How to run this call, 3-5 short lines, one instruction per line. Open, the ONE thing to find "
+                     "out first, what to explain in a sentence when they ask, and when to close. Use the business's "
+                     "own words for its services. No line longer than 120 characters."),
+    "objection_handling": ("The objections THIS business hears, 3-4 of them, ONE PER LINE, each written exactly as "
+                           "'Objection: how to answer'. Take them from what the documents say people ask and worry "
+                           "about. The answer is one short spoken sentence, and never promises what the documents "
+                           "do not support."),
+    "qualification_criteria": ("What makes a lead Hot, Warm or Cold here, in one line, using signals THIS business "
+                               "can actually hear on a call — a date, a budget, a service named, a decision made."),
+    "forbidden_topics": ("What this agent must never promise or claim, taken from the documents' own limits — what "
+                         "the business is not party to, does not process, does not guarantee. 1-2 lines."),
 }
 
 PROMPT = """You write the playbook for a phone agent that answers for ONE business. You are given what that
@@ -36,14 +49,55 @@ Rules:
 - Never invent a service, a price or a promise the documents do not support.
 - Where the documents state a limit ("we are not a party to contracts", "we do not process payments"),
   that belongs in what the agent must never claim.
-- Write for speech: plain sentences a person would say on a call, no marketing language, no lists inside a field.
-- If the documents say nothing useful about a field, return an empty string for it rather than a guess.
+- Write for speech: short sentences a person would say out loud. No marketing language, no "leverage",
+  "solutions", "utilise", "seamless". A shopkeeper explaining something to a neighbour.
+- Specific beats general. "Ask which city and which month the wedding is in" is worth having;
+  "understand their requirements" is not.
+- If the documents say nothing useful about a field, return an empty string rather than a guess.
 - Write in English. The agent translates itself on the call.
 
 Fields:
 {fields}
 
 Return ONLY a JSON object with exactly these keys and string values."""
+
+
+# "Tell me what you are looking for" is not a next step, it is the conversation. A call to action that
+# comes back as a question leaves the agent with nothing to close on.
+_QUESTION_CTA = re.compile(r"^(what|which|how|when|where|who|why|can|could|would|do|does|are|is|tell me)\b", re.I)
+# "Objection: answer. Next objection: answer" on one line — split before each new label.
+_NEXT_OBJECTION = re.compile(r"(?<=[.!?])\s+(?=[A-Z][^:]{2,40}:)")
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+# Asking for information is not a next step either, however politely it is phrased.
+# A pair returned as two lines, sometimes bulleted: "- Objection: X" then "Answer: Y".
+_OBJECTION_PAIR = re.compile(r"(?im)^[\s\-\*\d.)]*objection\s*:\s*(.+?)\s*\n[\s\-\*]*answer\s*:\s*")
+_ASKING = re.compile(r"\b(tell me|let me know|share (with|your)|what (kind|sort|type) of)\b", re.I)
+
+
+def _tidy(field: str, value: str) -> str:
+    """Repair the shapes the model gets wrong, rather than sending a malformed field to the form."""
+    value = value.strip()
+    if not value:
+        return ""
+    if field == "objection_handling":
+        # "Objection: X" on one line and "Answer: Y" on the next is two halves of one entry; the page
+        # and the live prompt both expect the pair on a single line.
+        value = _OBJECTION_PAIR.sub(lambda m: m.group(1).rstrip(" .;,") + ": ", value)
+    if field == "objection_handling" and "\n" not in value and value.count(":") > 1:
+        # Several objections returned as one run-on line: the page expects one per line, and so does
+        # the prompt that reads them back on a call.
+        value = _NEXT_OBJECTION.sub("\n", value)
+    if field == "instructions" and "\n" not in value and value.count(". ") >= 2:
+        value = _SENTENCE_END.sub("\n", value)
+    if field == "customer_noun":
+        value = value.split()[0].strip(".,")[:40]          # one word, whatever was asked for
+    if field == "call_to_action":
+        # A politeness prefix hid the shape: "Please tell me what you are looking for" is the
+        # conversation, not the step that follows it.
+        bare = re.sub(r"^(please|kindly|could you|can you|may i|i would like to|let me)\s+", "", value, flags=re.I)
+        if value.endswith("?") or _QUESTION_CTA.match(bare) or _ASKING.search(bare):
+            return ""                                      # better empty than a question the form calls a next step
+    return value
 
 
 def draft(agent_id: int) -> dict:
@@ -82,7 +136,7 @@ def draft(agent_id: int) -> dict:
 
     drafted, limits = {}, agents.PROFILE_LIMITS
     for name in FIELDS:
-        value = str(data.get(name) or "").strip()
+        value = _tidy(name, str(data.get(name) or "").strip())
         if value:
             drafted[name] = value[:limits.get(name, 3000)]
     return {"fields": drafted, "reason": "", "model": f"{result.provider}/{result.model}",
