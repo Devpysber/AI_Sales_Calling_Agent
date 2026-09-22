@@ -418,6 +418,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
   const mouthTimer = useRef<number>(0)
   // Voice loudness sampled from the playing audio, read by the avatar every frame to move the mouth in time.
   const level = useRef(0)
+  const lastFrac = useRef(-1)
   const analyser = useRef<{ ctx: AudioContext; node?: AnalyserNode; source?: MediaElementAudioSourceNode; raf: number } | null>(null)
   const meter = (a: HTMLAudioElement) => {
     try {
@@ -434,7 +435,12 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
         let sum = 0
         for (const v of buf) { const d = (v - 128) / 128; sum += d * d }
         level.current = Math.sqrt(sum / buf.length)
-        if (a.duration > 0 && !a.paused) setSpokenFrac(Math.min(1, a.currentTime / a.duration))
+        // The mouth reads `level` straight from the ref every frame; the word highlight only needs ~12 steps a second.
+        // Setting state 60x a second re-rendered this whole page per frame and made the orb stutter on long replies.
+        if (a.duration > 0 && !a.paused) {
+          const frac = Math.min(1, Math.round((a.currentTime / a.duration) * 40) / 40)
+          if (frac !== lastFrac.current) { lastFrac.current = frac; setSpokenFrac(frac) }
+        }
         analyser.current!.raf = requestAnimationFrame(tick)
       }
       analyser.current = { ctx, node, source, raf: requestAnimationFrame(tick) }
@@ -496,7 +502,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
     // 'play' fires as soon as play() is called, seconds before a deferred TTS file has downloaded, so the
     // mouth used to move in silence. 'playing' means audio is actually coming out; 'waiting' means it stalled.
     audio.current.onplaying = () => setIsSpeaking(true);
-    setSpokenFrac(0)
+    setSpokenFrac(0); lastFrac.current = 0
     audio.current.onwaiting = () => setIsSpeaking(false);
     audio.current.crossOrigin = 'anonymous'
     meter(audio.current)
