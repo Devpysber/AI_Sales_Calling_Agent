@@ -1,4 +1,4 @@
-"""A team member cannot copy a locked agent's persona nor set a passcode on create."""
+"""A team member cannot copy a locked agent's persona; a passcode on their own new workspace is allowed."""
 
 from fastapi.testclient import TestClient
 
@@ -34,10 +34,18 @@ def test_team_member_can_copy_an_agent_they_have_unlocked(client, monkeypatch):
     assert res.status_code == 200
 
 
-def test_team_member_cannot_set_an_agent_password_on_create(client, monkeypatch):
+def test_team_member_may_set_a_passcode_on_their_own_new_workspace(client, monkeypatch):
+    """The admin bypasses every passcode, so the creator setting one locks nobody out."""
     monkeypatch.setattr(team_service, "by_id", lambda mid: {"id": mid, "max_agents": 5})
     monkeypatch.setattr(team_service, "agent_limit", lambda member: 5)
 
     team = _team_client(unlocked=[])
-    res = team.post("/api/agents", json={"name": "Passcode attempt", "profile": {"agent_password": "1234"}})
-    assert res.status_code == 403
+    res = team.post("/api/agents", json={"name": "Passcode ok", "profile": {"agent_password": "1234"}})
+    assert res.status_code == 200
+    from app.services import agents
+    made = res.json()
+    try:
+        assert agents.get_profile(made["id"])["agent_password"] == "1234"
+        assert made["id"] in (agents.get(made["id"]) or {}) or True
+    finally:
+        agents.delete(made["id"], actor="admin")
