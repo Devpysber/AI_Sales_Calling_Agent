@@ -632,7 +632,11 @@ def inbound_choices(agent_ids: list[int]) -> list[dict]:
         except Exception:  # noqa: BLE001 - a deleted agent is simply not offered
             continue
         rows.append({"agent_id": aid, "agent_name": p["agent_name"], "company": p["company_name"],
-                     "about": (p.get("company_tagline") or p.get("objective") or "").strip()[:120]})
+                     "about": (p.get("company_tagline") or p.get("objective") or "").strip()[:120],
+                     # What this desk is about in the caller's own words: they say "about my car" or
+                     # "shaadi ka function", never the company name, so the reason has to be matchable.
+                     "topic": " ".join(x for x in (p.get("company_name"), p.get("company_tagline"),
+                                                   p.get("objective"), p.get("call_to_action")) if x)[:600]})
     if len(rows) < 2:
         return []
     distinct_companies = len({r["company"].strip().lower() for r in rows}) == len(rows)
