@@ -164,3 +164,21 @@ def test_team_action_for_an_interested_caller_still_gets_a_slot(client, base, mo
     lead = client.post(f"{base}/leads", json={"name": "EMI", "phone": "9455555556"}).json()
     CallService(agent_id)._summarize_inner(0, lead["id"], [{"role": "customer", "text": "EMI kitni banegi?"}])
     assert client.get(f"{base}/leads/{lead['id']}").json().get("callback_at")
+
+
+def test_cancelled_meeting_is_cleared_on_the_turn(client, base):
+    from datetime import datetime, timedelta
+    from app.services import call_session
+    from app.services.call_service import CallService
+    agent_id = int(base.rsplit("/", 1)[1])
+    when = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d 11:00")
+    lead = client.post(f"{base}/leads", json={"name": "Cancel", "phone": "9455555557"}).json()
+    assert client.patch(f"{base}/leads/{lead['id']}", json={"meeting_at": when, "status": "Meeting Booked"}).status_code == 200
+    session = {"lead_id": lead["id"], "call_id": None, "lead": {"meeting_at": when}}
+    CallService(agent_id)._apply_turn_signals(session, {"crm_update": {"meeting_at": "cancelled"}, "qualification": None, "intent": "other"})
+    after = client.get(f"{base}/leads/{lead['id']}").json()
+    assert not after.get("meeting_at") and after["status"] == "Follow Up"
+    # A plain turn with no meeting talk leaves a booking alone.
+    assert client.patch(f"{base}/leads/{lead['id']}", json={"meeting_at": when, "status": "Meeting Booked"}).status_code == 200
+    CallService(agent_id)._apply_turn_signals(session, {"crm_update": {"meeting_at": ""}, "qualification": None, "intent": "other"})
+    assert client.get(f"{base}/leads/{lead['id']}").json().get("meeting_at") == when

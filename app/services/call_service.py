@@ -955,6 +955,10 @@ class CallService:
         meeting_at = _valid_meeting(crm.get("meeting_at"))
         if meeting_at:
             updates["meeting_at"] = meeting_at
+        elif str(crm.get("meeting_at") or "").strip().lower() in ("cancelled", "canceled", "cancel") and (self.crm.get(lead_id) or {}).get("meeting_at"):
+            # The customer called the booking off and took no new slot: the reminder job must not ring them for it.
+            updates["meeting_at"] = ""
+            updates["status"] = "Follow Up"
         callback_at = _valid_meeting(crm.get("callback_at"))  # same shape and sanity rules as a meeting time
         if callback_at and not meeting_at:
             updates["callback_at"] = callback_at

@@ -52,4 +52,28 @@ def test_prompt_stays_within_the_cost_budget():
     """~4.3k input tokens per turn is the cost baseline; a rule added back must not silently double it."""
     persona = Persona(agents.PROFILE_DEFAULTS)
     text = agent._system_prompt(persona, Persona(), [], None)
-    assert len(text) < 19000, f"prompt grew to {len(text)} chars; keep the LLM cost per turn down"
+    assert len(text) < 21000, f"prompt grew to {len(text)} chars; keep the LLM cost per turn down"  # ~5k tokens incl. the Situations block
+
+
+SITUATIONS = {
+    "no OTP/payment ever": r"NEVER ask for or accept an OTP",
+    "abuse stays calm": r"Abuse, threats",
+    "third party pickup": r"Someone else picks up",
+    "existing customer complaint": r"Existing customer with a complaint",
+    "emergency ends call": r"Distress or emergency",
+    "self callback accepted": r"I will call you back myself",
+    "language switch on request": r"English mein bolo",
+    "unsupported language": r"An unsupported language",
+    "recording and privacy": r"Recording / privacy question",
+    "meeting cancellation": r"Cancel or move a booked meeting",
+    "low budget kindly": r"A budget far below",
+    "no invented discount": r"Discount or negotiation",
+    "calling window": r"We call between \d+:00 and \d+:00 IST",
+}
+
+
+def test_every_situation_rule_is_in_the_prompt(client, base):
+    agent_id = int(base.rsplit("/", 1)[1])
+    text = agent._system_prompt(agents.get_profile(agent_id), Persona(), [], agent_id)
+    missing = [name for name, pattern in SITUATIONS.items() if not re.search(pattern, text, re.S)]
+    assert not missing, f"situations missing from the prompt: {missing}"

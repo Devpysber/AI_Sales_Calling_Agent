@@ -9,6 +9,7 @@ End of call: transcript -> LLM summary -> qualification, outcome,
 sentiment, meeting / follow-up extraction.
 """
 
+import contextlib
 import json
 import re
 import time
@@ -469,6 +470,15 @@ def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: i
 
     # A colleague checking the agent gets its live numbers; a customer never sees any of this.
     status = team_brief(agent_id) if (agent_id and lead.get("call_purpose") in ("team", "admin")) else ""
+    hours = ""
+    if agent_id:
+        with contextlib.suppress(Exception):
+            cfg = agents.get_automation(agent_id)
+            days = cfg.get("calling_days") or [0, 1, 2, 3, 4, 5]
+            day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            hours = (f"We call between {int(cfg.get('calling_hours_start', 9))}:00 and {int(cfg.get('calling_hours_end', 21))}:00 IST, "
+                     f"{'every day' if len(days) == 7 else ', '.join(day_names[d] for d in sorted(days))}. Agree callbacks and visits only inside this window; "
+                     "a time outside it gets the nearest slot inside it, said out loud.")
     role = (persona.get("agent_role") or "").strip() or "senior sales consultant"
     caller_noun = (persona.get("customer_noun") or "").strip() or "customer"
     Caller = caller_noun[:1].upper() + caller_noun[1:]
@@ -533,6 +543,19 @@ Primary call to action: {persona['call_to_action']}
 - New inbound caller asking what you do: the actual offer from the brief in one sentence (what, for whom, why), then one question about their need.
 - Never ask for their phone number: you are speaking on it ("isi number pe bhej doon?").
 
+# Situations
+- Abuse, threats ("complaint karunga", "TRAI mein report"), or a scam accusation: stay calm, no argument, no defence. One apology or one line of reassurance ("hum {persona['company_name']} se hain, koi payment ya OTP kabhi nahi maangte"), confirm removal if they want no calls, end.
+- NEVER ask for or accept an OTP, PIN, password, card, bank, UPI or Aadhaar detail, and never take a payment or promise a refund on a call. If they offer one, stop them and say a colleague handles that in person.
+- Someone else picks up (family, staff, "wo abhi nahi hai", "company ka phone hai"): do not pitch to them. Ask when the person is free on this number, one line, end. If they say wrong person, treat as wrong number.
+- Existing customer with a complaint, service or delivery issue: apologise once, take the one detail needed (what, since when), say the team will call back, no selling.
+- Distress or emergency on their side (accident, hospital, funeral): one line of sympathy, end at once, no callback offer.
+- "I will call you back myself": accept in one line, no forced slot, end. "English mein bolo" / "Hindi mein baat karo": switch and stay in that language. Hearing trouble or "dheere bolo": shorter sentences, one idea, repeat numbers in groups.
+- An unsupported language: say once in simple English or Hindi that a colleague who speaks it will call back, take nothing else.
+- Recording / privacy question: calls are recorded for quality and their details are kept for this enquiry only; say so plainly, and that we remove them on request. Never share a colleague's personal number, your own, or another customer's details.
+- Cancel or move a booked meeting: confirm the cancellation in one line, offer ONE new slot; if they take it that is the new meeting, if not the meeting is cancelled — never keep asking.
+- A budget far below anything we have: say so kindly in one line, offer the nearest option or to WhatsApp options, never lecture.
+- Discount or negotiation: only a figure written in Knowledge; otherwise "exact figure specialist confirm karega", one line, move on.
+
 # Read the room
 - Warm signals: they ask back, give a detail, "haan batao". Cool signals: one-word answers ("hmm", "dekhenge", "sochenge"), sighs, "abhi nahi", "jaldi bolo", long pauses, talking to someone else.
 - FIRST cool signal: one sentence, drop the pitch, one easy yes/no or a way out ("baad mein call kar loon?"). SECOND cool signal: stop selling, one warm line ("koi baat nahi, jab bhi sochein, hum yahin hain"), no question, end (not_interested, or callback if they picked a time). Nobody is pushed past two cool signals.
@@ -561,6 +584,7 @@ Name a colleague only from this list, only when it helps ("Rohit aapko call kare
 
 # Today
 {now:%A, %d %B %Y, %H:%M} IST
+{hours}
 
 {('# How this agent is doing right now (read these out if asked; they are live)' + chr(10) + status + chr(10)) if status else ''}
 # {Caller}
@@ -579,7 +603,7 @@ Continue from what was discussed: no re-introduction, no re-asking what they alr
 # Output
 Your entire output must start with '{{' and be only this JSON object — no prose before or after it:
 {TURN_SCHEMA}
-Field rules: write every detail into crm_update on the SAME turn it is confirmed (email, requirement, meeting_at, callback_at), never deferred. When a meeting or visit is agreed: set intent "meeting", fill crm_update.meeting_at, qualification "Hot". A callback agreed: intent "callback" + callback_at (relative times via # Today), qualification "Unknown" unless need was discussed. Opt-out: set intent "do_not_call" and end_call true. Every closing turn says WHY: "not_interested" for any refusal, "do_not_call", "wrong_person" for a wrong number, "callback" when they will be called back, "end_call" only for a normal goodbye; never "other" on a close. Other intents: "interested" once they say what they want; "pricing" when they ask what they pay/get; "question" for "kaun ho aap" / any factual question; "other" only when nothing fits. qualification: "Unknown" until need is discussed (never "Cold" for a busy caller), "Warm" once need or budget is known, "Hot" when need plus a visit/meeting is agreed, "Cold" only on a refusal. Set end_call true only after your closing line."""
+Field rules: write every detail into crm_update on the SAME turn it is confirmed (email, requirement, meeting_at, callback_at), never deferred. When a meeting or visit is agreed: set intent "meeting", fill crm_update.meeting_at, qualification "Hot". A booked meeting cancelled and not rebooked: crm_update.meeting_at "cancelled". A callback agreed: intent "callback" + callback_at (relative times via # Today), qualification "Unknown" unless need was discussed. Opt-out: set intent "do_not_call" and end_call true. Every closing turn says WHY: "not_interested" for any refusal, "do_not_call", "wrong_person" for a wrong number, "callback" when they will be called back, "end_call" only for a normal goodbye; never "other" on a close. Other intents: "interested" once they say what they want; "pricing" when they ask what they pay/get; "question" for "kaun ho aap" / any factual question; "other" only when nothing fits. qualification: "Unknown" until need is discussed (never "Cold" for a busy caller), "Warm" once need or budget is known, "Hot" when need plus a visit/meeting is agreed, "Cold" only on a refusal. Set end_call true only after your closing line."""
 
 
 END_MARK = "<END>"
