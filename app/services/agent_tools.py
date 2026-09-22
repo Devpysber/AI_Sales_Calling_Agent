@@ -200,8 +200,30 @@ def today_stats_tool(agent_id: int) -> str:
 
 
 def check_credits_tool() -> str:
-    """Query the user's account balance/credit status."""
-    return "Account credit balance is unknown: no billing integration is connected, so do not quote a balance."
+    """What is left with each provider, the way the alerts bell already shows it.
+
+    This used to answer "no billing integration is connected" while the balances were being fetched
+    for the web UI a function away, so the commonest question on an admin call — kitna balance bacha
+    hai — was answered with the one thing that was certainly untrue.
+    """
+    try:
+        from app.services import alerts
+        providers = (alerts.credits(False) or {}).get("providers") or []
+    except Exception as e:  # noqa: BLE001 - a balance is never worth failing a live turn over
+        log.warning("Credit check failed: %s", e)
+        return "I could not read the balances just now."
+    lines = []
+    for p in providers:
+        value = str(p.get("value") or "").strip()
+        if not value:
+            continue
+        # The detail carries decimals ("at 0.00475/min"), so it is taken whole or not at all.
+        detail = " ".join(str(p.get("detail") or "").split())
+        lines.append(f"{p.get('provider')}: {value}" + (f", {detail}" if 0 < len(detail) <= 60 else ""))
+    if not lines:
+        return "No provider is reporting a balance right now."
+    low = [p.get("provider") for p in providers if p.get("level") in ("low", "critical")]
+    return "; ".join(lines) + (f". Running low: {', '.join(low)}." if low else ".")
 
 def update_lead_status_tool(lead_id, new_status: str, agent_id: int, lead: str | None = None) -> str:
     """Update a lead's status in the CRM; the lead may be named by id, name or phone."""
@@ -363,8 +385,21 @@ def pause_agent_automation_tool(target_agent_id: int) -> str:
     except Exception as e:
         return f"Failed to pause automation: {str(e)}"
 
-def send_sms_tool(to: str, message: str) -> str:
-    """Send an SMS to a phone number."""
+def send_sms_tool(to: str, message: str, agent_id: int, role: str = "team") -> str:
+    """Send an SMS. A team member may only text someone already in this agent's own CRM.
+
+    Anyone on a team call could otherwise dictate any number in the world and any text, from the
+    company's own sender id. An admin keeps the open form, since they can already reach everything.
+    """
+    digits = "".join(ch for ch in str(to or "") if ch.isdigit())
+    if not digits:
+        return "Failed: I need the number to text, said in digits."
+    if role != "admin":
+        from app.services.crm_service import CRMService
+        known = CRMService(agent_id).find_by_phone("+" + digits)
+        if not known:
+            return (f"Failed: {to} is not one of this agent's leads, so I cannot text it. "
+                    "Add the lead first, or ask an administrator.")
     try:
         from app.services.plivo_service import PlivoService
         plivo = PlivoService()
@@ -675,6 +710,86 @@ def set_agent_paused_tool(target_agent_id: int, paused: bool) -> str:
     return f"Agent {target_agent_id} is now {'paused: no calls go out' if paused else 'active'}."
 
 
+def lead_details_tool(agent_id: int, lead: str | None = None, lead_id=None) -> str:
+    """Everything on one lead, read back on a call: only a five-row name list existed before."""
+    lead_id, note = resolve_lead(agent_id, lead_id, lead)
+    if note:
+        return note
+    row = CRMService(agent_id).get(lead_id) or {}
+    if not row:
+        return f"No lead {lead_id} on this agent."
+    parts = [f"{row.get('name') or 'No name'} ({row.get('phone')})",
+             f"stage {row.get('status')}", f"temperature {row.get('qualification') or 'unknown'}"]
+    for label, key in (("needs", "requirements"), ("objections", "objections"), ("notes", "notes"),
+                       ("meeting", "meeting_at"), ("callback", "callback_at"), ("email", "email"),
+                       ("city", "city"), ("company", "company")):
+        value = " ".join(str(row.get(key) or "").split())
+        if value:
+            parts.append(f"{label}: {value[:200]}")
+    if row.get("do_not_call"):
+        parts.append("marked Do Not Call")
+    return ". ".join(parts) + "."
+
+
+def analytics_tool(agent_id: int, days: int = 7) -> str:
+    """The Insights numbers, spoken: what a colleague rings to ask before a review."""
+    from app.services import analytics
+    days = max(7, min(int(days or 7), 90))
+    try:
+        data = analytics.report(agent_id, days)
+    except Exception as e:  # noqa: BLE001 - a number is never worth failing a live turn over
+        log.warning("Analytics tool failed: %s", e)
+        return "I could not read the numbers just now."
+    k = data.get("kpis") or {}
+    cost = data.get("cost") or {}
+    lines = [f"Last {days} days: {k.get('calls', 0)} calls, {k.get('connected', 0)} connected",
+             f"{k.get('meetings', 0)} meetings booked"]
+    if k.get("connect_rate") is not None:
+        lines.append(f"connect rate {k['connect_rate']}%")
+    if cost.get("total"):
+        lines.append(f"spend {cost.get('currency') or ''}{round(float(cost['total']), 2)}")
+    return ", ".join(lines) + "."
+
+
+def knowledge_list_tool(agent_id: int) -> str:
+    """What this agent knows: the documents, and whether search is semantic or keyword only."""
+    from app.services import rag
+    documents = rag.list_documents(agent_id)
+    if not documents:
+        return "This agent has no documents yet."
+    stats = rag.stats(agent_id)
+    named = "; ".join(f"{d['title']} ({d.get('chunk_count') or 0} passages)" for d in documents[:6])
+    more = f", and {len(documents) - 6} more" if len(documents) > 6 else ""
+    mode = "meaning and keywords" if stats.get("semantic") else "keywords only"
+    return f"{len(documents)} document(s): {named}{more}. Search is {mode}."
+
+
+def knowledge_search_tool(agent_id: int, question: str) -> str:
+    """What the agent would say to a customer asking this, read back to a colleague checking it."""
+    from app.services import rag
+    question = " ".join(str(question or "").split())
+    if len(question) < 3:
+        return "Failed: ask the question the way a customer would."
+    hits = rag.search(agent_id, question, top_k=2, use_embeddings=False)
+    if not hits:
+        return f"Nothing in the knowledge base answers '{question[:60]}'. The agent would say it will check and come back."
+    return " ".join(f"({h.get('title')}) {' '.join((h.get('text') or '').split())[:220]}" for h in hits)
+
+
+def persona_tool(agent_id: int) -> str:
+    """How this agent introduces itself and what it is told to do: the Persona page, spoken."""
+    from app.services import agents as agent_service
+    p = agent_service.get_profile(agent_id)
+    bits = [f"{p.get('agent_name')} for {p.get('company_name')}"]
+    for label, key in (("tagline", "company_tagline"), ("role", "agent_role"), ("calls the person", "customer_noun"),
+                       ("voice", "voice_speaker"), ("language", "default_language"),
+                       ("objective", "objective"), ("asks for", "call_to_action")):
+        value = " ".join(str(p.get(key) or "").split())
+        if value:
+            bits.append(f"{label}: {value[:160]}")
+    return ". ".join(bits) + "."
+
+
 TAUGHT_FACT_CHARS = 200   # of the fact itself in the saved passage; the rest of the 380 is breadcrumb and keywords
 KNOWN_OVERLAP = 0.8       # this much of the fact's own words already in a passage: we know it
 TOPIC_OVERLAP = 0.6       # this much of the topic's words in common: the passage is about the same thing
@@ -957,6 +1072,18 @@ TOOLS += [
         "parameters": {"type": "object", "properties": {"start": {"type": "integer"}, "end": {"type": "integer"}}}}},
     {"type": "function", "function": {"name": "pending_work", "description": "What is waiting: call queue size, callbacks due today, meetings today. Use for 'kya pending hai', 'aaj kya hai'.",
         "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "lead_details", "description": "Everything on one lead: stage, temperature, what they need, objections, notes, meeting and callback. 'Rahul ka kya scene hai', 'read me the lead'.",
+        "parameters": {"type": "object", "properties": {"lead": {"type": "string", "description": "Name, phone or id"}}, "required": ["lead"]}}},
+    {"type": "function", "function": {"name": "analytics", "description": "The Insights numbers for this agent: calls, connect rate, meetings and spend over a period. 'is hafte ka kya hisaab hai'.",
+        "parameters": {"type": "object", "properties": {"days": {"type": "integer", "description": "7 to 90, default 7"}}}}},
+    {"type": "function", "function": {"name": "knowledge_list", "description": "What documents this agent has and whether its search is semantic or keyword only.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "knowledge_search", "description": "What the agent would tell a customer who asked this — read the knowledge base back. Use to check an answer before trusting it.",
+        "parameters": {"type": "object", "properties": {"question": {"type": "string", "description": "The question in the customer's own words"}}, "required": ["question"]}}},
+    {"type": "function", "function": {"name": "persona", "description": "How this agent introduces itself: name, company, tagline, role, voice, language, objective and call to action.",
+        "parameters": {"type": "object", "properties": {}}}},
+    # A colleague may pause their own desk; the admin may name another one. Stopping only the dialler,
+    # without silencing the agent for inbound callers, is set_automation.
     {"type": "function", "function": {"name": "set_agent_paused", "description": "Pause this agent (no calls at all: manual, auto-dial, retries) or resume it. 'agent band karo' / 'chalu karo'.",
         "parameters": {"type": "object", "properties": {"paused": {"type": "boolean"}}, "required": ["paused"]}}},
     {"type": "function", "function": {"name": "teach_fact", "description": (
@@ -1040,7 +1167,7 @@ ADMIN_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "target_agent_id": {"type": "integer", "description": "The ID of the agent to query."}
+                    "target_agent_id": {"type": "string", "description": "The agent to query: its id, name or company name."}
                 },
                 "required": ["target_agent_id"]
             }
@@ -1054,7 +1181,7 @@ ADMIN_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "target_agent_id": {"type": "integer", "description": "The ID of the agent to pause."}
+                    "target_agent_id": {"type": "string", "description": "The agent to pause: its id, name or company name."}
                 },
                 "required": ["target_agent_id"]
             }
@@ -1073,10 +1200,31 @@ ADMIN_TOOLS = [
     }
 ]
 
+# Tools whose dispatch already honours an `agent` argument ("Hairscope ka auto dial band karo"). The
+# argument was read at dispatch but declared in no schema, so the model had no way to send it and every
+# cross-agent instruction quietly acted on the desk that answered the phone.
+_TARGET_AWARE = {"add_lead", "add_note", "update_lead_details", "set_do_not_call", "dial_lead", "set_meeting",
+                 "set_schedule", "set_calling_hours", "pending_work", "teach_fact", "set_automation",
+                 "today_stats", "check_agent_schedule", "recent_calls", "check_records", "set_agent_paused",
+                 "lead_details", "analytics", "knowledge_list", "knowledge_search", "persona"}
+_AGENT_ARG = {"type": "string", "description": "Another agent by id, name or company name. Omit to act on this agent."}
+
+
 def get_tools_for_role(role: str) -> list[dict]:
-    if role == "admin":
-        return TOOLS + ADMIN_TOOLS
-    return TOOLS
+    """The tools this caller may use. Only an admin is offered the cross-agent argument."""
+    if role != "admin":
+        return TOOLS
+    widened = []
+    for tool in TOOLS:
+        function = tool["function"]
+        if function["name"] not in _TARGET_AWARE:
+            widened.append(tool)
+            continue
+        parameters = function.get("parameters") or {"type": "object", "properties": {}}
+        properties = dict(parameters.get("properties") or {})
+        properties["agent"] = _AGENT_ARG
+        widened.append({**tool, "function": {**function, "parameters": {**parameters, "properties": properties}}})
+    return widened + ADMIN_TOOLS
 
 def _tool_schemas() -> dict:
     return {t["function"]["name"]: t["function"].get("parameters", {}).get("properties", {}) for t in TOOLS + ADMIN_TOOLS}
@@ -1178,7 +1326,7 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
     elif name == "schedule_callback":
         return schedule_callback_tool(args.get("lead_id"), args.get("date_time"), agent_id, lead=args.get("lead") or args.get("name"))
     elif name == "send_sms":
-        return send_sms_tool(args.get("to"), args.get("message"))
+        return send_sms_tool(args.get("to"), args.get("message"), agent_id, role)
     elif name == "book_calendar_event":
         return book_calendar_event_tool(args.get("email"), args.get("date_time"), args.get("duration_minutes", 30), agent_id)
     # Own-agent actions a colleague needs on a call; an admin naming another agent ("Hairscope ka") works on that one.
@@ -1187,7 +1335,19 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
         target, note = resolve_agent(args.get("agent"), agent_id)
         if note:
             return note
-    if name == "add_lead":
+    if name == "lead_details":
+        return lead_details_tool(target, args.get("lead") or args.get("name"), args.get("lead_id"))
+    elif name == "analytics":
+        return analytics_tool(target, _int(args.get("days"), 7))
+    elif name == "knowledge_list":
+        return knowledge_list_tool(target)
+    elif name == "knowledge_search":
+        return knowledge_search_tool(target, args.get("question") or args.get("query") or "")
+    elif name == "persona":
+        return persona_tool(target)
+    elif name == "set_agent_paused":
+        return set_agent_paused_tool(target, _on_flag(args.get("paused", True)))
+    elif name == "add_lead":
         return add_lead_tool(target, args.get("name"), args.get("phone"), args.get("requirement"), args.get("city"))
     elif name == "add_note":
         return add_note_tool(target, args.get("lead_id"), args.get("note") or args.get("text"), lead=args.get("lead") or args.get("name"))
@@ -1207,8 +1367,6 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
                                  args.get("recipient") or args.get("email"))
     elif name == "pending_work":
         return pending_work_tool(target)
-    elif name == "set_agent_paused":
-        return set_agent_paused_tool(target, _on_flag(args.get("paused", True)))
     elif name == "teach_fact":
         return teach_fact_tool(target, args.get("fact") or args.get("text") or "", args.get("topic") or args.get("title"))
 
