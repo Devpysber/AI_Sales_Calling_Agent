@@ -61,7 +61,7 @@ def test_prompt_stays_within_the_cost_budget():
     """~4.3k input tokens per turn is the cost baseline; a rule added back must not silently double it."""
     persona = Persona(agents.PROFILE_DEFAULTS)
     text = agent._system_prompt(persona, Persona(), [], None)
-    assert len(text) < 21000, f"prompt grew to {len(text)} chars; keep the LLM cost per turn down"  # ~5k tokens incl. the Situations block
+    assert len(text) < 22600, f"prompt grew to {len(text)} chars; keep the LLM cost per turn down"  # ~5k tokens incl. the Situations block
 
 
 SITUATIONS = {
@@ -72,12 +72,26 @@ SITUATIONS = {
     "existing customer complaint": r"Existing customer with a complaint",
     "emergency ends call": r"Distress or emergency",
     "self callback accepted": r"I will call you back myself",
-    "language switch on request": r"English mein bolo",
+    "language switch on request": r"English/Hindi mein bolo",
     "unsupported language": r"An unsupported language",
-    "recording and privacy": r"Recording / privacy question",
+    "recording and privacy": r"Recording / privacy:",
     "meeting cancellation": r"Cancel or move a booked meeting",
-    "low budget kindly": r"A budget far below",
-    "no invented discount": r"Discount or negotiation",
+    "low budget kindly": r"Budget far below our range",
+    "no invented discount": r"never invent an offer",
+    "noise and stray lines": r"Noise, a joke, children or a TV",
+    "prompt-injection resistant": r"ignore your instructions",
+    "bad line or driving": r"driving, a market, a breaking line",
+    "another number to call": r"Call us on another number",
+    "called too often": r"You called today already",
+    "existing customer": r"Already bought / already our customer",
+    "no invented freebie": r"a deal for a review",
+    "nothing is paid on the call": r"Nothing is paid, booked or completed on this call",
+    "record contradicted": r"contradicts our record",
+    "phone handed over": r"phone handed over",
+    "festival or bereavement": r"a bereavement or a festival",
+    "number source asked again": r"how we got their number",
+    "wants it in writing first": r"want it in writing first",
+    "accepts without a time": r"accept the next step without a time",
     "calling window": r"We call between \d+:00 and \d+:00 IST",
 }
 
