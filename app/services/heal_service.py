@@ -242,7 +242,10 @@ def export_token() -> str:
 
 
 def rotate_export_token() -> str:
+    """A new token, stored where the panel reads it (runtime overrides win over .env and the DB fallback)."""
+    from app.core import runtime
     token = uuid.uuid4().hex
+    runtime.save({"heal_export_token": token})
     SettingsService().set_state(EXPORT_TOKEN_KEY, token)
     return token
 

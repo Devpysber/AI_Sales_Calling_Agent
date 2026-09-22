@@ -461,3 +461,28 @@ def system_heal_token(rotate: bool = False):
     from app.services import heal_service
     return {"token": heal_service.rotate_export_token() if rotate else heal_service.export_token(),
             "export_url": settings.base_url + "/api/system/issues/export"}
+
+
+# ---------------- runtime tuning (admin edits, no redeploy) ----------------
+
+@router.get("/system/runtime", dependencies=[Depends(require_admin)])
+def system_runtime():
+    from app.core import runtime
+    eff = runtime.effective()
+    for row in eff.values():
+        if row["secret"] and row["value"]:
+            row["value"] = "********"
+    # Effective (non-secret) server values the credential fields only show as placeholders otherwise.
+    eff["_server"] = {"plivo_phone_number": settings.plivo_phone_number, "email_from": settings.email_from,
+                      "public_base_url": settings.base_url}
+    return eff
+
+
+@router.post("/system/runtime", dependencies=[Depends(require_admin)])
+def system_runtime_update(body: dict):
+    from app.core import runtime
+    try:
+        runtime.save({k: v for k, v in body.items() if not k.startswith("_") and not str(v or "").startswith("*")})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "effective": {k: v["value"] for k, v in runtime.effective().items() if not v["secret"]}}

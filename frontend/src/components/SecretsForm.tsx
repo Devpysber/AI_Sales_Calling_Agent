@@ -85,6 +85,12 @@ export default function SecretsForm() {
     queryKey: ['system', 'secrets'],
     queryFn: () => api<Secrets>('/api/system/secrets'),
   })
+  // The effective server value: without it the placeholder "+919876543210" is mistaken for the live number.
+  const { data: runtime } = useQuery({
+    queryKey: ['system', 'runtime'],
+    queryFn: () => api<{ _server?: Record<string, string> }>('/api/system/runtime'),
+  })
+  const server = runtime?._server ?? {}
 
   const [form, setForm] = useState<Record<string, string>>({})
   // Keys explicitly removed with the bin — the only way an empty value for a saved credential reaches the server.
@@ -146,14 +152,14 @@ export default function SecretsForm() {
           <h3 className="font-bold">Telephony & AI</h3>
           {cred('plivo_auth_id', 'Plivo Auth ID', { placeholder: 'MA…', help: '20 characters starting with MA or SA, from the Plivo console overview.' })}
           {cred('plivo_auth_token', 'Plivo Auth Token', { secret: true })}
-          {cred('plivo_phone_number', 'Plivo Phone Number', { placeholder: '+919876543210', help: 'International format, including the country code.' })}
+          {cred('plivo_phone_number', 'Plivo Phone Number', { placeholder: '+919876543210', help: `International format, including the country code. Currently in use: ${server.plivo_phone_number || 'not set'}` })}
           {cred('openrouter_api_key', 'OpenRouter API Key', { secret: true, placeholder: 'sk-or-…' })}
           {cred('sarvam_api_key', 'Sarvam API Key', { secret: true, placeholder: 'sk_…' })}
         </div>
         <div className="space-y-4">
           <h3 className="font-bold">Email (Resend)</h3>
           {cred('resend_api_key', 'Resend API Key', { secret: true, placeholder: 're_…' })}
-          {cred('email_from', 'Email From', { placeholder: 'Company <noreply@domain.com>', help: 'The domain must be verified in Resend.' })}
+          {cred('email_from', 'Email From', { placeholder: 'Company <noreply@domain.com>', help: `The domain must be verified in Resend. Currently in use: ${server.email_from || 'not set'}` })}
         </div>
       </div>
       <div className="grid gap-6 border-t border-border p-4 sm:p-5 md:grid-cols-2">

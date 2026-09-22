@@ -140,6 +140,15 @@ class Settings(BaseSettings):
         return self.public_base_url.rstrip("/")
 
     def __getattribute__(self, name: str):
+        if name in RUNTIME_KEYS:
+            # Tuning an admin changes from Settings without a redeploy: plaintext, validated on save.
+            try:
+                from app.core.runtime import runtime_override
+                value = runtime_override(name)
+                if value is not None:
+                    return value
+            except Exception:
+                pass
         # We define the keys that are allowed to be overridden by the database
         secret_keys = {
             "resend_api_key", "email_from", "email_reply_to", 
@@ -162,6 +171,21 @@ class Settings(BaseSettings):
                 pass
                 
         return super().__getattribute__(name)
+
+
+# Settings the admin may change from the web app (Settings -> Runtime tuning). name -> (type, label, help, (min, max) or None)
+RUNTIME_KEYS = {
+    "tts_chars_per_call": (int, "TTS characters per call", "Spoken-character budget the agent is steered to close at (TTS is billed per character).", (200, 5000)),
+    "call_target_minutes": (float, "Target call minutes", "Soft target the agent is steered to wrap up at; max_call_minutes per agent is the hard cap.", (1, 30)),
+    "llm_providers": (str, "Live LLM order", "Comma-separated: sarvam, openrouter. First that answers wins.", None),
+    "summary_llm_providers": (str, "Summary LLM order", "Provider order for post-call summaries and other offline work.", None),
+    "sarvam_llm_model": (str, "Sarvam LLM model", "e.g. sarvam-105b", None),
+    "openrouter_models": (str, "OpenRouter models", "Comma-separated, tried in order.", None),
+    "openrouter_fallback_models": (str, "OpenRouter fallback models", "Last-resort tier after every primary model fails.", None),
+    "llm_prompt_char_budget": (int, "Prompt character budget", "Max characters of the live prompt before knowledge/history are trimmed.", (8000, 64000)),
+    "playground_monthly_limit": (int, "Playground rehearsals per member per month", "0 = unlimited.", (0, 10000)),
+    "heal_export_token": (str, "Heal export token", "Token the cloud fix agent presents; rotate here or in Health & heal.", None),
+}
 
 
 @lru_cache

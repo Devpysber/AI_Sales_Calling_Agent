@@ -4,6 +4,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import HealPanel from '@/components/HealPanel'
 import InboundSetup from '@/components/InboundSetup'
+import RuntimeTuning from '@/components/RuntimeTuning'
 import SecretsForm from '@/components/SecretsForm'
 import TeamMembers from '@/components/TeamMembers'
 import { Badge, Button, Card, CardHeader, EmptyState, PageHeader, Skeleton } from '@/components/ui'
@@ -128,6 +129,7 @@ export default function Settings() {
         </div>
       )}
       <SecretsForm />
+      <RuntimeTuning />
       <TeamMembers />
     </>
   )
