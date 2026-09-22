@@ -66,26 +66,6 @@ export default function Agent() {
     onError: (e) => toast.error('Could not save', { description: e.message }),
   })
 
-  // Writes the playbook from this agent's own documents. It fills the form and stops there: the
-  // operator reads it and presses Save, so a draft that misses the mark is one undo away rather than
-  // a live agent talking about the wrong business.
-  const suggest = useMutation({
-    mutationFn: () => api<{ fields: Partial<AgentProfile>; reason: string }>(`${base}/profile/draft`, { method: 'POST' }),
-    onSuccess: (result) => {
-      const fields = result.fields ?? {}
-      const count = Object.keys(fields).length
-      if (!count) {
-        toast.error('Nothing to write from yet', { description: result.reason || 'Add documents to the knowledge base first.' })
-        return
-      }
-      setDraft((d) => (d ? { ...d, ...fields } : d))
-      toast.success(`Drafted ${count} field${count > 1 ? 's' : ''} from the knowledge base`, {
-        description: 'Read it through, change anything that is off, then Save.',
-      })
-    },
-    onError: (e) => toast.error('Could not draft the playbook', { description: e.message }),
-  })
-
   if (isError && !data) return (
     <>
       <PageHeader title="Agent" />
@@ -253,6 +233,27 @@ function ProfileEditor({ section, draft, setDraft, data }: {
   // Bumped on every preview start/stop so a request that resolves after Stop (or after a newer request) is ignored.
   const previewToken = useRef(0)
   useEffect(() => () => { previewToken.current++; audio.current?.pause() }, [])
+
+  // Writes the playbook from this agent's own documents. It fills the form and stops there: the
+  // operator reads it and presses Save, so a draft that misses the mark is one undo away rather than
+  // a live agent talking about the wrong business.
+  const suggest = useMutation({
+    mutationFn: () => api<{ fields: Partial<AgentProfile>; reason: string }>(`${base}/profile/draft`, { method: 'POST' }),
+    onSuccess: (result) => {
+      const fields = result.fields ?? {}
+      const count = Object.keys(fields).length
+      if (!count) {
+        toast.error('Nothing to write from yet', { description: result.reason || 'Add documents to the knowledge base first.' })
+        return
+      }
+      setDraft((d) => (d ? { ...d, ...fields } : d))
+      toast.success(`Drafted ${count} field${count > 1 ? 's' : ''} from the knowledge base`, {
+        description: 'Read it through, change anything that is off, then Save.',
+      })
+    },
+    onError: (e) => toast.error('Could not draft the playbook', { description: e.message }),
+  })
+
 
   // What this agent calls the person on the line: patient, guest, student, customer…
   const caller = (draft.customer_noun || 'customer').trim()
