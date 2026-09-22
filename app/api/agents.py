@@ -73,8 +73,6 @@ def create_agent(body: AgentIn, request: Request, response: Response):
         raise HTTPException(400, "The agent to copy from does not exist.")
     if body.copy_from and user == "team" and body.copy_from not in payload.get("unlocked", []):
         raise HTTPException(403, "LOCKED")
-    if user == "team" and (body.profile or {}).get("agent_password"):
-        raise HTTPException(403, "Administrator access required.")
 
     # A team member may only create the number of workspaces the admin allowed them (one by default).
     if user == "team":
@@ -203,7 +201,12 @@ def get_profile(request: Request, agent_id: int = Depends(workspace)):
 @router.put("/{agent_id}/profile")
 def update_profile(values: dict, request: Request, agent_id: int = Depends(workspace)):
     if "agent_password" in values and getattr(request.state, "user", "") not in ("admin", "api"):
-        raise HTTPException(403, "Administrator access required.")
+        # A team member may set the passcode on a workspace they created; the admin bypasses every passcode,
+        # so this locks nobody out. Someone else's workspace stays admin-only.
+        payload = getattr(request.state, "token_payload", {})
+        owner = (agents.get(agent_id) or {}).get("created_by")
+        if not (payload.get("team_id") and owner == payload["team_id"]):
+            raise HTTPException(403, "Only an administrator, or the team member who created this workspace, can change its passcode.")
     try:
         return agents.update_profile(agent_id, values, actor=actor(request))
     except (ValueError, TypeError) as e:
