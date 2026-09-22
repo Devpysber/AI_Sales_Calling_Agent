@@ -46,3 +46,17 @@ def test_markers_still_work_through_the_rewrite():
     g = ReplyFilter()
     heard = "".join(g.feed(d) for d in ["Sure, connecting you now.", "<TRANSFER>"]) + g.flush()
     assert heard == "Sure, connecting you now." and g.transfer
+
+
+def test_a_product_the_agent_sells_is_not_rewritten():
+    """A real call had the agent say it builds "My notes and lead management tools": the rewrite fired
+    on the product being sold, not on a slip about our own store."""
+    assert plain_speech("We build CRM and lead management tools for property agents") ==         "We build CRM and lead management tools for property agents"
+    assert plain_speech("क्या आप अभी किसी CRM tool का use कर रहे हैं") ==         "क्या आप अभी किसी CRM tool का use कर रहे हैं"
+    assert plain_speech("Do you use any database software today?") == "Do you use any database software today?"
+    # ...while a genuine slip about our own store is still cleaned up.
+    assert plain_speech("I will update the CRM now") == "I will update my notes now"
+
+
+def test_a_product_survives_the_streamed_path_too():
+    assert streamed("We build ", "CRM tools", " for agents.") == "We build CRM tools for agents."

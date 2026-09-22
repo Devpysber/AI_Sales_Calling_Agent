@@ -80,8 +80,12 @@ PROFILE_DEFAULTS = {
     # and its caller is a patient, not a prospect: both appear throughout the prompt.
     "agent_role": "senior sales consultant",
     "customer_noun": "prospect",
-    "objective": "Understand the prospect's business, explain how our services help, and book a discovery meeting with our team.",
-    "call_to_action": "Book a 30-minute discovery call with our solutions team.",
+    # Empty, because these render verbatim into the live prompt. A wedding marketplace that never wrote
+    # its own was told to "explain how our services help" and "book a discovery meeting with our team",
+    # and pitched exactly that to a caller asking about photographers. The Persona page shows this copy
+    # as placeholder text instead, so a new agent still has something to start from.
+    "objective": "",
+    "call_to_action": "",
     "greeting_en": "Hi {name}, this is {agent} calling from {company}. Is this a good time to talk for a minute?",
     "greeting_hi": "नमस्ते {name}, मैं {company} से {agent} बोल रहा हूँ। क्या अभी एक मिनट बात कर सकते हैं?",
     "instructions": (

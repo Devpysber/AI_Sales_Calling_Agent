@@ -294,6 +294,9 @@ class CRMService:
                 or_(Lead.call_status == "Pending", (Lead.status == "New") & Lead.call_status.is_(None)),
                 ~(Lead.phone.like("+91%") & (func.length(Lead.phone) != 13)),
                 or_(Lead.callback_at.is_(None), Lead.callback_at == ""),  # scheduled calls belong to the callback job
+                # The same ten-minute cool-off the call queue applies. Without it auto-dial and the queue
+                # select the same lead, and a call that has only just ended could be redialled at once.
+                or_(Lead.last_contacted_at.is_(None), Lead.last_contacted_at < _now_utc() - timedelta(minutes=10)),
             ).order_by(Lead.id).limit(limit)
             return [l.to_dict() for l in db.scalars(query)]
 
