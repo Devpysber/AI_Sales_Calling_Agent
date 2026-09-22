@@ -15,7 +15,7 @@ RULES = {
     "busy is not refusal": r"Busy .*NOT a refusal",
     "no is not farewell": r"\"No\" is not a farewell",
     "latest intent wins": r"Latest clear intent wins",
-    "character budget": r"Never over 200; average 100-130",
+    "character budget": r"Never over 150; average 70-95",
     "one question per turn": r"ONE question per turn",
     "greeting once": r"Greeting once, ever",
     "no re-introduction after a stray line": r"Never say you did not understand and then re-introduce yourself",

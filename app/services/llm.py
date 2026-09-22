@@ -452,7 +452,8 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
     compact = None
     # One budget for the whole turn, shared with the no-tools retry below.
     deadline = deadline or (time.monotonic() + settings.llm_stream_budget_seconds)
-    for name, model in _stream_attempts(tools):
+    attempts = _stream_attempts(tools)
+    for index, (name, model) in enumerate(attempts):
         provider = "openrouter" if name == "openrouter-fallback" else name
         if provider in dead and name != "openrouter-fallback":
             continue
@@ -487,7 +488,11 @@ def stream(messages: list[dict], max_tokens: int = 160, temperature: float = 0.4
             produced = False
             out_chars, raw_usage = 0, None
             try:
-                for delta in _stream_sse(url, headers, body, min(settings.llm_timeout_seconds, remaining)):
+                # A model that has not started speaking in a second and a half is not going to be the
+                # fast one. Only the last attempt gets the full budget: before this, a silent primary
+                # spent 4.5 seconds of a live call before the next model was even tried.
+                budget = settings.llm_timeout_seconds if index == len(attempts) - 1 else settings.llm_stream_first_token_seconds
+                for delta in _stream_sse(url, headers, body, min(budget, remaining)):
                     if isinstance(delta, dict) and "usage_raw" in delta:
                         raw_usage = delta["usage_raw"]
                         continue

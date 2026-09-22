@@ -29,8 +29,9 @@ COMPACT_AFTER_TURNS = 20        # a call this long gets its older turns folded i
 COMPACT_EVERY_TURNS = 6         # and re-folded this often after that
 KNOWLEDGE_CHARS = 600           # per retrieved passage in the prompt
 MIN_HISTORY_TURNS = 6           # the prompt budget never trims the window below this many turns
-LIVE_MAX_TOKENS = 120           # a live turn: ~2 spoken sentences. TTS is billed per character and was 73% of the cost per minute;
-                                # 160 let three-sentence replies through. A farewell with its <END> mark is far shorter than this.
+LIVE_MAX_TOKENS = 96            # a live turn: ~2 short spoken sentences. TTS is billed per character and is ~68% of the cost
+                                # per minute, so the ceiling is the cost control: 160 let three-sentence replies through, 120
+                                # still allowed a long second sentence. A farewell with its <END> mark is far shorter than this.
 TOOL_MAX_TOKENS = 400           # a tool-call round: send_email arguments (subject + body) must not be cut mid-JSON
 MAX_TOOL_ROUNDS = 3             # tool_call -> result -> tool_call loops before the model is made to speak
 FAREWELL = re.compile(r"(bye|take care|good ?night|see you|have a (?:good|great|nice)|thank(?:s| you)|"
@@ -682,7 +683,7 @@ Primary call to action: {persona['call_to_action']}
 "No" is not a farewell: "no no thank you" closes, "no, wait, one more question" continues, "nahi, bataiye" = go on. "Okay" is not a request to end. Latest clear intent wins ("not interested... actually kitna lagega?" is a pricing question). Several facts/questions in one turn: take all, answer all in one concise reply, never ask any of it again.
 
 # How to speak (voice, not chat)
-- 1-2 short sentences, no lists/markdown/emojis/URLs. Character budget per turn: confirmation 30-70 ("theek hai, kar deta hoon"), one question 50-120, answer 80-150, objection reply 120-200 (only case for two sentences), close 50-120. Never over 200; average 100-130. One thought per turn: if you are explaining past two sentences, stop and ask a short question. Answer, then one question, stop. Their speech is free, yours costs: ask, then listen.
+- 1-2 short sentences, no lists/markdown/emojis/URLs. Character budget per turn: confirmation 20-50 ("theek hai, kar deta hoon"), one question 40-90, answer 60-110, objection reply 90-150 (only case for two sentences), close 40-90. Never over 150; average 70-95. One thought per turn: if you are explaining past two sentences, stop and ask a short question. Answer, then one question, stop. Their speech is free, yours costs: ask, then listen.
 - Never repeat what they just said except one detail to confirm (time, number, email). Confirmations are 2-3 words.
 - ONE question per turn; never chain with "मतलब/और/या फिर"; never mix two attributes in a choice (fuel vs transmission).
 - Greeting once, ever. "Is now a good time?" only in the greeting; after "kaun ho aap" answer it and never ask again. Short reply after greeting ("hello", "haan", "bolo", "ok", "batao") = go ahead: no name/company/time again — reason for the call in one clause (≤10 words, no tagline) + ONE question. After a hold ("haan bolo ab") resume with only your last question. One company name for the whole call.
@@ -909,7 +910,12 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
         for _ in range(40):
             if size() <= budget:
                 break
-            if knowledge:
+            # The retrieved passages are the reason the turn can answer at all, so they are no longer
+            # shed first and wholesale. Extra passages go before past-call lines and history, but the
+            # best-scoring one is kept to the end and shortened rather than dropped: a truncated
+            # passage grounds an answer, and nothing at all sends the agent back to "a specialist
+            # will confirm" — while the prompt still claimed the search had found nothing.
+            if len(knowledge) > 1:
                 knowledge.pop()
             elif calls_n > 0:
                 calls_n -= 1
@@ -917,6 +923,10 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
                 window = window[1:]
             elif brief_n > 0:
                 brief_n -= 1
+            elif knowledge and len(knowledge[0]["text"]) > 250:
+                knowledge[0] = {**knowledge[0], "text": knowledge[0]["text"][:250]}
+            elif knowledge:
+                knowledge.pop()
             else:
                 break
             system = render(brief_lines=brief_n, calls_lines=calls_n)
