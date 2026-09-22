@@ -433,8 +433,8 @@ def automation(agent_id: int = Depends(workspace)):
 def get_inbound_owner(agent_id: int = Depends(workspace)):
     """Which agent answers calls to this agent's line (shared numbers: many dial out, one answers)."""
     number = agents.caller_id(agent_id)
-    default = "".join(c for c in (settings.plivo_phone_number or "") if c.isdigit())
-    digits = lambda a: "".join(c for c in (a.get("phone_number") or "") if c.isdigit())  # noqa: E731
+    default = agents.phone_digits(settings.plivo_phone_number)
+    digits = lambda a: agents.phone_digits(a.get("phone_number"))  # noqa: E731
     rows = agents.list_agents()
     # Agents on this line: on the default number, everyone without a number of their own; on an agent's own
     # number, only the agents that carry that exact number.

@@ -369,7 +369,9 @@ class CRMService:
     def _apply(lead: Lead, data: dict, actor: str = "admin") -> dict:  # noqa: C901
         # The "Do Not Call" stage and the do_not_call flag must agree: every dial gate checks the flag,
         # so a lead moved to the stage from the pipeline or edit form was still being auto-dialled.
-        if data.get("status") == "Do Not Call":
+        if data.get("status") == "Do Not Call" and "do_not_call" not in data:
+            # ...unless the save says otherwise: the edit form posts the stage with every change, so
+            # forcing the flag on here made the Do-not-call switch impossible to turn off.
             data = {**data, "do_not_call": True}
         elif data.get("do_not_call") is True and "status" not in data:
             data = {**data, "status": "Do Not Call"}
@@ -386,7 +388,9 @@ class CRMService:
                 value = normalize_phone(value)
                 if not value:
                     raise ValueError("Invalid phone number.")
-            elif key == "name":
+            elif key == "name" and actor in ("ai", "system"):
+                # Only what the agent or the system extracts is filtered: a person typing "Customer" or
+                # a one-letter name into the CRM means it, and their edit must survive the save.
                 value = clean_name(value)
             elif key == "language":
                 value = normalize_language(value)
@@ -410,7 +414,7 @@ class CRMService:
             raise ValueError("A valid phone number is required (10-digit Indian or +country code).")
         with get_db() as db:
             lead = Lead(agent_id=self.agent_id, status="New", language="en-IN", retry_count=0)
-            self._apply(lead, {k: v for k, v in data.items() if v not in (None, "")})
+            self._apply(lead, {k: v for k, v in data.items() if v not in (None, "")}, actor)
             db.add(lead)
             db.flush()
             result = lead.to_dict()
@@ -488,7 +492,8 @@ class CRMService:
                 mapping[str(col)] = IMPORT_ALIASES[key]
         return mapping
 
-    IMPORT_STATUSES = ("New", "Contacted", "Interested", "Follow Up", "Meeting Booked", "Closed Won", "Closed Lost", "Not Interested")
+    IMPORT_STATUSES = ("New", "Contacted", "Interested", "Follow Up", "Meeting Booked", "Closed Won", "Closed Lost",
+                       "Not Interested", "Do Not Call")
 
     def _row_values(self, row: dict, mapping: dict, defaults: dict) -> tuple[dict | None, str | None]:
         """Cleaned lead fields for one spreadsheet row, or an error explaining why it can't be imported."""
@@ -499,13 +504,20 @@ class CRMService:
         email = values.get("email")
         if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
             email = None  # keep the lead, drop the bad address
-        status = next((s for s in self.IMPORT_STATUSES if s.lower() == (values.get("status") or "").strip().lower()), "New")
+        raw_status = (values.get("status") or "").strip().lower()
+        # A suppression list must not become a call list: the usual words for it map to the stage that
+        # stops every dial, instead of silently falling through to "New".
+        if raw_status in ("do not call", "dnc", "unsubscribed", "opted out", "opt out", "blacklist", "blacklisted"):
+            status = "Do Not Call"
+        else:
+            status = next((s for s in self.IMPORT_STATUSES if s.lower() == raw_status), "New")
         tags = [t.strip() for t in f"{values.get('tags') or ''},{defaults.get('tags') or ''}".split(",") if t.strip()]
         return {
             "name": values.get("name"), "company": values.get("company"), "phone": phone, "email": email,
             "city": values.get("city"), "language": normalize_language(values.get("language") or defaults.get("language")),
             "source": values.get("source") or defaults.get("source") or "import",
             "tags": ",".join(dict.fromkeys(tags)) or None, "notes": values.get("notes"), "status": status,
+            "do_not_call": status == "Do Not Call",
         }, None
 
     def analyze_rows(self, df: pd.DataFrame, mapping: dict | None = None) -> dict:
@@ -568,10 +580,15 @@ class CRMService:
                         current.tags = ",".join(dict.fromkeys(merged))
                     if values.get("notes") and values["notes"] not in (current.notes or ""):
                         current.notes = "\n".join(x for x in (current.notes, values["notes"]) if x)
+                    if values.get("do_not_call"):
+                        current.do_not_call, current.status, current.call_status = True, "Do Not Call", None
+                    elif queue_for_calls and not current.do_not_call and current.call_status != "Pending":
+                        # The import page promises updated leads are called too; only new ones ever were.
+                        current.call_status = "Pending"
                     updated += 1
                     continue
                 lead = Lead(agent_id=self.agent_id, retry_count=0, **values,
-                            call_status="Pending" if queue_for_calls else None)
+                            call_status="Pending" if queue_for_calls and not values.get("do_not_call") else None)
                 db.add(lead)
                 leads_by_phone[values["phone"]] = lead
                 created += 1

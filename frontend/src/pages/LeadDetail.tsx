@@ -143,10 +143,10 @@ export default function LeadDetail() {
     onError: (e) => toast.error(e.message),
   })
   const queue = useMutation({
-    mutationFn: (at?: string) => api(`${base}/leads/bulk/queue`, { method: 'POST', json: { ids: [leadId], at: at || undefined } }),
-    onSuccess: (r: unknown) => {
-      const res = r as { eta?: string }
-      toast.success('Added to the call queue', { description: res?.eta ?? 'It will be called within calling hours.' })
+    mutationFn: (at?: string) => api<{ queued?: number; skipped?: number; eta?: string }>(`${base}/leads/bulk/queue`, { method: 'POST', json: { ids: [leadId], at: at || undefined } }),
+    onSuccess: (res) => {
+      if (res.queued) toast.success('Added to the call queue', { description: res.eta ?? 'It will be called within calling hours.' })
+      else toast.warning('Not queued', { description: 'Do-Not-Call or invalid number.' })
       qc.invalidateQueries({ queryKey: ['lead', leadId] })
       qc.invalidateQueries({ queryKey: ['leads'] })
       qc.invalidateQueries({ queryKey: ['activity', 'lead', leadId] })
@@ -231,7 +231,7 @@ export default function LeadDetail() {
           <Button onClick={() => setEditing(true)}><Pencil />Edit</Button>
           <Button onClick={() => navigate(path(`/emails?lead=${l.id}`))}><Mail />Email</Button>
           <QueueButton disabled={l.do_not_call} loading={queue.isPending} onQueue={(at) => queue.mutate(at)} />
-          <Button variant="primary" disabled={l.do_not_call} loading={startCall.isPending} onClick={() => startCall.mutate(l.id)}><PhoneCall />Call now</Button>
+          <Button variant="primary" disabled={l.do_not_call || l.phone_valid === false} loading={startCall.isPending} onClick={() => startCall.mutate(l.id)}><PhoneCall />Call now</Button>
         </>}>
         {/* Journey */}
         <div className="rounded-2xl border border-border bg-surface p-4 shadow-card">

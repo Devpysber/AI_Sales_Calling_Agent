@@ -55,6 +55,7 @@ export function LeadSheet({ leadId, onClose, onEdit, editOpen = false }: { leadI
     onSuccess: () => {
       toast.success('Lead deleted')
       qc.invalidateQueries({ queryKey: ['leads'] })
+      qc.invalidateQueries({ queryKey: ['lead'] })
       qc.invalidateQueries({ queryKey: ['activity'] })
       onClose()
     },
@@ -84,7 +85,7 @@ export function LeadSheet({ leadId, onClose, onEdit, editOpen = false }: { leadI
           <Button onClick={() => onEdit(l)}><Pencil />Edit</Button>
           <Button variant="primary" loading={startCall.isPending} disabled={l.do_not_call || l.phone_valid === false || remove.isPending} onClick={() => startCall.mutate(l.id)}><PhoneCall />Call now</Button>
         </>}>
-        {lead.isError ? (
+        {lead.isError && !l ? (
           <div className="rounded-xl border border-danger/25 bg-danger-soft p-4 text-sm text-danger">
             <p className="font-medium">Couldn't load this lead</p>
             <p className="mt-1 break-words">{lead.error.message}</p>
@@ -118,6 +119,7 @@ export function LeadSheet({ leadId, onClose, onEdit, editOpen = false }: { leadI
                 {row('Requirements', l.requirements)}
                 {row('Objections', l.objections)}
                 {row('Follow-up', l.follow_up_date)}
+                {row('Callback', l.callback_at ? `${l.callback_at} IST` : null)}
                 {row('Language', LANGUAGES[l.language] ?? l.language)}
                 {row('Source', l.source)}
                 {row('Tags', l.tags?.length ? <span className="flex flex-wrap gap-1">{l.tags.map((t) => <Badge key={t}>{t}</Badge>)}</span> : null)}
@@ -186,10 +188,21 @@ export function LeadFormSheet({ lead, open, onClose }: { lead: Lead | null; open
     if (save.isPending) return
     const data = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>
     const body: Record<string, unknown> = { ...data, tags: (data.tags ?? '').split(',').map((t) => t.trim()).filter(Boolean) }
-    if (editing) body.do_not_call = dnc
     // Creating: drop blanks so backend defaults apply. Editing: a cleared optional field must be sent as null
     // (LeadPatch keeps '' verbatim, and filters/pipeline compare against null), except phone which is required.
     for (const k of Object.keys(body)) if (body[k] === '') { if (editing && k !== 'phone') body[k] = null; else delete body[k] }
+    if (editing) {
+      // The drawer behind this form polls the lead every 5s; send only fields the user actually
+      // changed so a live call/AI update to an untouched field is never overwritten by a stale value.
+      const current = lead as unknown as Record<string, unknown>
+      for (const k of Object.keys(body)) {
+        if (k === 'tags') {
+          if ((body.tags as string[]).join(',') === ((current.tags as string[] | null) ?? []).join(',')) delete body.tags
+        } else if (body[k] === (current[k] ?? null)) delete body[k]
+      }
+      if (dnc !== lead!.do_not_call) body.do_not_call = dnc
+      if (Object.keys(body).length === 0) { onClose(); return }
+    }
     save.mutate(body)
   }
 
