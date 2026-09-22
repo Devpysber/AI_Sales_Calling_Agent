@@ -78,7 +78,8 @@ def _openrouter():
         data = httpx.get("https://openrouter.ai/api/v1/key", timeout=8,
                          headers={"Authorization": f"Bearer {settings.openrouter_api_key}"}).json()["data"]
         models = [m.strip() for m in settings.openrouter_models.split(",") if m.strip()]
-        unknown = _unknown_models(models)
+        fallbacks = [m.strip() for m in settings.openrouter_fallback_models.split(",") if m.strip()]
+        unknown = _unknown_models(models + fallbacks)
         result = {"ok": not unknown, "key": _mask(settings.openrouter_api_key), "free_tier": data.get("is_free_tier"),
                   "usage": data.get("usage"), "limit_remaining": data.get("limit_remaining"),
                   "models": models, "unknown_models": unknown}
@@ -109,8 +110,19 @@ def _sarvam():
     try:
         res = httpx.get("https://api.sarvam.ai/v1/models", timeout=8, headers={"api-subscription-key": settings.sarvam_api_key})
         res.raise_for_status()
-        return {"ok": True, "key": _mask(settings.sarvam_api_key), "tts_model": settings.sarvam_tts_model,
-                "llm_model": settings.sarvam_llm_model}
+        result = {"ok": True, "key": _mask(settings.sarvam_api_key), "tts_model": settings.sarvam_tts_model,
+                  "llm_model": settings.sarvam_llm_model}
+        # The catalogue names the chat models this key can use; a typo in the LLM model id fails every live turn.
+        try:
+            body = res.json()
+            offered = {str(m.get("id") or m.get("name") or "") for m in (body.get("data") if isinstance(body, dict) else body) or []}
+        except Exception:  # noqa: BLE001 - an unexpected catalogue shape never marks a working key as broken
+            offered = set()
+        if offered and settings.sarvam_llm_model not in offered:
+            result.update(ok=False, offered=sorted(offered)[:20],
+                          detail=f"Sarvam does not offer '{settings.sarvam_llm_model}'. Set Sarvam LLM model in Runtime tuning to one of: "
+                                 + ", ".join(sorted(offered)[:8]))
+        return result
     except Exception as e:
         return {"ok": False, "detail": str(e)}
 
