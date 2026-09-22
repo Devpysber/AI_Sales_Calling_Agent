@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -81,6 +81,11 @@ const TEMPLATES = [
     criteria: 'Hot: detailed feedback given. Warm: short answers given. Cold: declined to answer.' },
 ]
 
+// Same rule as app/services/agents.py phone_digits(): digits with country code, 11-15 digits.
+function phoneDigits(value: string) {
+  return value.replace(/[^0-9]/g, '')
+}
+
 export function ColorPicker({ value, onChange, labelledBy }: { value: string; onChange: (c: string) => void; labelledBy?: string }) {
   return (
     <div className="flex flex-wrap gap-2" role="group" aria-labelledby={labelledBy} aria-label={labelledBy ? undefined : 'Colour'}>
@@ -115,8 +120,17 @@ export default function NewAgentSheet({ open, onClose, onCreated }: {
   const [color, setColor] = useState(AGENT_COLORS[0]!)
   const [template, setTemplate] = useState('sales')
   const [copyFrom, setCopyFrom] = useState('')
+  const [contactName, setContactName] = useState('')
+  const [contactPhone, setContactPhone] = useState('')
+  const [contactEmail, setContactEmail] = useState('')
 
   const agentCount = data?.agents.length ?? 0
+  const defaultsQ = useQuery({
+    queryKey: ['agent-new-defaults'],
+    queryFn: () => api<{ team_member: { name: string; phone: string; email: string } }>('/api/agents/new-defaults'),
+    enabled: open,
+  })
+
   useEffect(() => {
     if (!open) return
     setColor(AGENT_COLORS[agentCount % AGENT_COLORS.length]!)
@@ -125,6 +139,20 @@ export default function NewAgentSheet({ open, onClose, onCreated }: {
     // Only reset when the sheet opens; a background refetch changing the count must not wipe the form.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const m = defaultsQ.data?.team_member
+    setContactName(m?.name ?? '')
+    setContactPhone(m?.phone ?? '')
+    setContactEmail(m?.email ?? '')
+    // Only prefill once the defaults load after the sheet opens; typing must not be clobbered by a refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, defaultsQ.data])
+
+  const contactPhoneDigits = phoneDigits(contactPhone)
+  const contactPhoneError = contactPhoneDigits && (contactPhoneDigits.length < 11 || contactPhoneDigits.length > 15)
+    ? 'Enter a full phone number with country code.' : undefined
 
   const create = useMutation({
     mutationFn: (body: Record<string, unknown>) => api<AgentSummary>('/api/agents', { method: 'POST', json: body }),
@@ -151,6 +179,7 @@ export default function NewAgentSheet({ open, onClose, onCreated }: {
     const f = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>
     const name = (f.name ?? '').trim()
     if (!name) { toast.error('Give the agent a name'); return }
+    if (contactPhoneError) { toast.error(contactPhoneError); return }
     const t = TEMPLATES.find((x) => x.id === template) ?? TEMPLATES[0]!
     // Only send what was filled in: blanks keep the copied agent's (or the default) values.
     const profile: Record<string, string> = Object.fromEntries(
@@ -168,9 +197,14 @@ export default function NewAgentSheet({ open, onClose, onCreated }: {
       profile.agent_role = t.role
       profile.customer_noun = t.caller
     }
+    // Empty phone: leave team_members unset so the backend seeds the creator itself.
+    const profileWithTeam: Record<string, unknown> = { ...profile }
+    if (contactPhoneDigits) {
+      profileWithTeam.team_members = [{ name: contactName.trim(), phone: contactPhone.trim(), email: contactEmail.trim() }]
+    }
     create.mutate({
       name, description: f.description?.trim() || undefined, phone_number: f.phone_number?.trim() || undefined, color,
-      copy_from: copyFrom ? Number(copyFrom) : undefined, profile,
+      copy_from: copyFrom ? Number(copyFrom) : undefined, profile: profileWithTeam,
     })
   }
 
@@ -209,6 +243,18 @@ export default function NewAgentSheet({ open, onClose, onCreated }: {
           <Field label="Agent passcode" hint="Require team members to enter this password to open this workspace's CRM. Leave empty for open access.">
             <Input name="agent_password" type="password" autoComplete="new-password" placeholder="No passcode required" />
           </Field>
+        </section>
+
+        <section className="space-y-4 border-t border-border pt-5">
+          <h3 className="text-sm font-semibold">Who takes the call when a caller asks for a person</h3>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Name"><Input value={contactName} onChange={(e) => setContactName(e.target.value)} placeholder="e.g. Neha" maxLength={120} /></Field>
+            <Field label="Phone" error={contactPhoneError}>
+              <Input value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} inputMode="tel" placeholder="+91 98765 43210" />
+            </Field>
+          </div>
+          <Field label="Email"><Input type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} placeholder="name@company.com" maxLength={200} /></Field>
+          <p className="text-xs break-words text-muted">This person is rung first when the AI hands a caller over. Add more colleagues later on the agent's Inbound &amp; transfer page, in ring order.</p>
         </section>
 
         <section className="space-y-4 border-t border-border pt-5">

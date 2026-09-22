@@ -176,7 +176,9 @@ def ingest(agent_id: int, data: dict, site: str = "", extra: dict | None = None)
 
     cfg = agents.get_automation(agent_id)
     calling = False
-    if cfg.get("speed_to_lead_enabled") and not lead["do_not_call"] and lead.get("phone_valid") is not False:
+    # A paused agent still captures the enquiry, but nothing is scheduled or promised to the customer.
+    if (cfg.get("speed_to_lead_enabled") and not agents.is_paused(agent_id)
+            and not lead["do_not_call"] and lead.get("phone_valid") is not False):
         # A random 1-2 hours out (configurable), counted from the next opening of the calling window when
         # the form arrives outside it, so the lead page always shows when the call will happen.
         low = max(0, int(cfg.get("speed_to_lead_min_seconds", 3600)))

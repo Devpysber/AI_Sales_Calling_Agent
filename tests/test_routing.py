@@ -104,6 +104,8 @@ def test_unknown_inbound_caller_becomes_lead_and_queue_dials(client, base, monke
     agent_id = int(base.rsplit("/", 1)[1])
     client.put(f"{base}/profile", json={"inbound_mode": "ai"})
     monkeypatch.setattr("app.services.agents.for_inbound", lambda to, lead_agent_id=None: agent_id)
+    # One desk on the line: a new caller is helped straight away instead of being asked which desk.
+    monkeypatch.setattr("app.services.agents.on_line", lambda number: [agent_id])
     client.post("/api/plivo/answer", data={"From": "919812300077", "To": "918000000000", "CallUUID": "new-caller-1"})
     lead = client.get(f"{base}/leads", params={"search": "9812300077"}).json()["items"][0]
     assert lead["source"] == "inbound call" and not lead["name"]
@@ -405,8 +407,11 @@ def test_designated_agent_is_only_the_fallback_on_a_shared_number(client, base, 
         assert s["agent_id"] == hair["id"] and s["lead"]["call_purpose"] == "inbound"
         s = route("919812400002", "d-2")      # known to both -> designated desk asks which
         assert s["agent_id"] == cars["id"] and s["lead"]["call_purpose"] == "inbound_choose"
-        s = route("919812400003", "d-3")      # unknown -> designated desk, saved as its lead
-        assert s["agent_id"] == cars["id"] and s["lead_id"] and s["lead"]["call_purpose"] == "inbound"
+        # Unknown on a line several desks share: the designated desk greets and asks which one they want,
+        # and nothing is written to a CRM until they say (the lead is created on the desk they choose).
+        s = route("919812400003", "d-3")
+        assert s["agent_id"] == cars["id"] and s["lead_id"] is None and s["lead"]["call_purpose"] == "inbound_choose"
+        assert {c["agent_id"] for c in s["lead"]["choices"]} >= {cars["id"], hair["id"]}
         s = route("919812400004", "d-4")      # Hairscope's colleague -> Hairscope in check-in mode, no lead
         assert s["agent_id"] == hair["id"] and s["lead"]["call_purpose"] == "team" and s["lead_id"] is None
     finally:
@@ -488,3 +493,181 @@ def test_colleague_sets_reminder_hour_calling_days_and_report_email(client, base
     assert "Sat" not in run('{"job": "calling_days", "days": "Saturday band karo"}')
     assert 5 not in agents.get_automation(agent_id)["calling_days"]
     assert "Failed" in run('{"job": "calling_days", "days": "kal"}')
+
+
+def test_a_paused_agent_does_not_silence_a_line_it_shares(client):
+    """Several agents dial from one number: one of them on hold must not stop the others answering."""
+    from app.services import agents
+    paused = client.post("/api/agents", json={"name": "Paused desk"}).json()
+    live = client.post("/api/agents", json={"name": "Live desk"}).json()
+    own = client.post("/api/agents", json={"name": "Own line desk", "phone_number": "+918222222222"}).json()
+    agents.set_inbound_owner("918000000000", paused["id"])
+    try:
+        assert agents.for_inbound("918000000000") == paused["id"]
+        client.patch(f"/api/agents/{paused['id']}", json={"status": "paused"})
+        answering = agents.for_inbound("918000000000")
+        assert answering not in (paused["id"], own["id"])          # not the paused desk, not the desk on another line
+        assert answering in agents.on_line("918000000000")
+        assert agents.for_inbound("918000000000", lead_agent_id=paused["id"]) == answering  # its own caller too
+        assert client.get(f"/api/agents/{live['id']}/inbound-owner").json()["answering_id"] == answering
+        # A number only that agent answers on stays its own, paused or not.
+        assert agents.on_line("918222222222") == [own["id"]]
+    finally:
+        client.patch(f"/api/agents/{paused['id']}", json={"status": "active"})
+        agents.set_inbound_owner("918000000000", None)
+
+
+def test_an_agent_with_no_team_of_its_own_transfers_only_to_the_member_who_made_it(client, monkeypatch):
+    """A colleague belongs to the workspaces they created, not to every agent in the account."""
+    from app.api import plivo as webhooks
+    from app.services import agent, agents, team_service
+
+    monkeypatch.setattr(team_service, "members",
+                        lambda: [{"id": "maker", "name": "Neha", "phone": "+919812500001", "email": "n@b.c"}])
+    mine = agents.create({"name": "Member desk"}, created_by="maker")
+    admins = agents.create({"name": "Admin desk"}, created_by="admin")
+    persona = client.get(f"/api/agents/{mine['id']}/profile").json()["profile"]
+    # The member who made it is its first colleague, so its callers reach a person from the start.
+    assert [m["phone"] for m in persona["team_members"]] == ["+919812500001"]
+    assert webhooks.transfer_numbers(persona, mine["id"]) == ["919812500001"]
+    persona = {**persona, "team_members": [], "transfer_number": ""}   # cleared by hand: the fallback still holds
+    assert webhooks.transfer_line(persona, mine["id"]) == "+919812500001"
+    assert agent.can_transfer({**persona, "transfer_on_request": True}, mine["id"])
+    # The other workspace never dials that colleague, and still refuses to forward with nobody set.
+    assert webhooks.transfer_numbers(persona, admins["id"]) == []
+    assert not agent.can_transfer({**persona, "transfer_on_request": True}, admins["id"])
+    assert client.put(f"/api/agents/{admins['id']}/profile", json={"inbound_mode": "forward"}).status_code == 400
+    # Forwarding is allowed on the member's own desk; the page says whose number it reaches.
+    assert client.put(f"/api/agents/{mine['id']}/profile", json={"inbound_mode": "forward"}).status_code == 200
+    data = client.get(f"/api/agents/{mine['id']}/profile").json()
+    assert data["transfer_contacts"][0] == {"phone": "+919812500001", "name": "Neha", "source": "agent"}
+
+
+def test_a_member_is_a_colleague_only_on_the_workspaces_they_made(client, monkeypatch):
+    """Their own desk gets the check-in; someone else's desk treats them as the customer they are."""
+    from app.services import agents, team_service
+    from app.services.call_service import CallService
+
+    monkeypatch.setattr(team_service, "members",
+                        lambda: [{"id": "maker2", "name": "Vikram", "phone": "+919812500003", "email": "v@b.c"}])
+    monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
+    mine = agents.create({"name": "Vikram desk", "phone_number": "+918333333333"}, created_by="maker2")
+    other = agents.create({"name": "Someone else desk", "phone_number": "+918444444444"}, created_by="admin")
+    assert team_service.agents_for("919812500003") == [mine["id"]]
+    assert team_service.is_team_number("919812500003", mine["id"])
+    assert not team_service.is_team_number("919812500003", other["id"])
+    s = CallService(None).create_inbound("919812500003", "918444444444", "scope-1")
+    assert s["agent_id"] == other["id"] and s["lead"]["call_purpose"] == "inbound" and s["lead_id"]
+    s = CallService(None).create_inbound("919812500003", "918333333333", "scope-2")
+    assert s["agent_id"] == mine["id"] and s["lead"]["call_purpose"] == "team" and s["lead_id"] is None
+
+
+def test_saving_the_routing_page_does_not_wipe_a_legacy_transfer_number(client):
+    """A profile saved with no team-member rows keeps the number unless it is cleared explicitly."""
+    agent_id = client.post("/api/agents", json={"name": "Legacy number desk"}).json()["id"]
+    url = f"/api/agents/{agent_id}/profile"
+    client.put(url, json={"transfer_number": "+91 98125 00002"})
+    saved = client.put(url, json={"team_members": [], "notify_missed_calls": False}).json()
+    assert saved["transfer_number"] == "+919812500002"
+    cleared = client.put(url, json={"team_members": [], "transfer_number": ""}).json()
+    assert cleared["transfer_number"] == ""
+
+
+def test_an_unknown_inbound_caller_is_saved_unnamed_and_still_asked_for_a_name(client, monkeypatch):
+    """A placeholder name used to end the "may I have your name" step for every later call."""
+    from app.services import agents
+    from app.services.call_service import CallService
+    from app.services.crm_service import CRMService
+
+    monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
+    desk = agents.create({"name": "Unknown caller desk", "phone_number": "+918555555555"}, created_by="admin")
+    session = CallService(None).create_inbound("919812500009", "918555555555", "unknown-1")
+    assert session["agent_id"] == desk["id"] and session["lead_id"]
+    assert session["lead"]["call_purpose"] == "inbound"
+    assert "A new caller not yet in our CRM" in session["lead"]["call_goal"]   # the name is still to be asked
+
+    crm = CRMService(desk["id"])
+    for junk in ("Unknown", "unknown caller", "N/A", "+919812500009"):
+        crm.update(session["lead_id"], {"name": junk}, actor="ai")
+        assert crm.get(session["lead_id"])["name"] is None, junk
+    crm.update(session["lead_id"], {"name": "  Ashish Sharma "}, actor="ai")
+    assert crm.get(session["lead_id"])["name"] == "Ashish Sharma"
+    # Named now: the next call greets them by name instead of treating them as a stranger again.
+    again = CallService(None).create_inbound("919812500009", "918555555555", "unknown-2")
+    assert again["lead"]["name"] == "Ashish Sharma" and again["lead_id"] == session["lead_id"]
+
+
+def test_a_call_is_answered_by_the_agent_whose_number_was_dialled(client, monkeypatch):
+    """A customer another desk knows, or a designation left behind, must not pull the call off this line."""
+    from app.services import agents
+    from app.services.call_service import CallService
+
+    monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
+    mine = agents.create({"name": "Own number desk", "phone_number": "+918666666666"}, created_by="admin")
+    theirs = agents.create({"name": "Other desk", "phone_number": "+918777777777"}, created_by="admin")
+    client.post(f"/api/agents/{theirs['id']}/leads", json={"name": "Their customer", "phone": "9812500011"})
+
+    assert agents.for_inbound("918666666666", lead_agent_id=theirs["id"]) == mine["id"]
+    session = CallService(None).create_inbound("919812500011", "918666666666", "line-1")
+    assert session["agent_id"] == mine["id"]
+
+    # A designation made before the agent had a line of its own no longer captures that number.
+    agents.set_inbound_owner("918777777777", mine["id"])
+    try:
+        assert agents.for_inbound("918777777777") == theirs["id"]
+    finally:
+        agents.set_inbound_owner("918777777777", None)
+
+
+def test_an_agent_number_saved_without_its_country_code_still_answers(client):
+    """"9584516352" saved on the agent and "+919584516352" dialled by Plivo are the same line."""
+    from app.services import agents
+
+    desk = agents.create({"name": "National form desk", "phone_number": "080 1234 5679"}, created_by="admin")
+    assert desk["phone_number"] == "+918012345679"
+    assert agents.on_line("+918012345679") == [desk["id"]]
+    assert agents.for_inbound("918012345679") == desk["id"]
+
+
+def test_a_new_caller_on_a_shared_line_is_asked_which_desk_and_becomes_that_desks_lead(client, monkeypatch):
+    """One number, many agents: the caller picks, and only then is a lead written — on the desk they picked."""
+    from app.services import agents, call_session
+    from app.services.call_service import CallService
+    from app.services.crm_service import CRMService
+    from app.services.voice_stream import CallStream
+
+    monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
+    cars = agents.create({"name": "Shared cars"}, created_by="admin")
+    homes = agents.create({"name": "Shared homes"}, created_by="admin")
+    client.put(f"/api/agents/{cars['id']}/profile", json={"company_name": "Shared Cars"})
+    client.put(f"/api/agents/{homes['id']}/profile", json={"company_name": "Shared Homes"})
+    agents.set_inbound_owner("918000000000", cars["id"])
+    try:
+        session = CallService(None).create_inbound("919812500021", "918000000000", "choose-1")
+        assert session["lead"]["call_purpose"] == "inbound_choose" and session["lead_id"] is None
+        assert not CRMService(cars["id"]).find_by_phone("919812500021"), "nothing is saved before they choose"
+
+        stream = CallStream.__new__(CallStream)
+        stream.session = call_session.get(session["id"])
+        stream.session_id = session["id"]
+        stream.agent_id = session["agent_id"]
+        stream.persona = agents.get_profile(session["agent_id"])
+        stream.usage = {}
+        context = stream.switch_agent(homes["id"])
+        assert context["call_purpose"] == "inbound"
+        lead = CRMService(homes["id"]).find_by_phone("919812500021")
+        assert lead and lead["source"] == "inbound call"
+        assert not CRMService(cars["id"]).find_by_phone("919812500021"), "the desk that only greeted keeps no lead"
+    finally:
+        agents.set_inbound_owner("918000000000", None)
+
+
+def test_the_brief_for_a_new_caller_does_not_claim_we_know_them():
+    from app.services import agent as agent_service
+
+    choices = [{"agent_id": 1, "label": "Shared Cars", "company": "Shared Cars", "agent_name": "Ashish", "about": ""},
+               {"agent_id": 2, "label": "Shared Homes", "company": "Shared Homes", "agent_name": "Omkar", "about": ""}]
+    new = agent_service.call_goal({"choices": choices, "new_caller": True}, "inbound_choose")
+    assert "new to us" in new and "known to more than one" not in new
+    known = agent_service.call_goal({"choices": choices}, "inbound_choose")
+    assert "known to more than one of our desks" in known

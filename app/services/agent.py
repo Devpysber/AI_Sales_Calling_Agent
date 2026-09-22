@@ -102,6 +102,11 @@ def call_goal(lead: dict, purpose: str | None) -> str | None:
                 "Do not skip their Name. Once collected, help them and move to the primary call to action.")
     if purpose == "inbound_choose":
         options = "; ".join(f"{c['label']}" + (f" — {c['about']}" if c.get("about") else "") for c in lead.get("choices") or [])
+        if lead.get("new_caller"):
+            return ("This number answers for more than one of our businesses and this caller is new to us: "
+                    f"{options}. Your ONLY job right now is to find out which of these they are calling about, in one short, "
+                    "natural question under 100 characters. Do not pitch, do not answer product questions yet, do not collect "
+                    "details, and do not say we already know them. If they describe something else, ask which option it is closest to.")
         return ("This caller is known to more than one of our desks and we do not yet know which one this call is about: "
                 f"{options}. Your ONLY job right now is to find out which of these they are calling about, in one short, "
                 "natural question under 100 characters. Do not pitch, do not answer product questions yet, do not collect details. If they "
@@ -378,10 +383,10 @@ def past_conversations(agent_id: int, lead: dict, limit: int = 3) -> str:
     return _cached(("calls", agent_id, lead_id), build)
 
 
-def can_transfer(persona: dict) -> bool:
+def can_transfer(persona: dict, agent_id: int | None = None) -> bool:
     """A live hand-off is only possible when the agent may transfer AND a number is actually set."""
-    return bool(persona.get("transfer_on_request")) and bool(
-        "".join(c for c in str(persona.get("transfer_number") or "") if c.isdigit()))
+    from app.services import team_service
+    return bool(persona.get("transfer_on_request")) and bool(team_service.transfer_digits(persona, agent_id))
 
 
 

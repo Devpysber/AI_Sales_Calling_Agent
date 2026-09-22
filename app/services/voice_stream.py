@@ -930,7 +930,7 @@ class CallStream:
 
     def can_transfer(self) -> bool:
         # Same rule the prompt is built from, so a stray <TRANSFER> can never dial a line the operator turned off.
-        return agent.can_transfer(self.persona)
+        return agent.can_transfer(self.persona, getattr(self, "agent_id", None))
 
     def has_human_line(self) -> bool:
         """
@@ -944,8 +944,8 @@ class CallStream:
         back on the number they are speaking from reaches their own busy line, so there is no person
         to reach and the caller is better told the team will ring them.
         """
-        targets = [digits(part) for part in str(self.persona.get("transfer_number") or "").split(",")]
-        targets = [t for t in targets if t]
+        from app.services import team_service
+        targets = team_service.transfer_digits(self.persona, getattr(self, "agent_id", None))
         if not targets:
             return False
         caller = digits((self.session.get("lead") or {}).get("phone") or self.session.get("customer_phone") or "")
@@ -968,10 +968,11 @@ class CallStream:
             self.save_session(transferred=True)
             if self.session.get("call_id"):
                 calls = CallService(self.agent_id)
-                number = self.persona.get("transfer_number")
+                from app.services import team_service
+                number = team_service.transfer_line(self.persona, self.agent_id)
                 await asyncio.to_thread(calls.mark_transferred, self.session["call_id"],
                                         f"Transferred to {calls.transfer_label(number)}", "transfer", number)
-            log.info("Transferred session %s to %s", self.session_id[:8], self.persona.get("transfer_number"))
+            log.info("Transferred session %s to %s", self.session_id[:8], number)
         except Exception as e:  # noqa: BLE001 - keep the AI on the line if Plivo refuses
             self.transferred = False
             log.error("Transfer failed for %s: %s", self.session_id[:8], e)
@@ -1072,6 +1073,12 @@ class CallStream:
             context["call_goal"] = agent.call_goal(context, purpose)
             lead = None
         else:
+            if lead is None and phone and previous.get("call_purpose") == "inbound_choose":
+                # A new caller was asked which desk before anything was saved: they are this desk's lead now,
+                # whether they named it or ran out of asking and stayed where they were greeted.
+                with contextlib.suppress(Exception):
+                    lead = crm.create({"phone": phone, "source": "inbound call", "status": "New",
+                                       **({"language": language} if language else {})}, actor="system")
             context = agent.inbound_context(self.persona, lead, phone or "")
         self.session["agent_id"] = agent_id
         self.session["lead_id"] = lead and lead["id"]

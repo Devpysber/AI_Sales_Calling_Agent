@@ -179,6 +179,9 @@ def _did_nothing(result: str) -> bool:
 
 
 def run_job(agent_id: int, name: str, force: bool = False, actor: str = "scheduler") -> str:
+    # tick() already skips paused agents; this also covers a "Run now" press on the Automation page.
+    if agents.is_paused(agent_id):
+        return "agent paused"
     cfg = agents.get_automation(agent_id)
     try:
         result = JOBS[name](agent_id, cfg, force=force)

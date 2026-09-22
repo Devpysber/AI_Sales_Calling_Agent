@@ -130,7 +130,13 @@ def phone_digits(value: str | None) -> str:
 
 
 def normalize_number(value: str | None) -> str | None:
-    digits = "".join(c for c in (value or "") if c.isdigit())
+    """One canonical form for every number an agent is compared on.
+
+    It must add the country code exactly like phone_digits and the CRM do: a line saved as "9584516352"
+    that Plivo dials as "+919584516352" used to match nothing, so the number's own agent never answered
+    and the call was handed to whichever agent came first.
+    """
+    digits = phone_digits(value)
     return f"+{digits}" if digits else None
 
 
@@ -148,6 +154,15 @@ def _clean_meta(data: dict) -> dict:
     if "color" in meta and not (isinstance(meta["color"], str) and meta["color"].startswith("#") and len(meta["color"]) in (4, 7)):
         raise ValueError("Color must be a hex value like #5b4bf5.")
     return meta
+
+
+def is_paused(agent_id: int | None) -> bool:
+    """A paused agent places no calls, answers no customer on its line and runs no automation."""
+    if agent_id is None:
+        return False
+    with get_db() as db:
+        agent = db.get(Agent, agent_id)
+        return bool(agent) and agent.status != "active"
 
 
 def exists(agent_id: int) -> bool:
@@ -289,9 +304,34 @@ def _wire_own_number(agent_id: int, number: str | None, actor: str) -> None:
                agent_id=agent_id, data={"number": "+" + digits})
 
 
+def _creator_contact(created_by: str | None) -> dict | None:
+    """The person making the workspace, as a team-member row: the first number its calls hand over to."""
+    from app.services import team_service
+    if created_by and created_by != "admin":
+        member = team_service.by_id(created_by) or {}
+        person = {"name": member.get("name") or "", "phone": member.get("phone") or "", "email": member.get("email") or ""}
+    else:
+        from app.core.auth import _profile, login_email
+        owner = _profile()
+        person = {"name": owner.get("display_name") or owner.get("name") or "",
+                  "phone": owner.get("phone") or "", "email": owner.get("email") or login_email() or ""}
+    digits = phone_digits(person["phone"])
+    if not 11 <= len(digits) <= 15:
+        return None   # no number on file: nothing to ring, so the agent starts with an empty team
+    return {**person, "phone": f"+{digits}"}
+
+
 def create(data: dict, actor: str = "admin", created_by: str | None = None) -> dict:
     meta = _clean_meta({"name": data.get("name"), **{k: data[k] for k in META_FIELDS if k in data and k != "name"}})
     profile = _validate_profile_values(coerce(PROFILE_DEFAULTS, {k: v for k, v in (data.get("profile") or {}).items() if v not in (None, "")}))
+    # Whoever makes the agent is its first colleague, at the top of the ring order, unless the form named
+    # someone: a new agent that can reach nobody was the commonest reason a caller asking for a person
+    # heard the promise and then nothing.
+    if not profile.get("team_members"):
+        seed = _creator_contact(created_by)
+        if seed:
+            profile["team_members"] = [seed]
+            profile["transfer_number"] = seed["phone"]
     copy_from = data.get("copy_from")
     automation = {}
     if copy_from:
@@ -471,8 +511,13 @@ def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
                     "email": str(m.get("email") or "")
                 })
         values["team_members"] = validated
-        # Auto-sync transfer_number for backwards compatibility
-        values["transfer_number"] = ",".join(m["phone"] for m in validated)
+        # Auto-sync transfer_number for backwards compatibility. An EMPTY list only clears the number when
+        # the caller says so explicitly: a page that saves an unrelated switch sends team_members: [] for an
+        # agent whose people are still in the legacy comma list, and that used to wipe the team's number.
+        if validated or "transfer_number" in values:
+            values["transfer_number"] = ",".join(m["phone"] for m in validated) if validated else values.get("transfer_number", "")
+        else:
+            values.pop("team_members")
     elif "transfer_number" in values:
         raw_val = str(values["transfer_number"] or "")
         parts = [p.strip() for p in raw_val.split(",")]
@@ -489,8 +534,11 @@ def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
         if key in values and values[key] not in allowed:
             raise ValueError(f"{key} must be one of: {', '.join(allowed)}")
     if values.get("inbound_mode") == "forward" or values.get("after_hours_mode") == "forward":
+        from app.services import team_service
         number = values.get("transfer_number", get_profile(agent_id).get("transfer_number"))
-        if not number:
+        # The member who created this workspace is the fallback the call itself dials, so forwarding is
+        # allowed when they have a number even if the agent lists nobody of its own.
+        if not number and not team_service.transfer_digits({}, agent_id):
             raise ValueError("Add a transfer number before forwarding calls to it.")
     return _update_group(agent_id, "profile", values, "Agent profile", actor)
 
@@ -574,24 +622,55 @@ def inbound_choices(agent_ids: list[int]) -> list[dict]:
     return rows
 
 
+def on_line(number: str | None) -> list[int]:
+    """Agents that answer on this number, in id order.
+
+    An agent with a number of its own answers only on that number. Agents with none share the account's
+    default Plivo line, so a call to it must not be handed to an agent that dials from a different number.
+    """
+    number = normalize_number(number)
+    if not number:
+        return []
+    default = normalize_number(settings.plivo_phone_number)
+    with get_db() as db:
+        rows = db.execute(select(Agent.id, Agent.phone_number).order_by(Agent.id)).all()
+    shared = [aid for aid, own in rows if not normalize_number(own)] if number == default else []
+    return [aid for aid, own in rows if normalize_number(own) == number] + shared
+
+
 def for_inbound(to_number: str, lead_agent_id: int | None = None) -> int | None:
     """
     Route an inbound call: the caller's own agent (the one whose CRM already knows the number) so the
     conversation continues with that agent's persona and knowledge; else the agent designated for the
-    dialled number, else an agent whose number it is, else the first active agent.
+    dialled number, else an agent that answers on that line, else the first active agent.
+
+    A paused agent is skipped at every step: several agents share one line, and one of them being on
+    hold must not silence the number for the others. Only when every candidate is paused does the call
+    go to the paused agent, which tells the caller the line is on hold (see the inbound routing).
     """
     number = normalize_number(to_number)
+    line = on_line(number)
     with get_db() as db:
-        if lead_agent_id and db.get(Agent, lead_agent_id):
-            return lead_agent_id
-        if number:
-            designated = inbound_owner(number)
-            if designated:
-                return designated
-            owner = db.scalar(select(Agent.id).where(Agent.phone_number == number).order_by(Agent.id))
-            if owner:
-                return owner
-        return db.scalar(select(Agent.id).order_by((Agent.status != "active"), Agent.id))
+        def status(agent_id: int | None) -> str | None:
+            agent = db.get(Agent, agent_id) if agent_id else None
+            return agent.status if agent else None
+
+        designated = inbound_owner(number) if number else None
+        # The caller's own agent and the designated one come first — but only when they answer the number
+        # that was dialled. Without that, a customer some other desk knows (or a designation left behind
+        # when an agent got its own number) pulls the call onto a line that agent does not answer.
+        preferred = [a for a in (lead_agent_id, designated) if a and (not line or a in line)]
+        candidates = [*preferred, *line]
+        for agent_id in candidates:
+            if status(agent_id) == "active":
+                return agent_id
+        active_anywhere = db.scalar(select(Agent.id).where(Agent.status == "active").order_by(Agent.id))
+        if active_anywhere and not line:
+            # No agent claims this line at all (a number nobody configured): the account's first active
+            # agent answers rather than the call dying.
+            return active_anywhere
+        paused = next((a for a in candidates if status(a)), None)
+        return paused or db.scalar(select(Agent.id).order_by((Agent.status != "active"), Agent.id))
 
 
 # ---------------- cross-agent overview ----------------

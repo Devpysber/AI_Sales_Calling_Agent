@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from app.api.deps import require_admin, workspace
 from app.core.auth import actor
-from app.services import agents, events
+from app.services import agents, events, team_service
 from app.services.call_service import CallError, CallService, within_calling_hours
 from app.services.voice_stream import LIVE
 
@@ -129,7 +129,7 @@ async def monitor_call(websocket: WebSocket, call_id: int, agent_id: int):
 
     try:
         await websocket.send_json({**stream.state(), "can_transfer": stream.can_transfer(),
-                                   "transfer_number": stream.persona.get("transfer_number") or None})
+                                   "transfer_number": team_service.transfer_line(stream.persona, stream.agent_id) or None})
         done, pending = await asyncio.wait([asyncio.create_task(receive()), asyncio.create_task(send())],
                                            return_when=asyncio.FIRST_COMPLETED)
         for task in pending:

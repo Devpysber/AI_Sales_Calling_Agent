@@ -63,12 +63,15 @@ def test_a_caller_is_never_transferred_to_their_own_line():
 
 def test_a_colleagues_call_never_becomes_a_lead(client, monkeypatch):
     """Trying the agent out must not put the tester in the CRM or the pipeline."""
+    from app.services import agents as agent_service
     from app.services import call_service, team_service
     from app.services.crm_service import CRMService
 
-    agent = client.post("/api/agents", json={"name": "Team check", "phone_number": "+91 80 5555 0002"}).json()
     monkeypatch.setattr(team_service, "members",
                         lambda: [{"id": "m1", "name": "Ashish Sharma", "phone": "+919584516352", "email": "a@b.c"}])
+    # The colleague is the member who made this workspace: being in Sales Team Accounts alone does not
+    # make someone the team behind an agent they had nothing to do with.
+    agent = agent_service.create({"name": "Team check", "phone_number": "+91 80 5555 0002"}, created_by="m1")
 
     before = CRMService(agent["id"]).list_leads()["total"]
     session = call_service.CallService().create_inbound("919584516352", "918055550002", "uuid-team")
