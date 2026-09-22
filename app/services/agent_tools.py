@@ -886,6 +886,101 @@ def run_job_now_tool(agent_id: int, job: str | None) -> str:
     return f"{scheduler.LABELS.get(name, name)}: {result}"
 
 
+# Everything the Persona & playground page can set, keyed by what a colleague would call it on a call.
+PERSONA_SETTINGS = {
+    "agent name": "agent_name", "name": "agent_name", "company": "company_name",
+    "company name": "company_name", "tagline": "company_tagline", "job": "agent_role",
+    "role": "agent_role", "its job": "agent_role", "calls the person": "customer_noun",
+    "customer noun": "customer_noun", "website": "website_url",
+    "voice": "voice_speaker", "speaker": "voice_speaker",
+    "language": "default_language", "default language": "default_language",
+    "max call length": "max_call_minutes", "call length": "max_call_minutes",
+    "recording": "record_calls", "record calls": "record_calls",
+    "voicemail detection": "detect_voicemail", "voicemail": "detect_voicemail",
+    "greeting": "greeting_en", "english greeting": "greeting_en", "hindi greeting": "greeting_hi",
+    "objective": "objective", "goal": "objective", "call to action": "call_to_action",
+    "instructions": "instructions", "style": "instructions", "process": "instructions",
+    "objection handling": "objection_handling", "objections": "objection_handling",
+    "qualification": "qualification_criteria", "criteria": "qualification_criteria",
+    "guardrails": "forbidden_topics", "never say": "forbidden_topics", "forbidden": "forbidden_topics",
+}
+BOOLEAN_SETTINGS = {"record_calls", "detect_voicemail"}
+
+
+def set_persona_tool(agent_id: int, setting: str | None, value=None) -> str:
+    """Change one thing on the Persona and playbook pages, spoken.
+
+    The whole page was unreachable from a call: an admin who heard the agent use the wrong voice, or
+    the wrong word for the customer, had to stop, open a browser and find the field.
+    """
+    from app.services import agents as agent_service
+    from app.services import tts
+    asked = " ".join(str(setting or "").lower().split())
+    field = PERSONA_SETTINGS.get(asked) or next(
+        (f for phrase, f in PERSONA_SETTINGS.items() if phrase in asked or asked in phrase), None)
+    if not field:
+        return ("Failed: say which one - agent name, company, tagline, its job, what it calls the person, "
+                "website, voice, language, max call length, recording, voicemail detection, the greeting, "
+                "the objective, call to action, instructions, objections, qualification or guardrails.")
+    spoken = str(value if value is not None else "").strip()
+
+    if field in BOOLEAN_SETTINGS:
+        new_value = _on_flag(value)
+    elif field == "max_call_minutes":
+        new_value = _int(value, 0)
+        if not 1 <= new_value <= 30:
+            return "Failed: the maximum call length is between 1 and 30 minutes."
+    elif field == "voice_speaker":
+        wanted = spoken.lower()
+        match = next((s for s in tts.SPEAKERS if s == wanted), None) or next(
+            (s for s in tts.SPEAKERS if len(wanted) >= 3 and s.startswith(wanted[:4])), None)
+        if not match:
+            return f"Failed: I do not have a voice called {spoken or 'that'}. Try Ashutosh, Dev, Ritu or Priya."
+        new_value = match
+    elif field == "default_language":
+        wanted = spoken.lower()
+        match = next((code for code, label in tts.LANGUAGES.items()
+                      if wanted == code.lower() or (wanted and wanted in label.lower())), None)
+        if not match:
+            return f"Failed: I do not speak {spoken or 'that'}. Try Hindi, English, Marathi or Gujarati."
+        new_value = match
+    else:
+        if not spoken:
+            return f"Failed: say what to set {asked} to."
+        new_value = spoken
+
+    try:
+        agent_service.update_profile(agent_id, {field: new_value}, actor="team")
+    except ValueError as e:
+        return f"Failed: {e}"
+    shown = {True: "on", False: "off"}.get(new_value, new_value)
+    return f"Done: {asked or field} is now {str(shown)[:120]}."
+
+
+def draft_playbook_tool(agent_id: int) -> str:
+    """Write the playbook from this agent's documents, from a call, and say what changed.
+
+    Saves rather than drafting into a form, because there is no form in front of a caller. Every field
+    written is recorded on the activity feed, so it can be read back and undone on the page.
+    """
+    from app.services import persona_writer
+    try:
+        result = persona_writer.draft(agent_id)
+    except Exception as e:  # noqa: BLE001 - never fail a live turn over a draft
+        return f"Failed: {str(e)[:120]}"
+    fields = result.get("fields") or {}
+    if not fields:
+        return f"Nothing written: {result.get('reason') or 'the documents say nothing usable yet'}."
+    from app.services import agents as agent_service
+    from app.services import events
+    agent_service.update_profile(agent_id, fields, actor="ai")
+    events.record("agent.updated", f"Playbook written from the knowledge base on a call ({len(fields)} fields)",
+                  ", ".join(fields), agent_id=agent_id, actor="ai")
+    objective = " ".join(str(fields.get("objective") or "").split())[:140]
+    return (f"Written from the knowledge base: {', '.join(fields)}."
+            + (f" The objective is now: {objective}" if objective else ""))
+
+
 def lead_details_tool(agent_id: int, lead: str | None = None, lead_id=None) -> str:
     """Everything on one lead, read back on a call: only a five-row name list existed before."""
     lead_id, note = resolve_lead(agent_id, lead_id, lead)
@@ -1248,6 +1343,13 @@ TOOLS += [
         "parameters": {"type": "object", "properties": {"start": {"type": "integer"}, "end": {"type": "integer"}}}}},
     {"type": "function", "function": {"name": "pending_work", "description": "What is waiting: call queue size, callbacks due today, meetings today. Use for 'kya pending hai', 'aaj kya hai'.",
         "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "set_persona", "description": "Change one thing on the Persona and playbook pages: agent name, company, tagline, its job, what it calls the person, website, voice, language, max call length, recording, voicemail detection, the greeting, the objective, call to action, instructions, objections, qualification or guardrails.",
+        "parameters": {"type": "object", "properties": {
+            "setting": {"type": "string", "description": "Which one, in plain words"},
+            "value": {"type": "string", "description": "The new value; for recording and voicemail detection say on or off"}},
+            "required": ["setting", "value"]}}},
+    {"type": "function", "function": {"name": "draft_playbook", "description": "Write this agent's playbook - objective, call to action, instructions, objections, qualification, guardrails - from its own knowledge base, and save it.",
+        "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "set_automation_number", "description": "Change a number on the Automation page: calls per run, simultaneous calls, max retries, wait between attempts, dial interval, follow up after (days), follow-ups per lead, reminder hour, report hour. 'ek baar mein 5 call karo'.",
         "parameters": {"type": "object", "properties": {"setting": {"type": "string"}, "value": {"type": "integer"}}, "required": ["setting", "value"]}}},
     {"type": "function", "function": {"name": "run_job_now", "description": "Run a scheduled job right now: the dialer, retries, callbacks, follow-ups, the call queue, meeting reminders or the daily report. 'abhi dialer chala do'.",
@@ -1403,7 +1505,7 @@ _TARGET_AWARE = {"add_lead", "add_note", "update_lead_details", "set_do_not_call
                  "today_stats", "check_agent_schedule", "recent_calls", "check_records", "set_agent_paused",
                  "lead_details", "analytics", "knowledge_list", "knowledge_search", "persona",
                  "call_routing", "set_call_routing", "add_team_member",
-                 "live_calls", "end_call", "call_summary", "set_automation_number", "run_job_now"}
+                 "live_calls", "end_call", "call_summary", "set_automation_number", "run_job_now", "set_persona", "draft_playbook"}
 _AGENT_ARG = {"type": "string", "description": "Another agent by id, name or company name. Omit to act on this agent."}
 
 
@@ -1532,7 +1634,11 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
         target, note = resolve_agent(args.get("agent"), agent_id)
         if note:
             return note
-    if name == "set_automation_number":
+    if name == "set_persona":
+        return set_persona_tool(target, args.get("setting"), args.get("value"))
+    elif name == "draft_playbook":
+        return draft_playbook_tool(target)
+    elif name == "set_automation_number":
         return set_automation_number_tool(target, args.get("setting"), args.get("value"))
     elif name == "run_job_now":
         return run_job_now_tool(target, args.get("job"))

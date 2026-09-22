@@ -100,3 +100,24 @@ def test_automation_numbers_are_changed_and_refused_with_the_allowed_range(agent
 def test_a_job_can_be_run_on_demand_by_its_everyday_name(agent_id):
     assert "Auto-dial" in run("run_job_now", '{"job": "dialer"}', agent_id)
     assert run("run_job_now", '{"job": "something else"}', agent_id).startswith("Failed")
+
+
+def test_an_admin_can_run_the_persona_page_from_a_call(client, agent_id):
+    """Everything on Persona & playground, spoken: it was unreachable from a call before."""
+    assert "voice is now dev" in run("set_persona", '{"setting": "voice", "value": "Dev"}', agent_id).lower()
+    assert "couple" in run("set_persona", '{"setting": "calls the person", "value": "couple"}', agent_id)
+    assert "recording is now on" in run("set_persona", '{"setting": "recording", "value": "on"}', agent_id).lower()
+    assert "3" in run("set_persona", '{"setting": "max call length", "value": "3"}', agent_id)
+    assert "hi-IN" in run("set_persona", '{"setting": "language", "value": "Hindi"}', agent_id)
+
+    profile = client.get(f"/api/agents/{agent_id}/profile").json()["profile"]
+    assert profile["voice_speaker"] == "dev" and profile["customer_noun"] == "couple"
+    assert profile["record_calls"] is True and profile["max_call_minutes"] == 3
+
+
+def test_a_voice_or_language_we_do_not_have_is_refused_with_what_we_do(agent_id):
+    refused = run("set_persona", '{"setting": "voice", "value": "Scarlett"}', agent_id)
+    assert refused.startswith("Failed") and "Ashutosh" in refused
+    assert run("set_persona", '{"setting": "language", "value": "Klingon"}', agent_id).startswith("Failed")
+    assert run("set_persona", '{"setting": "max call length", "value": "90"}', agent_id).startswith("Failed")
+    assert run("set_persona", '{"setting": "wibble", "value": "x"}', agent_id).startswith("Failed")
