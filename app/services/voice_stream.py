@@ -35,6 +35,8 @@ import time
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
+from collections import deque
+
 import numpy as np
 import websockets
 from fastapi import WebSocket, WebSocketDisconnect
@@ -83,7 +85,11 @@ CALLER_CLOSING = re.compile(
 KEEP_LINE = re.compile(r"(don'?t|do not|never|mat|नहीं|मत)\W+(?:\w+\W+)?(hang up|cut|rakh|रख|काट|kaat)|(rakh|रख|काट|kaat)\w*\W+(mat|नहीं|मत)\b", re.I)
 # Short acknowledgements a listener makes while the agent talks ("haan", "ji", "hmm"): never a barge-in.
 BACKCHANNEL = re.compile(r"^(hmm+|h+m+|haan( ji)?|haa|han|ji( haan)?|ha|ok(ay)?|accha|acha|achha|theek( hai)?|thik( hai)?|"
-                         r"right|yes|yeah|yep|sure|hello|हाँ|हां|जी( हाँ| हां)?|हम्म+|ठीक( है)?|अच्छा|ओके|सही)[.!]?$", re.I)
+                         r"right|yes|yeah|yep|sure|hello|हाँ|हां|जी( हाँ| हां)?|हम्म+|ठीक( है)?|अच्छा|ओके|सही|"
+                         r"ह[ॅेैॉो]?ल्?लो)[.!]?$", re.I)
+# Speech recognition spells "hello" with whichever matra it heard — हेलो, हैलो, हॅलो, हलो — and a caller
+# saying it after the goodbye got a fresh farewell each time, one billed line of speech per repetition.
+HELLO_WORD = re.compile(r"^(h[ae]l+o|hi|ह[ॅेैॉो]?ल्?लो)$", re.I)
 # Voicemail greetings and carrier announcements, in the languages Indian networks play them in.
 VOICEMAIL = re.compile(
     r"leave (a|your) message|after the (tone|beep)|voice ?mail|not reachable|switched off|not answering|"
@@ -139,6 +145,11 @@ POST_FAREWELL_GUIDANCE = ("You already said goodbye. If the caller is only check
                           "\"are you there\", \"haan ji\"), answer in two or three words and say goodbye again with <END>. "
                           "Only if they raise a genuine new question or request, answer it briefly and continue. Never "
                           "restart the introduction or the pitch.")
+REPEAT_GUIDANCE = ("You just said this. Do not say it again in any words: either answer what they actually asked, "
+                   "or close the call in one short line with <END>.")
+# Higher than ECHO_OVERLAP (0.6, tuned for mangled phone echo): two of the agent's own replies share
+# vocabulary honestly, so only a near-restatement counts as a repeat.
+REPEAT_OVERLAP = 0.8
 FAREWELL_SILENCE_SECONDS = 3.0     # after the agent said goodbye, this much quiet ends the call without another word
 STT_RETRY_BASE = 0.3               # reconnect backoff for Sarvam STT: 0.3s doubling to STT_RETRY_CAP, with jitter
 STT_RETRY_CAP = 5.0
@@ -310,7 +321,7 @@ def is_post_farewell_noise(text: str) -> bool:
     words = re.findall(r"[\wऀ-ॿ']+", (text or "").lower())
     if not words or len(words) > 4:
         return False
-    return all(BACKCHANNEL.match(w) or w in ("sir", "madam", "ji", "bhai", "haanji", "yes", "hello", "hi", "हेलो", "हैलो") for w in words)
+    return all(BACKCHANNEL.match(w) or HELLO_WORD.match(w) or w in ("sir", "madam", "ji", "bhai", "haanji", "yes") for w in words)
 
 
 def turn_grace_ms(text: str) -> int:
@@ -364,18 +375,26 @@ class SilenceGate:
 
     PREROLL = 10      # 200 ms
     TAIL = 60         # 1.2 s
+    WINDOW = 250      # 5 s of frames: nobody speaks that long without a gap between words
+    CEILING = 2000.0  # the floor never rises into speech range, or a loud room would gate the caller out
 
     def __init__(self):
         self.noise = 200.0
+        self.window: deque[float] = deque(maxlen=self.WINDOW)
         self.preroll: list[bytes] = []
         self.tail_left = 0
 
     def process(self, pcm: bytes) -> list[bytes]:
         samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
         rms = float(np.sqrt(np.mean(samples * samples))) if samples.size else 0.0
+        # The floor follows the quietest frame of the last five seconds, not the quiet frames alone.
+        # Adapting only on unvoiced frames latched the gate open on a noisy line: with a room above
+        # the initial threshold every frame counted as speech, the floor was never revised, and the
+        # whole call streamed to paid speech-to-text — which is where "the agent listens to background
+        # noise" comes from. A window minimum cannot be dragged up by the caller's own voice.
+        self.window.append(rms)
+        self.noise = min(0.9 * self.noise + 0.1 * min(self.window), self.CEILING)
         voiced = rms > max(350.0, self.noise * 2.5)
-        if not voiced:
-            self.noise = 0.95 * self.noise + 0.05 * rms
         if voiced:
             out = self.preroll + [pcm]
             self.preroll = []
@@ -732,6 +751,8 @@ class CallStream:
         self.hold_until = 0.0                   # the caller asked for a moment: no silence prompts until then
         self.hold_acked = False
         self.language_votes: list[str] = []     # consecutive auto-detected languages, for switch hysteresis
+        self.repeated_replies = 0               # consecutive replies that said what the last one already said
+        self.filler_audio: asyncio.Task | None = None   # "one moment", rendered at stream open, not mid-wait
         self.stt_failures = 0                   # consecutive failed Sarvam STT connects
 
         # Live supervision
@@ -805,6 +826,35 @@ class CallStream:
             if queue.qsize() < 400:
                 queue.put_nowait(event)
         self.bridge.emit_nowait(event)
+
+    def check_repetition(self, reply: str, cleaner) -> None:
+        """Stop a reply loop the model cannot see it is in.
+
+        A caller who keeps saying "hello" after the goodbye got a fresh farewell each time — four
+        near-identical lines in twenty seconds on one real call, every one of them billed per spoken
+        character. The audio has already played by the time we get here, so there is nothing to
+        rewrite: instead, a second repeat in a row closes the call politely, and the first one tells
+        the next turn it has already said this. Legitimate repeats are excluded — a caller asking us
+        to say it again, and the quiet prompt, which is *meant* to repeat the last question.
+        """
+        if self.guidance == QUIET_GUIDANCE or cleaner.end_call:
+            return
+        words = echo_words(reply)
+        if len(words) < 6:   # "haan, theek hai" repeats legitimately; word overlap means nothing at this length
+            self.repeated_replies = 0
+            return
+        previous = [t["text"] for t in (self.session.get("history") or []) if t.get("role") == "assistant"][-2:]
+        repeat = any(mine and len(words & mine) / len(words) >= REPEAT_OVERLAP
+                     for mine in (echo_words(p) for p in previous))
+        if not repeat:
+            self.repeated_replies = 0
+            return
+        self.repeated_replies += 1
+        log.info("Repeated reply %s in a row, session=%s", self.repeated_replies, self.session_id[:8])
+        if self.repeated_replies >= 2:
+            cleaner.end_call = True
+        else:
+            self.guidance = " ".join(g for g in (self.guidance, REPEAT_GUIDANCE) if g)
 
     def turn(self, role: str, text: str, by: str | None = None):
         call_session.add_turn(self.session, role, text)
@@ -1058,7 +1108,10 @@ class CallStream:
         # The call carries on in the language already being spoken; remember it on this desk's lead so the
         # next call from this number opens in it directly.
         language = self.session.get("language")
-        if lead and language and not lead.get("language"):
+        # A language the caller asked for also corrects a wrong one already on the row; an auto-detected
+        # one still only fills an empty field, since it reflects what they said last, not what they prefer.
+        if lead and language and (not lead.get("language")
+                                  or (self.session.get("language_explicit") and lead.get("language") != language)):
             with contextlib.suppress(Exception):
                 lead = crm.update(lead["id"], {"language": language}, actor="ai") or lead
         previous = self.session.get("lead") or {}
@@ -1110,6 +1163,12 @@ class CallStream:
         LIVE[self.session_id] = self
         self.bridge.start()
         self.tts.warm()
+        # Render "one moment" now, while nobody is waiting. Synthesising it at the moment a reply runs
+        # late meant the apology for the delay was itself delayed, behind the same busy TTS provider,
+        # and it blocked the loop that was waiting for the real audio.
+        self.filler_audio = asyncio.create_task(asyncio.to_thread(
+            tts.cached_pcm, STREAM_PROMPTS["filler"][self.lang_key()],
+            self.session.get("language") or "en-IN", self.persona.get("voice_speaker"), self.usage))
         try:
             await self.stt.connect()
         except Exception as e:
@@ -1354,12 +1413,13 @@ class CallStream:
                 if self.commit_task and not self.commit_task.done():
                     self.commit_task.cancel()
                 if self.mode == "ai" and (self.agent_speaking or (self.reply_task and not self.reply_task.done())):
-                    if self.agent_speaking:
-                        # Could be our own audio echoing back. Hold the barge-in until a transcript
-                        # proves a human is talking, otherwise the agent cuts itself off mid-sentence.
-                        self.pending_bargein = True
-                    else:
-                        await self.interrupt()
+                    # Hold the barge-in until a transcript proves a human is talking. While the agent
+                    # is speaking this stops it cutting itself off on its own echo; while a reply is
+                    # still being generated it stops a cough, a door or a car horn from cancelling the
+                    # turn — which cost a whole second LLM and TTS round, because the cancelled words
+                    # were put back and committed again as a fresh turn. Nothing is playing yet, so
+                    # deferring costs a genuine caller nothing: the transcript still interrupts below.
+                    self.pending_bargein = True
                 self.publish_state()
             elif signal == "END_SPEECH":
                 self.caller_speaking = False
@@ -1494,7 +1554,19 @@ class CallStream:
         the caller asked for the language (explicit=True): an auto-detected switch reflects what they said
         last, not what they prefer, and would otherwise be rewritten on every flip.
         """
-        if language == self.session.get("language") or language not in tts.LANGUAGES:
+        if language not in tts.LANGUAGES:
+            return
+        # Saving the preference is not gated on the switch still being pending. A caller who drifts into
+        # English and then *asks* for English hit the auto-detect first, so by the time the request
+        # arrived the session already spoke English and the whole method returned — and the lead kept
+        # its old language for the next call.
+        if explicit and self.session.get("lead_id") and (self.session.get("lead") or {}).get("language") != language:
+            self.session.setdefault("lead", {})["language"] = language
+            self.session["language_explicit"] = True
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(CallService(self.agent_id).crm.update, self.session["lead_id"], {"language": language}, "ai",
+                                        "lead.updated", f"Language switched to {tts.LANGUAGES[language]} on request")
+        if language == self.session.get("language"):
             return
         log.info("Language switch %s -> %s on session %s", self.session.get("language"), language, self.session_id[:8])
         self.session["language"] = language
@@ -1502,11 +1574,13 @@ class CallStream:
         await self.tts.close()
         self.tts = make_tts(language, self.persona.get("voice_speaker"))
         self.tts.warm()
-        self.save_session()
-        if explicit and self.session.get("lead_id"):
+        # Recognition has to move too: rebuilding only the voice left the agent speaking English while
+        # still transcribing as Hindi, so every later turn arrived mangled.
+        if settings.stt_language_mode != "auto" and getattr(self.stt, "language", None) not in (None, language):
+            self.stt.language = language
             with contextlib.suppress(Exception):
-                await asyncio.to_thread(CallService(self.agent_id).crm.update, self.session["lead_id"], {"language": language}, "ai",
-                                        "lead.updated", f"Language switched to {tts.LANGUAGES[language]} on request")
+                await self.stt.close()   # the reconnect loop dials back in on the new language
+        self.save_session()
 
     async def capture_caller_details(self, text: str):
         """Save details the caller states about themselves the moment they say them (any lead, new or known):
@@ -1831,8 +1905,9 @@ class CallStream:
                     filler_sent = True
                     line = STREAM_PROMPTS["filler"][self.lang_key()]
                     try:
-                        pcm = await asyncio.to_thread(tts.cached_pcm, line, self.session.get("language") or "en-IN",
-                                                      self.persona.get("voice_speaker"), self.usage)
+                        pcm = (await self.filler_audio if self.filler_audio
+                               else await asyncio.to_thread(tts.cached_pcm, line, self.session.get("language") or "en-IN",
+                                                            self.persona.get("voice_speaker"), self.usage))
                         self.note_spoken(line)  # its echo must not come back as a caller turn
                         await self.play_pcm(pcm)
                         log.info("Slow reply on session %s: played filler", self.session_id[:8])
@@ -1969,6 +2044,7 @@ class CallStream:
             # A goodbye without a closing from the caller: if they now stay quiet, silence_loop ends the
             # call without asking them to repeat themselves.
             self.last_reply_farewell = farewell and not cleaner.end_call
+            self.check_repetition(reply, cleaner)
             if text is not None:
                 self.turn("customer", text)
             self.turn("assistant", reply, by="ai-guided" if supervised else None)

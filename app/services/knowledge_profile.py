@@ -34,13 +34,14 @@ RETRY_CHARS = 6_000
 
 PROMPT = """You audit a company's knowledge base for a phone sales agent. Read the documents and, for each topic, write what they
 actually say: 1-3 short factual sentences (max 350 characters) using concrete details (names, numbers, prices).
-If the documents do not cover a topic, return an empty string for it. Never invent or generalise. Write in English.
+If the documents do not cover a topic, return an empty string for it — an empty string, not a sentence saying the topic is
+missing, which would show on the page as if the topic were covered. Never invent or generalise. Write in English.
 
 Topics:
 {topics}
 
 Return ONLY JSON: {{"overview": {{"summary": "", "documents": []}}, ...}} with every topic key; "documents" lists the titles
-of the documents the summary comes from."""
+of the documents the summary comes from — at most two per topic, and only titles given above, never section headings."""
 
 _running: set[int] = set()
 _pending: set[int] = set()   # a rebuild asked for while one was running: run once more when it ends
@@ -94,7 +95,7 @@ def rebuild(agent_id: int) -> dict:
     def audit(text: str):
         result = llm.complete(
             [{"role": "system", "content": system}, {"role": "user", "content": text}],
-            json_mode=True, max_tokens=1200, temperature=0.1, providers=settings.summary_llm_providers, timeout=40)
+            json_mode=True, max_tokens=3000, temperature=0.1, providers=settings.summary_llm_providers, timeout=40)
         return result, llm.parse_json(result.text)
 
     try:

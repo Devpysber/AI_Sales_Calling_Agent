@@ -31,6 +31,10 @@ LANGUAGES = {"en-IN": "English", "hi-IN": "Hindi", "bn-IN": "Bengali", "ta-IN": 
              "kn-IN": "Kannada", "ml-IN": "Malayalam", "mr-IN": "Marathi", "gu-IN": "Gujarati", "pa-IN": "Punjabi",
              "od-IN": "Odia"}
 
+# Languages that share one script, so no amount of character counting can tell them apart: only what the
+# call is actually speaking can. Keyed by the code SCRIPTS returns for that block.
+SHARED_SCRIPT = {"hi-IN": {"hi-IN", "mr-IN"}}
+
 SCRIPTS = [(0x0900, 0x097F, "hi-IN"), (0x0980, 0x09FF, "bn-IN"), (0x0A00, 0x0A7F, "pa-IN"), (0x0A80, 0x0AFF, "gu-IN"),
            (0x0B00, 0x0B7F, "od-IN"), (0x0B80, 0x0BFF, "ta-IN"), (0x0C00, 0x0C7F, "te-IN"), (0x0C80, 0x0CFF, "kn-IN"),
            (0x0D00, 0x0D7F, "ml-IN")]

@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     # Sarvam first: a summary is one request (~Rs 0.02) against ~Rs 0.15-0.20 of Gemini tokens; OpenRouter is the fallback.
     summary_llm_providers: str = Field("sarvam,openrouter", alias="SUMMARY_LLM_PROVIDERS")
     llm_timeout_seconds: float = Field(4.5, alias="LLM_TIMEOUT_SECONDS")
+    # How long a live turn waits for the FIRST token from a model that is not the last one to try.
+    # The caller hears silence meanwhile, and a free model that has not answered by now usually never
+    # will, so moving on early costs nothing and saves the rest of the wait.
+    llm_stream_first_token_seconds: float = Field(1.5, alias="LLM_STREAM_FIRST_TOKEN_SECONDS")
     # Characters of system prompt + history a live turn may carry (agent.build_messages trims knowledge first).
     # The rendered system prompt alone is ~27k chars, so a smaller budget silently drops every Knowledge passage.
     llm_prompt_char_budget: int = Field(32000, alias="LLM_PROMPT_CHAR_BUDGET")
@@ -117,7 +121,7 @@ class Settings(BaseSettings):
     playground_monthly_limit: int = Field(5, alias="PLAYGROUND_MONTHLY_LIMIT")
     # Cost guardrails for a live call (see voice_stream silence_loop): the agent is steered to close
     # near the TTS character budget or the target duration; the persona's max_call_minutes stays the hard cap.
-    tts_chars_per_call: int = Field(650, alias="TTS_CHARS_PER_CALL")   # ~2.5 min of speech; the prompt steers at 75% and wraps at 100%
+    tts_chars_per_call: int = Field(500, alias="TTS_CHARS_PER_CALL")   # ~2 min of speech; the prompt steers at 75% and wraps at 100%
     call_target_minutes: float = Field(4, alias="CALL_TARGET_MINUTES")
     turn_end_grace_ms: int = Field(150, alias="TURN_END_GRACE_MS")
     # Speech-to-text is billed per second of audio sent: skip long silences (keeps pre-roll and a silent tail for VAD)

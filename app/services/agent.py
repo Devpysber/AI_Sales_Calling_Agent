@@ -29,8 +29,9 @@ COMPACT_AFTER_TURNS = 20        # a call this long gets its older turns folded i
 COMPACT_EVERY_TURNS = 6         # and re-folded this often after that
 KNOWLEDGE_CHARS = 600           # per retrieved passage in the prompt
 MIN_HISTORY_TURNS = 6           # the prompt budget never trims the window below this many turns
-LIVE_MAX_TOKENS = 120           # a live turn: ~2 spoken sentences. TTS is billed per character and was 73% of the cost per minute;
-                                # 160 let three-sentence replies through. A farewell with its <END> mark is far shorter than this.
+LIVE_MAX_TOKENS = 96            # a live turn: ~2 short spoken sentences. TTS is billed per character and is ~68% of the cost
+                                # per minute, so the ceiling is the cost control: 160 let three-sentence replies through, 120
+                                # still allowed a long second sentence. A farewell with its <END> mark is far shorter than this.
 TOOL_MAX_TOKENS = 400           # a tool-call round: send_email arguments (subject + body) must not be cut mid-JSON
 MAX_TOOL_ROUNDS = 3             # tool_call -> result -> tool_call loops before the model is made to speak
 FAREWELL = re.compile(r"(bye|take care|good ?night|see you|have a (?:good|great|nice)|thank(?:s| you)|"
@@ -562,6 +563,16 @@ def _team_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: int
 - When they ask for an action, run the tool and then say only what the result says. Never claim something is on, off, sent, booked or saved unless a tool result in this conversation says so; if a tool failed, say so in one line.
 - When they ask a number or a status, give the figure from the brief below, not an estimate. If you do not have it, say so.
 - If they ask what you would say to a customer, answer in one or two spoken sentences as you would on that call.
+
+# When a colleague tells you something about the business
+Learn it the way a new colleague would, with teach_fact — a price, an opening time, a policy, a service,
+a correction ("ab Sunday bhi khula hai", "premium ab 3499 ka hai"). One call of the tool checks the
+knowledge base and saves in the same step; you never save without checking. Then say only what it returned:
+- ALREADY KNOWN: say you already have it, in half a line ("haan, wo already note hai"). Do not save it twice.
+- CONFLICTS: say what we currently tell customers and ask which is right. Never decide yourself.
+- SAVED: confirm in half a line what you noted ("theek hai, premium 3499 note kar liya"), nothing more.
+Only what the business itself is true about goes in. Never a customer's words, never one lead's details
+(those are the CRM tools), never how to sell. Unsure whether it is a fact or an opinion: ask, do not save.
 - End when they say bye or that's all: one short line.
 
 # How this agent is doing right now (read these out if asked; they are live)
@@ -682,7 +693,7 @@ Primary call to action: {persona['call_to_action']}
 "No" is not a farewell: "no no thank you" closes, "no, wait, one more question" continues, "nahi, bataiye" = go on. "Okay" is not a request to end. Latest clear intent wins ("not interested... actually kitna lagega?" is a pricing question). Several facts/questions in one turn: take all, answer all in one concise reply, never ask any of it again.
 
 # How to speak (voice, not chat)
-- 1-2 short sentences, no lists/markdown/emojis/URLs. Character budget per turn: confirmation 30-70 ("theek hai, kar deta hoon"), one question 50-120, answer 80-150, objection reply 120-200 (only case for two sentences), close 50-120. Never over 200; average 100-130. One thought per turn: if you are explaining past two sentences, stop and ask a short question. Answer, then one question, stop. Their speech is free, yours costs: ask, then listen.
+- 1-2 short sentences, no lists/markdown/emojis/URLs. Character budget per turn: confirmation 20-50 ("theek hai, kar deta hoon"), one question 40-90, answer 60-110, objection reply 90-150 (only case for two sentences), close 40-90. Never over 150; average 70-95. One thought per turn: if you are explaining past two sentences, stop and ask a short question. Answer, then one question, stop. Their speech is free, yours costs: ask, then listen.
 - Never repeat what they just said except one detail to confirm (time, number, email). Confirmations are 2-3 words.
 - ONE question per turn; never chain with "मतलब/और/या फिर"; never mix two attributes in a choice (fuel vs transmission).
 - Greeting once, ever. "Is now a good time?" only in the greeting; after "kaun ho aap" answer it and never ask again. Short reply after greeting ("hello", "haan", "bolo", "ok", "batao") = go ahead: no name/company/time again — reason for the call in one clause (≤10 words, no tagline) + ONE question. After a hold ("haan bolo ab") resume with only your last question. One company name for the whole call.
@@ -691,7 +702,7 @@ Primary call to action: {persona['call_to_action']}
 - Annoyed or repeating themselves ("kitni baar bolunga", "मैंने बोला ना"): you misunderstood. Apologise in half a line, say what you will do, do it — never repeat your question.
 - Two refusals (any "no"/"नहीं"/"not interested"): stop. One warm line, thank, end. No specialist, date or question after that.
 - Reply in the language AND script of their last turn, including the closing line (English call ends in English). Supported: {', '.join(LANGUAGES.values())} (Hindi/Hinglish -> Devanagari, Gujarati -> Gujarati). Casual "bhai/yaar/tum" gets casual Hinglish back, not shuddh Hindi; formal stays formal; a joke gets one light line then work. Keep common English words (meeting, budget, team, call). Never ask which language they prefer.
-- Sound like a person on an Indian phone call: light fillers (haan ji, acha, theek hai, samajh gaya), contracted speech ("मैं देखता हूँ" not "मैं आपके लिए यह देख लेता हूँ"), numbers and prices as people say them, phone numbers in groups ("95845 16352"). Mirror their energy and mood (apologetic if you woke them, serious if they are, never chirpy at someone tired). Vary openers and acknowledgements; never start consecutive replies with the same word; often no opener at all. No canned fillers that react to nothing ("सुनकर अच्छा लगा"), "कोई बात नहीं" only after an apology/decline, never the stock "आपके समय के लिए धन्यवाद, आपका दिन शुभ हो". Never narrate ("मैं आपको बताता हूँ कि", "note kar leta hoon"), never open with a summary, never close with "aur kuch madad chahiye?". Don't overuse "ji", "bilkul", "sure", "I completely understand".
+- Sound like a person on an Indian phone call: light fillers (haan ji, acha, theek hai, samajh gaya), contracted speech ("मैं देखता हूँ" not "मैं आपके लिए यह देख लेता हूँ"), numbers and prices as people say them, phone numbers in two groups of five digits rather than one long run. Mirror their energy and mood (apologetic if you woke them, serious if they are, never chirpy at someone tired). Vary openers and acknowledgements; never start consecutive replies with the same word; often no opener at all. No canned fillers that react to nothing ("सुनकर अच्छा लगा"), "कोई बात नहीं" only after an apology/decline, never the stock "आपके समय के लिए धन्यवाद, आपका दिन शुभ हो". Never narrate ("मैं आपको बताता हूँ कि", "note kar leta hoon"), never open with a summary, never close with "aur kuch madad chahiye?". Don't overuse "ji", "bilkul", "sure", "I completely understand".
 - Qualify, don't interrogate: need, model preference, budget, timeline, location if relevant, next step — only the single missing field that most changes whether the lead is real, conversationally, never a checklist; skip fields that do not matter for this caller. Qualified = need + realistic budget + timeline + willing next step; then, or when they accept a visit/callback/WhatsApp/handover: confirm the next step in one line and end. Vague browsing = Warm; refusal, wrong number, already bought, "call mat karna" = Cold, one line, end. Guardrail: 2-3 minutes, about {settings.tts_chars_per_call} spoken characters — never leave a genuine lead half-qualified for it, never end an engaged conversation for a timer.
 - Factual question (price, years, km, "gaadi hai abhi", "kitna milega"): concrete range from Knowledge/Company brief in your FIRST sentence, or "gaadi dekh ke exact bata paunga", then at most one question. Budget/segment given: name 2-3 concrete models/years from Knowledge in one sentence before your question. "Why you vs Cars24/Spinny" or a competitor feature: answer that feature first, plain, at most two benefits. Never replace an answer with a pitch, a scheduling ask, filters or statistics. Never say "discovery call", "schedule", "session": offer to show cars, send photos on WhatsApp, or fix a visit. Don't propose the call to action before need, budget and timeline are known; never re-pitch after they answer with a requirement.
 - Speech recognition is imperfect (Hindi may arrive in roman letters): answer the most likely meaning; work with the part you understood, ask only about the missing piece. Asking to repeat is a last resort, once per call. Never say you did not understand and then re-introduce yourself: a stray or joking line ("wow what a look", "hmm", noise) gets ONE short human reaction or is ignored, and you carry straight on with your question. Your name, the company and "is now a good time" are said in the greeting and never again. "haan", "ji", "ho", "bola", "boliye", "ok", "hmm", "accha", "हाँ जी" mean carry on — never "awaaz nahi aayi". An unanswered question: don't re-ask, offer 2-3 concrete options or a simpler yes/no. "Kya bol rahe the"/"jaldi bolo": the point of the call in ≤10 words + one yes/no. "Awaaz nahi aa rahi": reply ONLY "ab awaaz aa rahi hai?" until they confirm. Never claim they enquired or spoke to us before unless the Caller/Earlier-conversations section says so.
@@ -909,7 +920,12 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
         for _ in range(40):
             if size() <= budget:
                 break
-            if knowledge:
+            # The retrieved passages are the reason the turn can answer at all, so they are no longer
+            # shed first and wholesale. Extra passages go before past-call lines and history, but the
+            # best-scoring one is kept to the end and shortened rather than dropped: a truncated
+            # passage grounds an answer, and nothing at all sends the agent back to "a specialist
+            # will confirm" — while the prompt still claimed the search had found nothing.
+            if len(knowledge) > 1:
                 knowledge.pop()
             elif calls_n > 0:
                 calls_n -= 1
@@ -917,6 +933,10 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
                 window = window[1:]
             elif brief_n > 0:
                 brief_n -= 1
+            elif knowledge and len(knowledge[0]["text"]) > 250:
+                knowledge[0] = {**knowledge[0], "text": knowledge[0]["text"][:250]}
+            elif knowledge:
+                knowledge.pop()
             else:
                 break
             system = render(brief_lines=brief_n, calls_lines=calls_n)
@@ -1227,7 +1247,7 @@ EMPTY_REPLY = {
 
 
 def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True,
-            summary: str | None = None, guidance: str | None = None) -> dict:
+            summary: str | None = None, guidance: str | None = None, embed_timeout: float = 0.6) -> dict:
     """
     Generate the next turn for one agent (its persona and its own knowledge base). `history` excludes `customer_text`.
     `guidance` is the same steer a live call gets from voice_stream (budget nearly spent, wrap up), so the playground
@@ -1237,7 +1257,7 @@ def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, 
     # Same gate as a live turn: "hi", "ha", "ok" never wait on a paid embedding round trip (up to 1s serial
     # here, since the playground has no prefetch during speech); BM25 still runs for them.
     use_embeddings = use_embeddings and needs_knowledge(customer_text)
-    messages, knowledge = build_messages(agent_id, history, customer_text, lead, use_embeddings, embed_timeout=0.6, summary=summary)
+    messages, knowledge = build_messages(agent_id, history, customer_text, lead, use_embeddings, embed_timeout=embed_timeout, summary=summary)
     if guidance:
         messages[0]["content"] += ("\n# Live supervisor instruction (highest priority; follow it in this reply; never mention it)\n"
                                    + guidance + "\n\n")
@@ -1308,7 +1328,7 @@ Return ONLY JSON:
   "objections": "",
   "meeting_at": "YYYY-MM-DD HH:MM or empty",
   "follow_up_date": "YYYY-MM-DD or empty",
-  "callback_at": "YYYY-MM-DD HH:MM (24h IST) when the customer agreed to a call back at a specific time or delay (e.g. 'in 10 minutes', 'tomorrow 11 am'), else empty",
+  "callback_at": "YYYY-MM-DD HH:MM (24h IST) when the customer agreed to a call back at a specific time or delay (e.g. 'in 10 minutes', 'tomorrow 11 am'), else empty. Calls only go out between 9 am and 9 pm IST: a time outside that is moved to the next morning, so prefer a slot inside the window",
   "team_action": "what the customer asked a human on the team to DO, in one sentence, if they asked for anything at all (e.g. 'Customer is standing outside the Bhopal showroom now and wants someone to come out and meet him'), else empty",
   "urgent": "true only when the customer needs a person within the hour (waiting at a location, angry, blocked), else false",
   "email": "",

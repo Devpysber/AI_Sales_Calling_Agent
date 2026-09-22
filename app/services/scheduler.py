@@ -8,6 +8,7 @@ instance executes jobs at a time.
 """
 
 import asyncio
+import contextlib
 import os
 import socket
 import time
@@ -16,14 +17,17 @@ from datetime import datetime, timedelta
 from app.core import store
 from app.core.logging import get_logger
 from app.services import agents, events
-from app.services.call_service import IST, CallError, CallService, within_calling_hours
+from app.services.call_service import IST, CallError, CallService, _clamp_callback, within_calling_hours
 from app.services.crm_service import CRMService
 from app.services.notification_service import send_email, email_sent
 from app.services.settings_service import SettingsService
 
 log = get_logger(__name__)
 TICK_SECONDS = 20
-LOCK_TTL = 60
+MAX_JOB_RETRIES = 3   # attempts at a failing daily job before it waits for tomorrow
+LOCK_TTL = 120    # a tick that walks many agents can outlive 60s, and a stale lock let a second
+                  # instance tick in parallel — two schedulers dialling the same leads. Renewed inside
+                  # tick(), so a crashed instance still frees the lock in about two minutes.
 OWNER = f"{socket.gethostname()}:{os.getpid()}"
 
 
@@ -45,6 +49,10 @@ def _dial(agent_id: int, leads: list[dict], trigger: str, limit: int) -> str:
 
 def job_auto_dial(agent_id, cfg, force=False):
     if not force and not within_calling_hours(cfg):
+        # Rows written before the clamp existed, or by an older build, sit due for ever: the job fires
+        # on every 20s tick all night, refuses every time, and the customer is rung hours late with no
+        # explanation. Move them into the next window once, visibly, and stop the churn.
+        _drain_stale_callbacks(agent_id, cfg)
         return "outside calling hours"
     leads = CRMService(agent_id).pending_for_dial(cfg["max_calls_per_run"] * 3)
     return _dial(agent_id, leads, "auto_dial", cfg["max_calls_per_run"]) if leads else "no pending leads"
@@ -57,11 +65,27 @@ def job_retry_calls(agent_id, cfg, force=False):
     return _dial(agent_id, leads, "retry", cfg["max_calls_per_run"]) if leads else "no leads to retry"
 
 
+def _drain_stale_callbacks(agent_id, cfg) -> None:
+    """Rewrite callbacks whose promised time has passed by an hour to the next moment we may dial."""
+    from app.services.call_service import _clamp_callback
+    now = datetime.now(IST)
+    stale = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M")
+    crm = CRMService(agent_id)
+    for lead in crm.due_callbacks(stale, 20):
+        at, moved = _clamp_callback(lead.get("callback_at") or "", cfg)
+        if not moved:
+            continue
+        with contextlib.suppress(Exception):
+            crm.update(lead["id"], {"callback_at": at}, actor="system", event_type="callback.deferred",
+                       title=f"Callback moved to {at}: the agreed time is outside calling hours")
+
+
 def job_callbacks(agent_id, cfg, force=False):
     """Call back leads at the time they asked for ("call me in 10 minutes"). Always on, inside calling hours."""
     if not force and not within_calling_hours(cfg):
         return "outside calling hours"
     crm, calls = CRMService(agent_id), CallService(agent_id)
+    state = SettingsService()
     placed, skipped = 0, []
     for lead in crm.due_callbacks(datetime.now(IST).strftime("%Y-%m-%d %H:%M"), cfg["max_calls_per_run"]):
         try:
@@ -71,12 +95,29 @@ def job_callbacks(agent_id, cfg, force=False):
             placed += 1
             # One attempt per promised time: a no-answer is picked up by the normal retry job.
             crm.update(lead["id"], {"callback_at": None}, actor="system")
+            state.set_state(f"callback_fail.{lead['id']}", 0)
         except CallError as e:
             skipped.append(str(e))
             if "do not call" in str(e).lower() or "not a complete phone number" in str(e).lower():
                 # Nothing to retry: the lead can never be dialled, so stop promising a callback.
                 crm.update(lead["id"], {"callback_at": None}, actor="system")
-            # Anything else (busy slot, paused agent, tunnel down) keeps the time so the next tick retries it.
+                continue
+            # Anything else kept the time unchanged, and the lead was still due, so a permanently
+            # rejected number — a blocked destination, a bad caller ID, an account out of credit —
+            # was re-dialled three times a minute for ever, writing a call row, a session and a
+            # failure event every time. Back off instead, and give up visibly.
+            key = f"callback_fail.{lead['id']}"
+            attempts = int(state.get_state(key) or 0) + 1
+            state.set_state(key, attempts)
+            if attempts >= max(1, int(cfg.get("max_retries", 3))):
+                crm.update(lead["id"], {"callback_at": None}, actor="system", event_type="callback.abandoned",
+                           title=f"Callback dropped after {attempts} failed attempts: {str(e)[:120]}")
+                state.set_state(key, 0)
+                continue
+            later, _ = _clamp_callback((datetime.now(IST) + timedelta(minutes=5 * 2 ** (attempts - 1)))
+                                       .strftime("%Y-%m-%d %H:%M"), cfg)
+            crm.update(lead["id"], {"callback_at": later}, actor="system", event_type="callback.deferred",
+                       title=f"Callback retry {attempts} at {later}: {str(e)[:100]}")
     if not placed and not skipped:
         return "no callbacks due"
     return f"{placed} callback(s) placed" + (f", {len(skipped)} skipped ({skipped[0]})" if skipped else "")
@@ -191,8 +232,12 @@ def run_job(agent_id: int, name: str, force: bool = False, actor: str = "schedul
         from app.services.heal_service import report
         report("scheduler_error", f"Agent {agent_id}: {LABELS[name]}: {type(e).__name__}: {str(e)[:300]}",
                agent_id=agent_id, data={"agent_id": agent_id, "job": name})
+    previous = SettingsService().get_state(_state_key(agent_id, name)) or {}
+    errored = result.startswith("error:")
+    attempts = (int(previous.get("attempts") or 0) + 1) if (errored and not force) else 0
     SettingsService().set_state(_state_key(agent_id, name),
-                                {"at": datetime.now(IST).isoformat(timespec="seconds"), "result": result, "manual": force})
+                                {"at": datetime.now(IST).isoformat(timespec="seconds"), "result": result,
+                                 "manual": force, "attempts": attempts})
     # A job that ran every minute and did nothing buried the real history under hundreds of identical
     # lines. The "Last run" state above still shows it ran; only outcomes worth reading are recorded.
     if force or not _did_nothing(result):
@@ -220,7 +265,11 @@ def _due(agent_id: int, cfg: dict) -> list[str]:
         Pressing Send now at 10am used to satisfy the once-a-day check and silently cancel the 6pm
         report, while the card truthfully showed a recent last run."""
         value = state.get_state(_state_key(agent_id, job))
-        if not value or value.get("manual") or str(value.get("result", "")).startswith("error:"):
+        # An errored run does not count as today's run, so the job retries — but only a few times.
+        # A daily report whose email provider is rejecting mail used to re-run every twenty seconds
+        # until midnight, each attempt logging an error and reporting to the heal service.
+        if not value or value.get("manual") or (str(value.get("result", "")).startswith("error:")
+                                                and int(value.get("attempts") or 0) < MAX_JOB_RETRIES):
             return None
         return datetime.fromisoformat(value["at"])
 
@@ -242,6 +291,11 @@ def _due(agent_id: int, cfg: dict) -> list[str]:
 
 def tick():
     for agent_id in agents.ids(active_only=True):
+        # Renew the lock between agents, and stop if another instance has taken it: a slow tick that
+        # outlived its lock used to carry on dialling while the new leader dialled the same leads.
+        if not store.acquire_lock("scheduler", OWNER, LOCK_TTL):
+            log.warning("Lost the scheduler lock mid-tick; another instance is running it")
+            return
         try:
             cfg = agents.get_automation(agent_id)
             for job in _due(agent_id, cfg):

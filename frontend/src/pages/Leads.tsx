@@ -13,7 +13,7 @@ import { api } from '@/lib/api'
 import { AnimatedNumber } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
 import type { Lead, LeadStats, Page } from '@/lib/types'
-import { CALL_STATUSES, cn, formatDate, LANGUAGES, LEAD_STATUSES, QUALIFICATIONS, timeAgo } from '@/lib/utils'
+import { CALL_STATUSES, cn, formatDate, LANGUAGES, LEAD_STATUSES, leadScore, QUALIFICATIONS, timeAgo } from '@/lib/utils'
 
 function useDebounced<T>(value: T, ms = 300) {
   const [v, setV] = useState(value)
@@ -41,16 +41,8 @@ const VIEWS = [
 ] as const
 // The backend places at most this many calls per bulk request (app/api/leads.py, `body.ids[:20]`).
 const MAX_BULK_CALL = 20
-const JOURNEY = ['New', 'Contacted', 'Interested', 'Follow Up', 'Meeting Booked', 'Closed Won']
-
-/** 0-100: temperature, pipeline stage and recency (same idea as the lead page score). */
-function score(l: Lead) {
-  if (l.do_not_call) return 0
-  const temp = { Hot: 45, Warm: 28, Cold: 8 }[l.qualification ?? ''] ?? 12
-  const stage = Math.max(0, JOURNEY.indexOf(l.status)) * 7
-  const recent = l.last_contacted_at && Date.now() - Date.parse(l.last_contacted_at) < 7 * 86_400_000 ? 12 : 0
-  return Math.min(100, temp + stage + recent)
-}
+/** The one lead score, shared with the lead page so the same lead never shows two numbers. */
+const score = (l: Lead) => leadScore(l)
 
 type Sort = { key: string; order: 'asc' | 'desc' }
 

@@ -29,6 +29,9 @@ export interface Lead {
   /** "YYYY-MM-DD HH:MM" IST: the scheduler calls back at this time */
   callback_at?: string | null
   phone_valid?: boolean
+  /** Calls placed to this lead, and how many connected. Only the list endpoint fills these. */
+  total_calls?: number
+  connected_calls?: number
   last_contacted_at: string | null
   created_at: string
   updated_at: string

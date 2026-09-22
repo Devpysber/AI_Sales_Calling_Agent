@@ -499,7 +499,9 @@ def _notify_missed(session: dict, persona: dict, status: str):
     for m in persona.get("team_members") or []:
         address = (m.get("email") or "").strip().lower() if isinstance(m, dict) else ""
         if address and address not in delivered:
-            if email_sent(send_email(address, subject, "\n".join(lines), lead_id=session.get("lead_id"), agent_id=session.get("agent_id"), actor="ai")):
+            # A team member, not the customer: filed as "system" so the Email Centre does not show it
+            # as AI mail to the lead whose name is on the row.
+            if email_sent(send_email(address, subject, "\n".join(lines), lead_id=session.get("lead_id"), agent_id=session.get("agent_id"), actor="system")):
                 delivered.add(address)
 
 
@@ -639,8 +641,11 @@ async def plivo_team_alert(request: Request, sid: str = Query(None)):
 def _dial_customer_back(session: dict):
     from app.services.plivo_service import PlivoService
 
+    lead = session.get("lead") or {}
+    # The courtesy call back reaches the same customer as the call it apologises for: their language,
+    # not English, which had this one line arriving in a language they may not speak.
     backcall_session = call_session.create(agent_id=session["agent_id"], lead_id=session["lead_id"],
-                                           lead=session.get("lead") or {}, language="en-IN")
+                                           lead=lead, language=lead.get("language") or "en-IN")
     # No call row exists for this short courtesy call: passing the original call id would let its
     # hangup webhook overwrite the real call's status and duration.
     PlivoService().dial(session["customer_phone"], backcall_session["id"], None, max_minutes=2,

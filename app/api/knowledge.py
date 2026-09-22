@@ -17,7 +17,7 @@ class TextDoc(BaseModel):
 
 class Query(BaseModel):
     query: str = Field(min_length=1, max_length=500)
-    top_k: int = Field(4, ge=1, le=10)
+    top_k: int = Field(3, ge=1, le=10)   # a live turn retrieves 3: the page must show what a call would get
 
 
 @router.get("")
@@ -55,7 +55,17 @@ def add_text(body: TextDoc, request: Request, agent_id: int = Depends(workspace)
 
 @router.post("/search")
 def search(body: Query, agent_id: int = Depends(workspace)):
-    return {"results": rag.search(agent_id, body.query, body.top_k), "semantic": rag.stats(agent_id)["semantic"]}
+    """What this question would retrieve on a call.
+
+    The page used to search with a 2.5s embedding budget and no relevance gate, so it demonstrated a
+    retrieval no live turn ever performs — passages here, "a specialist will confirm" on the phone.
+    It now runs the same gate and the same passage count as a turn, with the budget a warm prefetch
+    gives a real call.
+    """
+    from app.services.agent import needs_knowledge
+    use_embeddings = needs_knowledge(body.query)
+    results = rag.search(agent_id, body.query, body.top_k, use_embeddings=use_embeddings, embed_timeout=1.5)
+    return {"results": results, "semantic": rag.stats(agent_id)["semantic"]}
 
 
 @router.get("/{doc_id}")

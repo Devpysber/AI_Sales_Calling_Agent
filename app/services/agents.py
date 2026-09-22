@@ -613,6 +613,26 @@ def get_automation(agent_id: int) -> dict:
     return _get_group(agent_id, "automation")
 
 
+# Ranges for the numeric automation fields, mirroring the Automation page's own limits so a value
+# saved by anything other than that page cannot break the scheduler.
+AUTOMATION_LIMITS = {
+    "auto_dial_interval_minutes": ("Check every (minutes)", 1, 1440),
+    "max_calls_per_run": ("Calls per run", 1, 50),
+    "retry_interval_minutes": ("Check every (minutes)", 1, 1440),
+    "retry_min_gap_minutes": ("Wait between attempts", 5, 1440),
+    "max_retries": ("Max attempts", 1, 10),
+    "calling_hours_start": ("Calling window start", 0, 23),
+    "calling_hours_end": ("Calling window end", 1, 24),
+    "max_concurrent_calls": ("Max simultaneous calls", 1, 100),
+    "meeting_reminder_hour": ("Reminder hour", 0, 23),
+    "daily_report_hour": ("Report hour", 0, 23),
+    "speed_to_lead_min_seconds": ('Speed to lead "at least"', 0, 14400),
+    "speed_to_lead_max_seconds": ('Speed to lead "at most"', 0, 14400),
+    "nurture_after_days": ("Call again after (days)", 1, 60),
+    "nurture_max_attempts": ("Max follow-ups per lead", 1, 10),
+}
+
+
 def update_automation(agent_id: int, values: dict, actor: str = "admin") -> dict:
     # An inverted window (start >= end) or no calling days silently disables every automation; the
     # Inbound page saves each select on change, so this is the only place that can catch it.
@@ -625,6 +645,18 @@ def update_automation(agent_id: int, values: dict, actor: str = "admin") -> dict
     days = merged.get("calling_days")
     if isinstance(days, list) and (not days or any(int(d) not in range(7) for d in days)):
         raise ValueError("Pick at least one calling day.")
+    # Every numeric limit, bounded here and not only in the browser. A zero saved through the API —
+    # max_concurrent_calls, max_calls_per_run, max_retries — reads as "none allowed" to the scheduler
+    # and silently stops all dialling, with nothing on any page to say why.
+    for field, (label, low, high) in AUTOMATION_LIMITS.items():
+        if field not in values:
+            continue
+        try:
+            number = int(values[field])
+        except (TypeError, ValueError):
+            raise ValueError(f"{label} must be a whole number.") from None
+        if not low <= number <= high:
+            raise ValueError(f"{label} must be between {low} and {high}.")
     return _update_group(agent_id, "automation", values, "Automation settings", actor)
 
 
@@ -808,9 +840,13 @@ def overview(days: int = 14, unlocked_ids: list[int] | None = None) -> dict:
         if bucket is None:
             continue
         bucket["calls"] += 1
-        bucket["connected"] += status == "Completed"
+        # A call Plivo marks Failed but which carried audio was a real conversation, and Analytics and
+        # the lead page have always counted it. Counting it as unconnected here made the Home connect
+        # rate and talk time disagree with every other page showing the same calls.
+        connected = status == "Completed" or (status == "Failed" and (duration or 0) > 0)
+        bucket["connected"] += connected
         bucket["meetings"] += outcome == "meeting_booked"
-        if status == "Completed":
+        if connected:
             talk[agent_id] += duration or 0
 
     pipeline = {a["id"]: {s: 0 for s in PIPELINE_STAGES} for a in agents_list}

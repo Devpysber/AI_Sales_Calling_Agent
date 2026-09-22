@@ -101,13 +101,15 @@ def test_reply_path_joins_an_inflight_prefetch_instead_of_a_second_embed_call(mo
     assert started.wait(2)  # prefetch is now mid-flight
 
     release.set()
-    assert rag._embed_query("what is the warranty", 2.0) == [0.4, 0.5, 0.6]
+    # Same agent as the prefetch: the in-flight map is keyed per agent/provider, since one agent's
+    # vector is meaningless against another's passages.
+    assert rag._embed_query("what is the warranty", 2.0, agent_id=1) == [0.4, 0.5, 0.6]
     assert embeds == ["what is the warranty"]  # the reply path never started a second embed
 
 
 def test_search_only_upgrades_to_embeddings_when_the_caller_allowed_a_real_budget(monkeypatch):
     calls = []
-    monkeypatch.setattr(rag, "_embed_query", lambda q, t, provider=None: calls.append(t) or [1.0, 0.0])
+    monkeypatch.setattr(rag, "_embed_query", lambda q, t, provider=None, agent_id=None: calls.append(t) or [1.0, 0.0])
     monkeypatch.setattr(rag, "_load_index", lambda agent_id: type("Idx", (), {
         "ids": ["c1"], "texts": ["t"], "titles": ["d"], "tfs": [{}],
         "lengths": __import__("numpy").array([1.0]), "df": {},

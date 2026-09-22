@@ -7,6 +7,7 @@ import contextlib
 import json
 import re
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -104,6 +105,22 @@ def _next_callback_slot(cfg: dict, now: datetime | None = None) -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
+def _clamp_callback(at: str, cfg: dict) -> tuple[str, bool]:
+    """A callback time the callbacks job can actually dial, and whether it had to be moved.
+
+    The job refuses to dial outside calling hours, and a row whose time has passed stays due for
+    ever, so a customer who agreed to "in two minutes" at 23:10 was rung at nine the next morning
+    with no explanation. Times are clamped where they are written instead, so what the lead page
+    shows is the time the call will really happen.
+    """
+    try:
+        dt = datetime.strptime(str(at)[:16], "%Y-%m-%d %H:%M").replace(tzinfo=IST)
+    except ValueError:
+        return at, False
+    slot = next_calling_window(cfg, dt)
+    return slot.strftime("%Y-%m-%d %H:%M"), slot != dt
+
+
 def _merge_text(existing: str | None, new: str | None, cap: int = 2000) -> str | None:
     """Append sentences the stored text does not already contain; a short call must not wipe earlier discovery notes."""
     existing = (existing or "").strip()
@@ -119,6 +136,10 @@ def _merge_text(existing: str | None, new: str | None, cap: int = 2000) -> str |
         return None
     return (existing + " " + " ".join(added))[:cap]
 
+
+# Everything below this line in a lead's notes belongs to the post-call analyser and is rewritten after
+# every call; everything above it was typed by a person and is never touched.
+NOTES_SENTINEL = "--- from the last call ---"
 
 # Customer lines that mean "never call me again": marked from the transcript so a failed or mislabelled summary
 # cannot leave them dialable.
@@ -149,11 +170,36 @@ def merge_call_context(session_lead: dict, fresh: dict | None) -> dict:
     return lead
 
 
-def spoken_language(history: list[dict]) -> str | None:
-    """Language the caller mostly spoke on this call, from the script of their transcribed lines; None when unclear."""
-    scripts = {"hi-IN": 0, "gu-IN": 0, "ta-IN": 0, "te-IN": 0, "bn-IN": 0, "kn-IN": 0, "mr-IN": 0, "en-IN": 0}
-    ranges = {"hi-IN": (0x0900, 0x097F), "bn-IN": (0x0980, 0x09FF), "gu-IN": (0x0A80, 0x0AFF), "ta-IN": (0x0B80, 0x0BFF),
-              "te-IN": (0x0C00, 0x0C7F), "kn-IN": (0x0C80, 0x0CFF)}
+# Words a Marathi speaker uses constantly and a Hindi speaker does not. Both write Devanagari, so the
+# script cannot separate them and a Marathi conversation was saved to the lead as Hindi — the next call
+# then opened in the wrong language and the caller heard an accent that was not theirs.
+MARATHI_MARKERS = ("आहे", "आहेत", "आहात", "नाही", "तुम्ही", "तुमच", "मला", "माझ", "काय", "कसं", "होतं",
+                   "करतो", "करते", "पाहिजे", "छान", "धन्यवाद", "ठीक आहे", "बोलत")
+HINDI_MARKERS = ("है", "हैं", "नहीं", "आप", "आपक", "मुझे", "मेर", "क्या", "कैसे", "था", "करता", "करती", "चाहिए")
+
+
+def _sounds_marathi(history: list[dict]) -> bool:
+    """True when the caller's Devanagari lines carry more Marathi marker words than Hindi ones."""
+    said = " ".join(str(t.get("text") or "") for t in history if t.get("role") in ("customer", "user"))
+    marathi = sum(said.count(w) for w in MARATHI_MARKERS)
+    hindi = sum(said.count(w) for w in HINDI_MARKERS)
+    return marathi >= 2 and marathi > hindi
+
+
+def spoken_language(history: list[dict], spoken: str | None = None) -> str | None:
+    """Language the caller mostly spoke on this call, from the script of their transcribed lines; None when unclear.
+
+    `spoken` is the language the call itself ran in. Where a script is shared by several languages —
+    Devanagari by Hindi and Marathi — it decides which of them this was, so a Marathi conversation is
+    no longer saved to the lead as Hindi.
+    """
+    # Devanagari is written by Hindi and Marathi alike, so the script alone cannot tell them apart:
+    # a Marathi call used to be saved as Hindi, and the next call opened in the wrong language. The
+    # caller's own language on the call carries that distinction, so it is passed in and wins for
+    # its own script family. Codes come from the shared script table, not a second copy that drifts.
+    from app.services import tts as tts_service
+    ranges = {code: (lo, hi) for lo, hi, code in tts_service.SCRIPTS}
+    scripts = dict.fromkeys([*ranges, "en-IN"], 0)
     for turn in history:
         if turn.get("role") not in ("customer", "user"):
             continue
@@ -169,7 +215,13 @@ def spoken_language(history: list[dict]) -> str | None:
     if total < 20:
         return None
     code, count = max(scripts.items(), key=lambda kv: kv[1])
-    return code if count / total >= 0.6 else None
+    if count / total < 0.6:
+        return None
+    if spoken and spoken != code and spoken in tts_service.SHARED_SCRIPT.get(code, ()):
+        return spoken   # the call knows which of its script's languages it was actually speaking
+    if code == "hi-IN" and _sounds_marathi(history):
+        return "mr-IN"
+    return code
 
 
 def _valid_meeting(value) -> str | None:
@@ -253,10 +305,25 @@ class CallService:
     # ---------------- placing calls ----------------
 
     def start(self, lead_id: int, trigger: str = "manual", actor: str = "admin", purpose: str | None = None) -> dict:
-        from app.services.plivo_service import PlivoService
-
+        """Place a call to one lead. One at a time per lead, across every replica and every trigger."""
+        from app.core import store
         if self.agent_id is None:
             raise CallError("Calls must be placed by an agent.")
+        # has_active() below reads call rows, and the row for a call being placed right now does not
+        # exist until several network calls later. Two triggers landing together — "Run now" beside a
+        # scheduler tick, or a scheduler on two replicas — both passed that check and rang the customer
+        # twice. The lock closes that window; it is per lead, so other leads dial in parallel as before.
+        token = uuid.uuid4().hex
+        if not store.acquire_lock(f"dial:{lead_id}", token, 90):
+            raise CallError("A call to this lead is already being placed.")
+        try:
+            return self._start(lead_id, trigger, actor, purpose)
+        finally:
+            store.delete(f"lock:dial:{lead_id}")   # store.delete adds the key prefix itself
+
+    def _start(self, lead_id: int, trigger: str, actor: str, purpose: str | None) -> dict:
+        from app.services.plivo_service import PlivoService
+
         lead = self.crm.get(lead_id)
         if not lead:
             raise CallError("Lead not found.")
@@ -651,7 +718,8 @@ class CallService:
                 address = (m.get("email") or "").strip() if isinstance(m, dict) else ""
                 if address:
                     with contextlib.suppress(Exception):
-                        send_email(address, f"[{other_persona['company_name']}] {subject}", "\n".join(lines), agent_id=other, actor="ai")
+                        # Another desk's team, not a customer: "system" keeps it out of the AI-mail filter.
+                        send_email(address, f"[{other_persona['company_name']}] {subject}", "\n".join(lines), agent_id=other, actor="system")
 
     def _desk_named_in(self, text: str) -> int | None:
         """Another of our agents whose company or agent name appears in the text; None when none or ours."""
@@ -803,16 +871,19 @@ class CallService:
                     updates[key] = merged_text
             # Budget, timeline, product and next action are restated on most calls: keep one current line
             # each instead of appending a near-duplicate after every conversation.
-            notes_lines = [ln for ln in (current.get("notes") or "").splitlines() if ln.strip()]
+            # "Notes for the agent" is a box a person types in, and the analyser owns only what it wrote
+            # there. Rewriting the whole field deleted human lines: any line merely CONTAINING "Budget:"
+            # was dropped, so "Ask about Budget: he is cagey" vanished after the next call, and blank
+            # lines between paragraphs were stripped on every pass.
+            head, _, tail = (current.get("notes") or "").partition(NOTES_SENTINEL)
+            ai_lines = [ln for ln in tail.splitlines() if ln.strip()]
             for key, label in (("budget", "Budget"), ("timeline", "Timeline"), ("product", "Product"), ("next_action", "Next action")):
                 value = str(s.get(key) or "").strip()
                 if not value:
                     continue
-                line = f"{label}: {value}"
-                notes_lines = [ln for ln in notes_lines if not ln.strip().startswith(f"{label}:")
-                               and f"{label}:" not in ln]
-                notes_lines.append(line)
-            merged = "\n".join(notes_lines)
+                ai_lines = [ln for ln in ai_lines if not ln.strip().startswith(f"{label}:")]
+                ai_lines.append(f"{label}: {value}")
+            merged = (head.rstrip() + (f"\n\n{NOTES_SENTINEL}\n" + "\n".join(ai_lines) if ai_lines else "")).lstrip("\n")
             if merged != (current.get("notes") or ""):
                 updates["notes"] = merged
             callback_at = _valid_callback(s.get("callback_at"))
@@ -847,6 +918,15 @@ class CallService:
                 if soon == 15 and str(s.get("team_action") or "").strip():
                     self._urgent_team_alert(lead_id, call_id, str(s.get("team_action")))
             if callback_at:
+                try:
+                    window_cfg = agents.get_automation(self.agent_id)
+                except Exception:  # noqa: BLE001 - no automation row: the defaults inside the clamp apply
+                    window_cfg = {}
+                callback_at, moved = _clamp_callback(callback_at, window_cfg)
+                if moved:
+                    events.record("callback.moved", f"Callback moved into calling hours: {callback_at}",
+                                  "The time agreed on the call is outside the calling window.",
+                                  agent_id=self.agent_id, lead_id=lead_id, call_id=call_id, actor="system")
                 updates["callback_at"] = callback_at
                 updates.setdefault("follow_up_date", callback_at[:10])
                 if synthetic_callback:
@@ -862,6 +942,8 @@ class CallService:
                 # A send_email to the lead is already queued below for this same call: don't also fire
                 # the CRM's own "follow-up call scheduled" mail on top of it.
                 updates["_no_followup_email"] = True
+            # No language hint here: the summary runs from the stored call row, long after the session
+            # that knew which language the call ran in. The transcript itself decides.
             spoken_lang = spoken_language(history)
             if spoken_lang and spoken_lang != (self.crm.get(lead_id) or {}).get("language"):
                 # The script the caller actually used beats a seeded or guessed value: the next call's greeting
@@ -983,9 +1065,13 @@ class CallService:
             # The CRM row carries no call_goal/call_purpose/collect: merge, so gather-mode turns keep the call's brief.
             fresh = self.crm.get(session["lead_id"]) if session.get("lead_id") else None
             lead = merge_call_context(session.get("lead") or {}, fresh) or {}
-            # Live calls skip the embedding round-trip (~1s); keyword search answers instantly
-            result = agent.respond(agent_id, session["history"], text, lead, use_embeddings=False,
-                                   summary=session.get("summary"))
+            # Gather mode has no prefetch window — Plivo hands over only the final transcript — so the
+            # embedding is paid for on the turn. It is still worth it: with embeddings off, this path
+            # answered every question of every non-streaming call on keyword search alone, and a Hindi
+            # caller asking about an English knowledge base matched nothing at all. respond() still
+            # skips the round trip for "haan"/"ok" turns that need no knowledge.
+            result = agent.respond(agent_id, session["history"], text, lead, use_embeddings=True,
+                                   embed_timeout=1.2, summary=session.get("summary"))
             language = result["language"] or tts.detect_language(result["reply"], session["language"])
             audio_id = tts.store_audio(tts.synthesize(result["reply"], language, persona["voice_speaker"]))
 
@@ -1152,8 +1238,11 @@ class CallService:
         """A scheduled call the agent cannot take right now: move it, tell the customer, tell the admin."""
         from app.services.notification_service import notify_admin, send_email, email_sent
         from app.core import store
-        later = datetime.now(IST) + timedelta(hours=2)
-        at = later.strftime("%Y-%m-%d %H:%M")
+        # Two hours from now can land after closing, and the callbacks job would not dial it then —
+        # while the email below promises that exact time to the customer.
+        at, _ = _clamp_callback((datetime.now(IST) + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M"),
+                                agents.get_automation(self.agent_id))
+        later = datetime.strptime(at, "%Y-%m-%d %H:%M").replace(tzinfo=IST)
         self.crm.update(lead["id"], {"callback_at": at, "call_status": "Pending"}, actor="system",
                         event_type="callback.postponed", title=f"Call moved to {later:%d %b %H:%M}: AI providers unavailable")
         company = (agents.get_profile(self.agent_id) or {}).get("company_name") or (agents.get(self.agent_id) or {}).get("name") or "our team"

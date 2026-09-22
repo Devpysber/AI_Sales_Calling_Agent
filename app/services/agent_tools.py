@@ -327,9 +327,21 @@ def schedule_callback_tool(lead_id, date_time: str, agent_id: int, lead: str | N
                 "Take them off Do Not Call first if they asked us to ring back.")
     if current.get("phone_valid") is False:
         return f"Lead {lead_id} has an incomplete phone number, so no callback was scheduled. Fix the number first."
+    # The callbacks job only dials inside calling hours, so a time outside them was booked, never
+    # dialled at that time, and reported back as if it were. Book what will actually happen and say so.
+    from app.services.call_service import _clamp_callback
+    from app.services.agents import get_automation
     try:
-        crm.update(lead_id, {"callback_at": when, "call_status": "Pending"}, actor="team")
-        return f"Callback scheduled for lead {lead_id} at {when} IST."
+        window_cfg = get_automation(agent_id)
+    except Exception:  # noqa: BLE001 - no automation row: the clamp's own defaults apply
+        window_cfg = {}
+    booked, moved = _clamp_callback(when, window_cfg)
+    try:
+        crm.update(lead_id, {"callback_at": booked, "call_status": "Pending"}, actor="team")
+        if moved:
+            return (f"{when} IST is outside calling hours, so the callback for lead {lead_id} is booked for "
+                    f"{booked} IST instead.")
+        return f"Callback scheduled for lead {lead_id} at {booked} IST."
     except Exception as e:
         return f"Failed to schedule callback: {str(e)}"
 
@@ -394,7 +406,7 @@ def add_lead_tool(agent_id: int, name: str | None, phone: str | None, requiremen
     from app.services.crm_service import normalize_phone
     digits = normalize_phone(str(phone or ""))
     if not digits:
-        return "Failed: I need a full phone number with country code (say it in groups, e.g. 98765 43210)."
+        return "Failed: I need a full phone number with country code, said in two groups of five digits."
     crm = CRMService(agent_id)
     existing = crm.find_by_phone(digits)
     if existing:
@@ -663,6 +675,93 @@ def set_agent_paused_tool(target_agent_id: int, paused: bool) -> str:
     return f"Agent {target_agent_id} is now {'paused: no calls go out' if paused else 'active'}."
 
 
+TAUGHT_FACT_CHARS = 200   # of the fact itself in the saved passage; the rest of the 380 is breadcrumb and keywords
+KNOWN_OVERLAP = 0.8       # this much of the fact's own words already in a passage: we know it
+TOPIC_OVERLAP = 0.6       # this much of the topic's words in common: the passage is about the same thing
+TAUGHT_KEY = "rag:taught:%s"
+TAUGHT_TTL = 3600
+NUMBER_RE = re.compile(r"\d[\d,.]*")
+# Values a colleague speaks rather than writes: "nine to six", "saat din", "Monday to Saturday". A
+# contradiction usually shows up in one of these, and on a phone call they are far more common than digits.
+VALUE_WORDS = re.compile(
+    r"\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|forty|fifty|"
+    r"hundred|thousand|lakh|crore|half|quarter|monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"daily|weekly|monthly|free)\b"
+    r"|एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|सौ|हज़ार|हजार|लाख|करोड़"
+    r"|सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार|मुफ्त|फ्री", re.I)
+
+
+def _values(text: str) -> set[str]:
+    """Every number-like value in a line, written either way."""
+    return set(NUMBER_RE.findall(text)) | {m.group(0).lower() for m in VALUE_WORDS.finditer(text)}
+
+
+def _overlap(a: set[str], b: set[str]) -> float:
+    return len(a & b) / len(a) if a else 0.0
+
+
+def teach_fact_tool(agent_id: int, fact: str, topic: str | None = None) -> str:
+    """Teach the knowledge base something, the way you would tell a new colleague.
+
+    Checking and saving are one tool call, so the model cannot save without looking first. The answer
+    leads with ALREADY KNOWN / CONFLICTS / SAVED, which the prompt turns into what the agent says next.
+    Keyword search only: this runs mid-call and an embedding round trip would be heard as a pause.
+    """
+    from app.core import store
+    from app.services import rag
+    fact = " ".join((fact or "").split())
+    if len(fact) < 30:
+        return "Failed: say the fact in a full sentence, with the number or name in it."
+    topic = " ".join((topic or "").split())[:60] or fact[:60]
+
+    fact_words, topic_words = set(rag.tokenize(fact)), set(rag.tokenize(topic))
+    # Indexing runs in a background thread, so a fact taught a moment ago is not searchable yet. The
+    # same colleague repeating themselves on the same call must still be told we have it.
+    recent = store.get_json(TAUGHT_KEY % agent_id) or []
+    candidates = [{"text": t} for t in recent] + rag.search(agent_id, f"{topic} {fact}", top_k=3, use_embeddings=False)
+
+    for hit in candidates:
+        text = hit.get("text") or ""
+        words = set(rag.tokenize(text))
+        if _overlap(fact_words, words) >= KNOWN_OVERLAP:
+            return f"ALREADY KNOWN: the knowledge base already says: {text[:200]}"
+
+    # A passage about the same topic carrying a different number is a contradiction the agent would
+    # otherwise read out to a customer, so it is surfaced instead of being buried under a second version.
+    clash = next((hit.get("text") or "" for hit in candidates
+                  if _overlap(topic_words, set(rag.tokenize(hit.get("text") or ""))) >= TOPIC_OVERLAP
+                  and _values(hit.get("text") or "") != _values(fact)), None)
+
+    passage = _taught_passage(topic, fact)
+    rag.add_text(agent_id, f"{topic} (taught on a call)"[:60], passage, actor="team")
+    # The passage, not the bare fact: it carries the topic line, so the next check compares like with
+    # like against what search will return once indexing catches up.
+    store.set_json(TAUGHT_KEY % agent_id, ([passage] + recent)[:20], ttl=TAUGHT_TTL)
+    if clash:
+        return (f"SAVED. CONFLICTS with what we already say: {clash[:200]} — tell them both versions and ask which "
+                f"is right. If the old one is wrong, a person has to delete it on the Knowledge page.")
+    return f"SAVED under '{topic}'. It is searchable from the next call."
+
+
+def _taught_passage(topic: str, fact: str) -> str:
+    """A fact shaped like the rest of the knowledge base, so hybrid search finds it again.
+
+    One block under the 400-character chunk limit: a breadcrumb line for context, the fact itself, and
+    an English keyword tail, because a Hindi caller's question is expanded to English before keyword
+    search runs and a passage with no English words in it would never match it.
+    """
+    from app.services.rag import QUERY_GLOSS, tokenize
+    fact = fact[:TAUGHT_FACT_CHARS]
+    keywords = []
+    for token in tokenize(f"{topic} {fact}"):
+        for word in (QUERY_GLOSS.get(token) or "").split():
+            if word not in keywords:
+                keywords.append(word)
+    block = f"{topic}\n{fact}"
+    tail = " ".join(keywords)[:max(0, 380 - len(block) - 11)]
+    return f"{block}\nKeywords: {tail}".rstrip() if tail.strip() else block
+
+
 TOOLS = [
     {
         "type": "function",
@@ -860,6 +959,16 @@ TOOLS += [
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "set_agent_paused", "description": "Pause this agent (no calls at all: manual, auto-dial, retries) or resume it. 'agent band karo' / 'chalu karo'.",
         "parameters": {"type": "object", "properties": {"paused": {"type": "boolean"}}, "required": ["paused"]}}},
+    {"type": "function", "function": {"name": "teach_fact", "description": (
+        "A colleague tells you something about the business the knowledge base should hold — a price, a policy, an "
+        "opening time, a service, a correction ('ab Sunday bhi khula rehta hai', 'premium plan ab 3499 ka hai'). "
+        "Checks the knowledge base first and saves only what is new. Returns ALREADY KNOWN (say so, do not save again), "
+        "CONFLICTS (tell them what we currently say and ask which is right), or SAVED. Never use it for anything a "
+        "customer said, for a lead's own details, or for how to sell."),
+        "parameters": {"type": "object", "properties": {
+            "fact": {"type": "string", "description": "The fact in one full sentence, in the words the business would use"},
+            "topic": {"type": "string", "description": "What it is about, two or three words: 'Premium plan price', 'Sunday opening'"},
+        }, "required": ["fact"]}}},
 ]
 
 ADMIN_TOOLS = [
@@ -1100,6 +1209,8 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
         return pending_work_tool(target)
     elif name == "set_agent_paused":
         return set_agent_paused_tool(target, _on_flag(args.get("paused", True)))
+    elif name == "teach_fact":
+        return teach_fact_tool(target, args.get("fact") or args.get("text") or "", args.get("topic") or args.get("title"))
 
     # Admin tools
     if role == "admin":

@@ -15,7 +15,7 @@ import { api, ApiError } from '@/lib/api'
 import { Stagger } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
 import type { ActivityEvent, Call, Lead, Page } from '@/lib/types'
-import { cn, formatDate, formatDuration, LANGUAGES, LEAD_STATUSES, timeAgo, titleCase } from '@/lib/utils'
+import { cn, formatDate, formatDuration, LANGUAGES, LEAD_STATUSES, leadScore, timeAgo, titleCase } from '@/lib/utils'
 
 const JOURNEY = ['New', 'Contacted', 'Interested', 'Follow Up', 'Meeting Booked', 'Closed Won']
 const LIVE_STATUSES = ['Queued', 'Ringing', 'In Progress']
@@ -30,7 +30,19 @@ function nextAction(lead: Lead, calls: Call[]): { title: string; detail: string;
   if (calls.some((c) => LIVE_STATUSES.includes(c.status))) return { title: 'Call in progress', detail: 'The agent is on the phone with this lead right now. The transcript below updates live.', kind: 'live' }
   const connected = calls.filter((c) => c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0))
   if (lead.do_not_call) return { title: 'Do not contact', detail: 'This lead asked not to be called. It is excluded from every call and campaign.', kind: 'stop' }
-  if (lead.callback_at) return { title: `Callback at ${formatDate(lead.callback_at.replace(' ', 'T') + '+05:30')}`, detail: 'The customer asked to be called back. The agent will dial automatically at that time (inside calling hours).', kind: 'followup' }
+  if (lead.callback_at) {
+    // The scheduler only dials inside calling hours, and a time already past is not a plan: saying
+    // "the agent will dial automatically at that time" for either one promised what nothing delivers.
+    const at = new Date(lead.callback_at.replace(' ', 'T') + '+05:30')
+    const overdue = at.getTime() < Date.now()
+    return {
+      title: `Callback at ${formatDate(lead.callback_at.replace(' ', 'T') + '+05:30')}`,
+      detail: overdue
+        ? 'This time has passed. The agent dials on its next run inside calling hours, or call now.'
+        : 'The customer asked to be called back. The agent dials automatically at that time.',
+      kind: 'followup',
+    }
+  }
   if (lead.status === 'Not Interested') return { title: 'Nurture later', detail: 'Not interested right now. Revisit in a few months with a new offer.', kind: 'stop' }
   if (lead.meeting_at) {
     const at = new Date(lead.meeting_at.replace(' ', 'T') + '+05:30')
@@ -47,17 +59,6 @@ function nextAction(lead: Lead, calls: Call[]): { title: string; detail: string;
   }
   if (lead.qualification === 'Hot' || lead.qualification === 'Warm') return { title: 'Book a meeting', detail: 'The lead shows interest. Call to confirm a day and time.', kind: 'call' }
   return { title: 'Qualify further', detail: 'Interest is unclear. The next call should find the requirement and budget.', kind: 'call' }
-}
-
-/** 0-100 engagement score from temperature, stage, connect rate and recency. */
-function leadScore(lead: Lead, calls: Call[]) {
-  if (lead.do_not_call) return 0
-  const temp = { Hot: 45, Warm: 28, Cold: 8 }[lead.qualification ?? ''] ?? 12
-  const stage = Math.max(0, JOURNEY.indexOf(lead.status)) * 6
-  const connected = calls.filter((c) => c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0)).length
-  const reach = calls.length ? Math.round((15 * connected) / calls.length) : 0
-  const recent = lead.last_contacted_at && Date.now() - Date.parse(lead.last_contacted_at) < 7 * 86_400_000 ? 10 : 0
-  return Math.min(100, temp + stage + reach + recent)
 }
 
 function CopyChip({ icon, value, href }: { icon: ReactNode; value: string; href?: string }) {
@@ -110,7 +111,7 @@ export default function LeadDetail() {
   const lead = useQuery({ queryKey: ['lead', leadId], queryFn: () => api<Lead>(`${base}/leads/${leadId}`), enabled: validId, refetchInterval: (q) => (isGone(q.state.error) ? false : 5000) })
   // Once the lead is gone (404) stop every poll for it instead of re-requesting a deleted record until the user leaves.
   const leadGone = isGone(lead.error)
-  const calls = useQuery({ queryKey: ['calls', 'lead', leadId], queryFn: () => api<Page<Call>>(`${base}/calls`, { params: { lead_id: leadId, page_size: 100 } }), enabled: validId && !leadGone, refetchInterval: (q) => (q.state.data?.items.some((c) => LIVE_STATUSES.includes(c.status)) ? 2000 : 5000) })
+  const calls = useQuery({ queryKey: ['calls', 'lead', leadId], queryFn: () => api<Page<Call>>(`${base}/calls`, { params: { lead_id: leadId, page_size: 200 } }), enabled: validId && !leadGone, refetchInterval: (q) => (q.state.data?.items.some((c) => LIVE_STATUSES.includes(c.status)) ? 2000 : 5000) })
   const activity = useQuery({ queryKey: ['activity', 'lead', leadId], queryFn: () => api<ActivityEvent[]>(`${base}/leads/${leadId}/activity`), enabled: validId && !leadGone, refetchInterval: (q) => (isGone(q.state.error) ? false : 8000) })
 
   const items = useMemo(() => calls.data?.items ?? [], [calls.data])
@@ -171,7 +172,12 @@ export default function LeadDetail() {
       cur.connected += c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0) ? 1 : 0
       hours.set(h, cur)
     }
-    const bestHour = [...hours.entries()].filter(([, v]) => v.connected).sort((a, b) => b[1].connected / b[1].calls - a[1].connected / a[1].calls)[0]
+    // "Best hour" off a single call is noise dressed as insight: one answered call at 11pm claimed
+    // 11pm as the best time to ring. Three attempts in the hour at least, and where two hours tie on
+    // ratio the better-evidenced one wins.
+    const bestHour = [...hours.entries()]
+      .filter(([, v]) => v.connected && v.calls >= 3)
+      .sort((a, b) => b[1].connected / b[1].calls - a[1].connected / a[1].calls || b[1].connected - a[1].connected)[0]
     return {
       total: items.length, connected: connected.length,
       rate: items.length ? Math.round((connected.length / items.length) * 100) : 0,
