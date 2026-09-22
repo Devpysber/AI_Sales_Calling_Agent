@@ -346,8 +346,21 @@ def get_profile(agent_id: int) -> dict:
     return _get_group(agent_id, "profile")
 
 
+MAX_INBOUND_COLLECT = 4   # every detail is one more question on a paid call; name + need + two more is the ceiling
+
+
 def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
     values = dict(values)
+    if "inbound_collect" in values:
+        if not isinstance(values["inbound_collect"], list):
+            raise ValueError("inbound_collect must be a list")
+        # Name and need first whatever the order clicked, then at most two extras: nine questions is not a call.
+        from app.services.agent import COLLECT_LABELS
+        chosen = [str(f) for f in values["inbound_collect"] if str(f) in COLLECT_LABELS]
+        chosen = [f for f in ("name", "requirement") if f in chosen] + [f for f in chosen if f not in ("name", "requirement")]
+        if len(chosen) > MAX_INBOUND_COLLECT:
+            raise ValueError(f"Ask new callers for at most {MAX_INBOUND_COLLECT} details; each one is another question on a paid call.")
+        values["inbound_collect"] = chosen
     if "team_members" in values:
         if not isinstance(values["team_members"], list):
             raise ValueError("team_members must be a list")

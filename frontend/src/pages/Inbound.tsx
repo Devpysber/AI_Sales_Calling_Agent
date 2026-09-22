@@ -170,7 +170,7 @@ export default function Inbound() {
         description="Choose who answers when customers call, and where the AI sends callers who need a person." />
 
       <Card className="mb-4">
-        <CardHeader title="Who answers this line" description="Several agents can dial out from one number. A customer who is already in an agent's CRM gets that agent back (its persona and knowledge); one known to several agents is asked which matter the call is about, then handed to that agent. A new number goes to the agent chosen here. Give an agent its own number under Agent settings when you get one." />
+        <CardHeader title="Who answers this line" description="Several agents can dial out from one number. A customer who is already in an agent's CRM gets that agent back (its persona and knowledge); one known to several agents is asked which matter the call is about, then handed to that agent. A new number goes to the agent chosen here. Your own team members are recognised by their number and get their agent in check-in mode (asked which one, if they work with several). Give an agent its own number under Agent settings when you get one." />
         <div className="flex flex-wrap items-center gap-3 px-4 pb-4 text-sm sm:px-5 sm:pb-5">
           {ownerQ.data ? (
             <>
@@ -317,7 +317,7 @@ export default function Inbound() {
                   const list = form.inbound_collect ?? []
                   const idx = list.indexOf(k)
                   return (
-                    <button key={k} type="button" aria-pressed={idx >= 0} disabled={busy} onClick={() => set('inbound_collect', idx >= 0 ? list.filter((x) => x !== k) : [...list, k])}
+                    <button key={k} type="button" aria-pressed={idx >= 0} disabled={busy || (idx < 0 && list.length >= 4)} title={idx < 0 && list.length >= 4 ? 'At most 4 details' : undefined} onClick={() => set('inbound_collect', idx >= 0 ? list.filter((x) => x !== k) : [...list, k])}
                       className={cn('inline-flex min-h-10 items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[13px] font-semibold transition disabled:opacity-50',
                         idx >= 0 ? 'border-fg bg-fg text-bg' : 'border-border text-fg-2 hover:border-border-strong')}>
                       {idx >= 0 && <span className="grid size-4 place-items-center rounded-full bg-bg/20 text-[10px]">{idx + 1}</span>}{l}
@@ -325,7 +325,7 @@ export default function Inbound() {
                   )
                 })}
               </div>
-              <p className="text-xs text-muted">Keep it to 2–3 details: every question adds time to the call. Known callers skip details they already gave, and callers known to another agent are recognised.</p>
+              <p className="text-xs text-muted">At most 4, ideally 2–3: every question adds time to the call. Name and what they need always come first. Known callers skip details they already gave, and callers known to another agent are recognised.</p>
             </div>
           </Card>
 

@@ -32,3 +32,11 @@ def test_profile_and_password_change(client):
     profile.pop("email", None)
     auth._save_profile(profile)
     assert client.post("/api/auth/login", json={"username": "admin", "password": "test-pass"}).status_code == 200
+
+
+def test_new_caller_details_are_capped_and_ordered(client, base):
+    res = client.put(f"{base}/profile", json={"inbound_collect": ["city", "email", "requirement", "name"]})
+    assert res.status_code == 200
+    assert client.get(f"{base}/profile").json()["profile"]["inbound_collect"] == ["name", "requirement", "city", "email"]
+    res = client.put(f"{base}/profile", json={"inbound_collect": ["name", "requirement", "city", "company", "email"]})
+    assert res.status_code == 400 and "at most 4" in res.text
