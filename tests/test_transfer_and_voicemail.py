@@ -79,8 +79,14 @@ def test_plivo_machine_verdict_hangs_up_and_ends_as_no_answer(client, base, monk
     from app.services.call_service import CallService
     agent_id = int(base.rsplit("/", 1)[1])
     agents.update_profile(agent_id, {"detect_voicemail": True}, actor="test")
+    monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
+    monkeypatch.setattr("app.services.call_service.public_url_reachable", lambda: True)
+    CallService(agent_id).expire_stale()
+    monkeypatch.setattr("app.services.call_service.CallService.active_count", lambda self: 0)
     lead = client.post(f"{base}/leads", json={"name": "Machine", "phone": "9466666666"}).json()
-    cid = client.post(f"{base}/calls", json={"lead_id": lead["id"]}).json()["call_id"]
+    started = client.post(f"{base}/calls", json={"lead_id": lead["id"]})
+    assert started.status_code == 200, started.text
+    cid = started.json()["call_id"]
     from app.models.call import Call
     from app.core.database import get_db
     with get_db() as db:
