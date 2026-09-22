@@ -66,6 +66,26 @@ export default function Agent() {
     onError: (e) => toast.error('Could not save', { description: e.message }),
   })
 
+  // Writes the playbook from this agent's own documents. It fills the form and stops there: the
+  // operator reads it and presses Save, so a draft that misses the mark is one undo away rather than
+  // a live agent talking about the wrong business.
+  const suggest = useMutation({
+    mutationFn: () => api<{ fields: Partial<AgentProfile>; reason: string }>(`${base}/profile/draft`, { method: 'POST' }),
+    onSuccess: (result) => {
+      const fields = result.fields ?? {}
+      const count = Object.keys(fields).length
+      if (!count) {
+        toast.error('Nothing to write from yet', { description: result.reason || 'Add documents to the knowledge base first.' })
+        return
+      }
+      setDraft((d) => (d ? { ...d, ...fields } : d))
+      toast.success(`Drafted ${count} field${count > 1 ? 's' : ''} from the knowledge base`, {
+        description: 'Read it through, change anything that is off, then Save.',
+      })
+    },
+    onError: (e) => toast.error('Could not draft the playbook', { description: e.message }),
+  })
+
   if (isError && !data) return (
     <>
       <PageHeader title="Agent" />
@@ -293,6 +313,15 @@ function ProfileEditor({ section, draft, setDraft, data }: {
   if (section === 'playbook') return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
       <Stagger className="space-y-4" step={60}>
+        <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
+          <div className="text-sm">
+            <div className="font-medium">Write this from the knowledge base</div>
+            <p className="text-muted">Reads your documents and drafts the goal, instructions, objections and guardrails for what this agent actually sells. You review before anything is saved.</p>
+          </div>
+          <Button variant="secondary" onClick={() => suggest.mutate()} disabled={suggest.isPending}>
+            {suggest.isPending ? 'Reading your documents…' : 'Draft from knowledge base'}
+          </Button>
+        </Card>
         <Section title="Goal" description="What a successful call achieves. The agent steers every conversation toward this.">
           <div className="grid gap-4">
             <Field label="Call objective"><Counted rows={2} max={600} value={draft.objective} onChange={(e) => set('objective', e.target.value)} placeholder="Qualify the prospect's need for software development and book a discovery meeting." /></Field>

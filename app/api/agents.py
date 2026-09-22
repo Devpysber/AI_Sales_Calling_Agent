@@ -218,6 +218,20 @@ def get_profile(request: Request, agent_id: int = Depends(workspace)):
             "voices": tts.SPEAKERS, "languages": tts.LANGUAGES}
 
 
+@router.post("/{agent_id}/profile/draft")
+async def draft_profile(agent_id: int = Depends(workspace)):
+    """Persona fields written from this agent's own knowledge base, for a person to review and save.
+
+    Nothing is saved here: the page fills the form with the draft and the operator presses Save, so a
+    bad draft is one undo away rather than a live agent talking about the wrong business.
+    """
+    from app.services import persona_writer
+    try:
+        return await asyncio.to_thread(persona_writer.draft, agent_id)
+    except LLMError as e:
+        raise HTTPException(502, str(e))
+
+
 @router.put("/{agent_id}/profile")
 def update_profile(values: dict, request: Request, agent_id: int = Depends(workspace)):
     if "agent_password" in values and getattr(request.state, "user", "") not in ("admin", "api"):

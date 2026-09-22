@@ -113,8 +113,14 @@ def _send_smtp(to: str, subject: str, body: str, from_: str):
         message["Reply-To"] = settings.email_reply_to
     message.set_content(body)
     message.add_alternative(_html_template(body, from_.split("<")[0].strip().strip('"')), subtype='html')
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
-        smtp.starttls()
+    # Port 465 speaks TLS from the first byte, so STARTTLS on it fails the connection outright and no
+    # mail ever leaves. Everything else negotiates, and only when the server actually offers it.
+    connect = smtplib.SMTP_SSL if int(settings.smtp_port) == 465 else smtplib.SMTP
+    with connect(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
+        smtp.ehlo()
+        if connect is smtplib.SMTP and smtp.has_extn("starttls"):
+            smtp.starttls()
+            smtp.ehlo()
         if settings.smtp_username:
             smtp.login(settings.smtp_username, settings.smtp_password)
         smtp.send_message(message)

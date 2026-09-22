@@ -121,6 +121,17 @@ def _clamp_callback(at: str, cfg: dict) -> tuple[str, bool]:
     return slot.strftime("%Y-%m-%d %H:%M"), slot != dt
 
 
+def _is_lead_recipient(target: str) -> bool:
+    """Whether a `to` field from the model means the customer rather than our own team.
+
+    It used to be a substring test for "lead", so a real address — priya@leadsquared.com — or the word
+    "leadership" routed a customer's mail to the whole team, and an address the model supplied for the
+    customer was ignored. Exact words only, plus anything that looks like the lead's own address.
+    """
+    target = (target or "").strip().lower()
+    return target in ("lead", "customer", "the lead", "the customer", "prospect", "client") or "@" in target
+
+
 def _merge_text(existing: str | None, new: str | None, cap: int = 2000) -> str | None:
     """Append sentences the stored text does not already contain; a short call must not wipe earlier discovery notes."""
     existing = (existing or "").strip()
@@ -769,7 +780,7 @@ class CallService:
         # The model already listed a mail to the lead: leave it to that one instead of sending twice.
         planned = summary.get("send_email") or []
         planned = [planned] if isinstance(planned, dict) else (planned if isinstance(planned, list) else [])
-        if any(isinstance(e, dict) and "lead" in str(e.get("to", "")).lower() for e in planned):
+        if any(isinstance(e, dict) and _is_lead_recipient(str(e.get("to", ""))) for e in planned):
             return
         from app.services.notification_service import send_email
         persona = agents.get_profile(self.agent_id)
@@ -888,6 +899,7 @@ class CallService:
                 updates["notes"] = merged
             callback_at = _valid_callback(s.get("callback_at"))
             synthetic_callback = False
+            callback_moved = False   # set when the agreed time had to be pulled into calling hours
             if meeting_at:
                 # A meeting or visit is booked: the meeting IS the next contact. A callback on top rang the
                 # customer twice ("discovery call at 5 PM" plus a callback an hour later).
@@ -923,6 +935,7 @@ class CallService:
                 except Exception:  # noqa: BLE001 - no automation row: the defaults inside the clamp apply
                     window_cfg = {}
                 callback_at, moved = _clamp_callback(callback_at, window_cfg)
+                callback_moved = moved
                 if moved:
                     events.record("callback.moved", f"Callback moved into calling hours: {callback_at}",
                                   "The time agreed on the call is outside the calling window.",
@@ -937,10 +950,12 @@ class CallService:
             if isinstance(emails_for_lead, dict):
                 emails_for_lead = [emails_for_lead]
             if isinstance(emails_for_lead, list) and any(
-                isinstance(e, dict) and "lead" in str(e.get("to") or "").lower() for e in emails_for_lead
-            ):
+                isinstance(e, dict) and _is_lead_recipient(str(e.get("to") or "")) for e in emails_for_lead
+            ) and not callback_moved:
                 # A send_email to the lead is already queued below for this same call: don't also fire
-                # the CRM's own "follow-up call scheduled" mail on top of it.
+                # the CRM's own "follow-up call scheduled" mail on top of it. Unless the callback time
+                # had to be moved into calling hours — the model's mail quotes the time it heard on the
+                # call, which is no longer when we will ring, so the CRM's confirmation must go out.
                 updates["_no_followup_email"] = True
             # No language hint here: the summary runs from the stored call row, long after the session
             # that knew which language the call ran in. The transcript itself decides.
@@ -977,9 +992,22 @@ class CallService:
                         target = str(e["to"]).lower()
                         subject = e.get("subject", f"Update regarding call with {updates.get('name') or current.get('name') or current.get('phone')}")
                         recipients = []
-                        if "lead" in target:
-                            if updates.get("email") or current.get("email"):
-                                recipients.append(updates.get("email") or current.get("email"))
+                        if _is_lead_recipient(target):
+                            address = (updates.get("email") or current.get("email") or "").strip()
+                            if current.get("do_not_call"):
+                                # They asked us to stop contacting them. The call may still have promised
+                                # an email; the promise does not outrank the opt-out.
+                                events.record("email.suppressed", "Email not sent: the lead is on Do Not Call",
+                                              subject[:200], agent_id=self.agent_id, lead_id=lead_id, call_id=call_id,
+                                              actor="system")
+                            elif address:
+                                recipients.append(address)
+                            else:
+                                # The agent promised an email to someone we have no address for. Dropping
+                                # it in silence left a customer waiting for mail nobody knew was owed.
+                                events.record("email.no_address", "Promised email could not be sent: no address on the lead",
+                                              subject[:200], agent_id=self.agent_id, lead_id=lead_id, call_id=call_id,
+                                              actor="system")
                         else:
                             from app.core.auth import login_email
                             profile = agents.get_profile(self.agent_id)

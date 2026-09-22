@@ -97,6 +97,17 @@ def _corpus(agent_id: int) -> tuple[str, list[str]]:
             lines.append(f"- ({hit.get('title') or 'document'}) {text[:CHARS_PER_PASSAGE]}")
         if lines:
             parts.append(f"\n=== Passages about {TOPICS[topic]} ===\n" + "\n".join(lines))
+    if not parts:
+        # A short or unusually worded knowledge base can match none of the topic queries. Reading it
+        # straight through beats reporting an empty corpus for documents that plainly have content.
+        with get_db() as db:
+            rows = db.execute(
+                select(DocumentChunk.text)
+                .join(Document, Document.id == DocumentChunk.document_id)
+                .where(Document.agent_id == agent_id, Document.status == "ready")
+                .order_by(Document.id, DocumentChunk.position).limit(60)
+            ).all()
+        parts = ["\n".join(f"- {text}" for (text,) in rows)]
     return "\n".join(parts)[:MAX_CHARS], list(dict.fromkeys(titles))
 
 
