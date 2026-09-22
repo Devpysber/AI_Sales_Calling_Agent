@@ -396,6 +396,10 @@ class CRMService:
             data = {**data, "do_not_call": True}
         elif data.get("do_not_call") is True and "status" not in data:
             data = {**data, "status": "Do Not Call"}
+        elif data.get("do_not_call") is False and "status" not in data and lead.status == "Do Not Call":
+            # Lifting the flag has to lift the stage too. Without this the lead became dialable again
+            # while the board still showed it parked under Do Not Call, and every stage filter hid it.
+            data = {**data, "status": "Contacted" if lead.last_contacted_at else "New"}
         changes = {}
         for key, value in data.items():
             if key not in EDITABLE:

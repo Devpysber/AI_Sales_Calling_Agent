@@ -39,7 +39,9 @@ export default function Inbound() {
   const qc = useQueryClient()
   const profile = useQuery({ queryKey: ['agent'], queryFn: () => api<ProfileResponse>(`${base}/profile`) })
   const data = profile.data
-  const automation = useQuery({ queryKey: ['automation'], queryFn: () => api<{ settings: AutomationSettings; within_calling_hours: boolean }>(`${base}/automation`) })
+  // within_calling_hours is a point-in-time answer from the server: without a refetch, a page left
+  // open across 9am or 9pm kept telling the operator the opposite of what inbound callers now get.
+  const automation = useQuery({ queryKey: ['automation'], queryFn: () => api<{ settings: AutomationSettings; within_calling_hours: boolean }>(`${base}/automation`), refetchInterval: 30_000 })
   const calls = useQuery({
     queryKey: ['calls', 'inbound'],
     queryFn: () => api<Page<Call>>(`${base}/calls`, { params: { direction: 'inbound', page_size: 25 } }),

@@ -169,6 +169,22 @@ def merge_call_context(session_lead: dict, fresh: dict | None) -> dict:
     return lead
 
 
+# Words a Marathi speaker uses constantly and a Hindi speaker does not. Both write Devanagari, so the
+# script cannot separate them and a Marathi conversation was saved to the lead as Hindi — the next call
+# then opened in the wrong language and the caller heard an accent that was not theirs.
+MARATHI_MARKERS = ("आहे", "आहेत", "आहात", "नाही", "तुम्ही", "तुमच", "मला", "माझ", "काय", "कसं", "होतं",
+                   "करतो", "करते", "पाहिजे", "छान", "धन्यवाद", "ठीक आहे", "बोलत")
+HINDI_MARKERS = ("है", "हैं", "नहीं", "आप", "आपक", "मुझे", "मेर", "क्या", "कैसे", "था", "करता", "करती", "चाहिए")
+
+
+def _sounds_marathi(history: list[dict]) -> bool:
+    """True when the caller's Devanagari lines carry more Marathi marker words than Hindi ones."""
+    said = " ".join(str(t.get("text") or "") for t in history if t.get("role") in ("customer", "user"))
+    marathi = sum(said.count(w) for w in MARATHI_MARKERS)
+    hindi = sum(said.count(w) for w in HINDI_MARKERS)
+    return marathi >= 2 and marathi > hindi
+
+
 def spoken_language(history: list[dict], spoken: str | None = None) -> str | None:
     """Language the caller mostly spoke on this call, from the script of their transcribed lines; None when unclear.
 
@@ -201,7 +217,9 @@ def spoken_language(history: list[dict], spoken: str | None = None) -> str | Non
     if count / total < 0.6:
         return None
     if spoken and spoken != code and spoken in tts_service.SHARED_SCRIPT.get(code, ()):
-        return spoken   # same script, and the call knows which of its languages it was actually speaking
+        return spoken   # the call knows which of its script's languages it was actually speaking
+    if code == "hi-IN" and _sounds_marathi(history):
+        return "mr-IN"
     return code
 
 
@@ -908,7 +926,9 @@ class CallService:
                 # A send_email to the lead is already queued below for this same call: don't also fire
                 # the CRM's own "follow-up call scheduled" mail on top of it.
                 updates["_no_followup_email"] = True
-            spoken_lang = spoken_language(history, s.get("language"))
+            # No language hint here: the summary runs from the stored call row, long after the session
+            # that knew which language the call ran in. The transcript itself decides.
+            spoken_lang = spoken_language(history)
             if spoken_lang and spoken_lang != (self.crm.get(lead_id) or {}).get("language"):
                 # The script the caller actually used beats a seeded or guessed value: the next call's greeting
                 # and speech recognition run in it (an English record on a Hindi caller garbled call two).
@@ -1202,8 +1222,11 @@ class CallService:
         """A scheduled call the agent cannot take right now: move it, tell the customer, tell the admin."""
         from app.services.notification_service import notify_admin, send_email, email_sent
         from app.core import store
-        later = datetime.now(IST) + timedelta(hours=2)
-        at = later.strftime("%Y-%m-%d %H:%M")
+        # Two hours from now can land after closing, and the callbacks job would not dial it then —
+        # while the email below promises that exact time to the customer.
+        at, _ = _clamp_callback((datetime.now(IST) + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M"),
+                                agents.get_automation(self.agent_id))
+        later = datetime.strptime(at, "%Y-%m-%d %H:%M").replace(tzinfo=IST)
         self.crm.update(lead["id"], {"callback_at": at, "call_status": "Pending"}, actor="system",
                         event_type="callback.postponed", title=f"Call moved to {later:%d %b %H:%M}: AI providers unavailable")
         company = (agents.get_profile(self.agent_id) or {}).get("company_name") or (agents.get(self.agent_id) or {}).get("name") or "our team"

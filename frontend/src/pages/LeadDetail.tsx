@@ -111,7 +111,7 @@ export default function LeadDetail() {
   const lead = useQuery({ queryKey: ['lead', leadId], queryFn: () => api<Lead>(`${base}/leads/${leadId}`), enabled: validId, refetchInterval: (q) => (isGone(q.state.error) ? false : 5000) })
   // Once the lead is gone (404) stop every poll for it instead of re-requesting a deleted record until the user leaves.
   const leadGone = isGone(lead.error)
-  const calls = useQuery({ queryKey: ['calls', 'lead', leadId], queryFn: () => api<Page<Call>>(`${base}/calls`, { params: { lead_id: leadId, page_size: 100 } }), enabled: validId && !leadGone, refetchInterval: (q) => (q.state.data?.items.some((c) => LIVE_STATUSES.includes(c.status)) ? 2000 : 5000) })
+  const calls = useQuery({ queryKey: ['calls', 'lead', leadId], queryFn: () => api<Page<Call>>(`${base}/calls`, { params: { lead_id: leadId, page_size: 200 } }), enabled: validId && !leadGone, refetchInterval: (q) => (q.state.data?.items.some((c) => LIVE_STATUSES.includes(c.status)) ? 2000 : 5000) })
   const activity = useQuery({ queryKey: ['activity', 'lead', leadId], queryFn: () => api<ActivityEvent[]>(`${base}/leads/${leadId}/activity`), enabled: validId && !leadGone, refetchInterval: (q) => (isGone(q.state.error) ? false : 8000) })
 
   const items = useMemo(() => calls.data?.items ?? [], [calls.data])
@@ -172,7 +172,12 @@ export default function LeadDetail() {
       cur.connected += c.status === 'Completed' || (c.status === 'Failed' && c.duration > 0) ? 1 : 0
       hours.set(h, cur)
     }
-    const bestHour = [...hours.entries()].filter(([, v]) => v.connected).sort((a, b) => b[1].connected / b[1].calls - a[1].connected / a[1].calls)[0]
+    // "Best hour" off a single call is noise dressed as insight: one answered call at 11pm claimed
+    // 11pm as the best time to ring. Three attempts in the hour at least, and where two hours tie on
+    // ratio the better-evidenced one wins.
+    const bestHour = [...hours.entries()]
+      .filter(([, v]) => v.connected && v.calls >= 3)
+      .sort((a, b) => b[1].connected / b[1].calls - a[1].connected / a[1].calls || b[1].connected - a[1].connected)[0]
     return {
       total: items.length, connected: connected.length,
       rate: items.length ? Math.round((connected.length / items.length) * 100) : 0,

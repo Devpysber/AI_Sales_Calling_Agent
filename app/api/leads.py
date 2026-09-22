@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
@@ -7,7 +8,7 @@ from pydantic import BaseModel, Field
 from app.api.deps import require_admin, workspace
 from app.core.auth import actor
 from app.services import agents, events
-from app.services.call_service import CallError, CallService
+from app.services.call_service import IST, CallError, CallService
 from app.services.crm_service import CRMService
 
 router = APIRouter(prefix="/api/agents/{agent_id}/leads", tags=["leads"])
@@ -271,6 +272,8 @@ def call_queue(agent_id: int = Depends(workspace)):
     slots = max(1, cfg["max_concurrent_calls"])
     open_now = within_calling_hours(cfg)
     rows, ready_index = [], 0
+    # IST wall-clock text, the same shape the callback times are stored in, so a plain compare works.
+    now_ist = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
     for position, lead in enumerate(items, start=1):
         if lead["id"] in ready_ids:
             wait = "Next up" if ready_index < slots and open_now else (f"≈ {((ready_index // slots) + 1) * 2} min" if open_now else "When calling hours open")
@@ -278,7 +281,11 @@ def call_queue(agent_id: int = Depends(workspace)):
         elif lead.get("phone_valid") is False:
             state, wait = "blocked", "Fix the phone number"
         elif lead.get("callback_at"):
-            state, wait = "scheduled", f"Callback at {lead['callback_at'][11:16]}"
+            # The time alone read as today: a callback booked for Thursday morning showed "Callback at
+            # 09:00" on Tuesday, next to leads that really are next up.
+            at = lead["callback_at"]
+            state = "scheduled"
+            wait = f"Callback at {at[11:16]}" if at[:10] == now_ist[:10] else f"Callback {at[8:10]}/{at[5:7]} at {at[11:16]}"
         else:
             state, wait = "cooldown", "Just called: waits 10 min"
         rows.append({**lead, "position": position, "state": state, "wait": wait})
