@@ -411,7 +411,7 @@ class CRMService:
         if changes and actor != "system":
             events.record(event_type, title or f"Updated {', '.join(changes)}", agent_id=result["agent_id"], lead_id=lead_id,
                           actor=actor, data={k: v["to"] for k, v in changes.items()})
-            if "callback_at" in changes and result.get("email"):
+            if "callback_at" in changes and result.get("email") and not data.get("_no_followup_email"):
                 new_time = changes["callback_at"]["to"]
                 if new_time:
                     import threading

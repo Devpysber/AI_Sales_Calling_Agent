@@ -129,7 +129,7 @@ def job_meeting_reminder(agent_id, cfg, force=False):
     sent = 0
     failed = 0
     for lead in CRMService(agent_id).meetings_on(tomorrow):
-        if lead["email"]:
+        if lead["email"] and not lead.get("do_not_call"):
             status = send_email(lead["email"], f"Reminder: your meeting with {persona['company_name']} tomorrow",
                        f"Hi {lead['name'] or 'there'},\n\nThis is a reminder of your meeting with {persona['company_name']} "
                        f"on {lead['meeting_at']} IST.\n\nRegards,\n{persona['agent_name']}\n{persona['company_name']}",

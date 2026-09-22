@@ -78,6 +78,19 @@ def test_export_redacts_customer_data(client):
     assert "rahul@x.com" not in dumped and "98765" not in dumped and row["data"]["body"] == "<omitted>"
 
 
+def test_failed_send_email_reports_only_email_failed_not_tool_failed(base, monkeypatch):
+    """A failed send_email must not also get a tool_failed issue, or heal() would resend it twice
+    (once for email_failed's own retry, once for tool_failed re-running the tool)."""
+    agent_id = int(base.rsplit("/", 1)[1])
+    monkeypatch.setattr(agent_tools, "send_email", lambda *a, **k: "failed: boom")
+    before = {i["id"] for i in heal_service.list_issues()}
+    out = agent_tools.execute_tool(
+        "send_email", '{"to": "a@b.com", "subject": "hi", "body": "hello"}', agent_id, role="team")
+    assert out.startswith("Failed to send email")
+    new = [i for i in heal_service.list_issues() if i["id"] not in before]
+    assert not any(i["kind"] == "tool_failed" for i in new)
+
+
 def test_detect_bump_false_does_not_inflate_count_or_last_at(client):
     issue = heal_service.report("turn_error", "first", data={"error": "first"})
     assert issue["count"] == 1
@@ -86,6 +99,18 @@ def test_detect_bump_false_does_not_inflate_count_or_last_at(client):
     assert bumped["id"] == issue["id"]
     assert bumped["count"] == 1  # not incremented
     assert bumped["last_at"] == first_last_at  # not refreshed
+
+
+def test_email_failed_keeps_separate_issues_per_recipient(client):
+    """Two failed sends to different recipients must not collapse into one issue whose data
+    only remembers the latest — else heal resends just the last email and marks both fixed."""
+    first = heal_service.report("email_failed", "To a@x.com: hi -> failed", data={"to": "a@x.com", "body": "hi"})
+    second = heal_service.report("email_failed", "To b@x.com: hi -> failed", data={"to": "b@x.com", "body": "hi"})
+    assert first["id"] != second["id"]
+    assert first["data"]["to"] == "a@x.com" and second["data"]["to"] == "b@x.com"
+    # A third failure for the same recipient still bumps the existing issue rather than duplicating it.
+    third = heal_service.report("email_failed", "To a@x.com: hi -> failed again", data={"to": "a@x.com", "body": "hi"})
+    assert third["id"] == first["id"] and third["count"] == 2
 
 
 def test_heal_does_not_clobber_a_report_that_lands_during_a_remedy(client, monkeypatch):

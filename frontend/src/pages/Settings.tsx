@@ -50,6 +50,18 @@ const INFRA_LABELS: Record<string, string> = { environment: 'Environment', datab
 
 export default function Settings() {
   const { data: s, refetch, isFetching, isError, error } = useQuery({ queryKey: ['system', 'status'], queryFn: () => api<Status>('/api/system/status'), staleTime: 30_000 })
+  const [sendingTestEmail, setSendingTestEmail] = useState(false)
+  const sendTestEmail = async () => {
+    setSendingTestEmail(true)
+    try {
+      const res = await api<{ to: string; status: string }>('/api/system/email/test', { method: 'POST' })
+      toast.success(`Test email to ${res.to}: ${res.status}`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not send test email')
+    } finally {
+      setSendingTestEmail(false)
+    }
+  }
   const base = (typeof s?.public_url?.url === 'string' && s.public_url.url) || window.location.origin
   const checks = s ? [!!s.plivo?.ok, !!s.openrouter?.ok, !!s.sarvam?.ok, !!s.public_url?.ok, !!s.signature_validation, !!s.email?.ok] : []
   const models = Array.isArray(s?.openrouter?.models) ? (s.openrouter.models as string[]) : []
@@ -93,7 +105,12 @@ export default function Settings() {
               </Row>
               <Row ok={s.public_url.ok} checking={isFetching} title="Public webhook URL">{s.public_url.ok ? <code className="font-mono break-all">{base}</code> : (s.public_url.detail || 'Not reachable')}</Row>
               <Row ok={s.signature_validation} checking={isFetching} okLabel="Enabled" title="Webhook signature verification">{s.signature_validation ? 'Every Plivo request is verified with X-Plivo-Signature-V3.' : 'Disabled — set PLIVO_VALIDATE_SIGNATURE=true.'}</Row>
-              <Row ok={s.email.ok} checking={isFetching} title="Email · Resend / SMTP">{s.email.ok ? (s.email.detail || 'Configured') : 'Not configured — reminders and reports are logged to Activity only.'}</Row>
+              <Row ok={s.email.ok} checking={isFetching} title="Email · Resend / SMTP">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span>{s.email.ok ? (s.email.detail || 'Configured') : 'Not configured — reminders and reports are logged to Activity only.'}</span>
+                  <Button variant="ghost" size="sm" onClick={sendTestEmail} loading={sendingTestEmail}>Send test</Button>
+                </div>
+              </Row>
             </Stagger>
 
             <Card>

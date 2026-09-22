@@ -55,20 +55,26 @@ def get(agent_id: int) -> dict:
 def _corpus(agent_id: int) -> tuple[str, list[str]]:
     with get_db() as db:
         rows = db.execute(
-            select(Document.title, DocumentChunk.text)
+            select(Document.id, Document.title, DocumentChunk.text)
             .join(DocumentChunk, DocumentChunk.document_id == Document.id)
             .where(Document.agent_id == agent_id, Document.status == "ready")
             .order_by(Document.id, DocumentChunk.position)
         ).all()
-    parts, titles, used = [], [], 0
-    for title, text in rows:
-        if title not in titles:
-            titles.append(title)
+    doc_ids = list(dict.fromkeys(doc_id for doc_id, _, _ in rows))
+    per_doc = max(MAX_CHARS // max(len(doc_ids), 1), 2000)
+    parts, titles = [], []
+    doc_used = {}
+    for doc_id, title, text in rows:
+        used = doc_used.get(doc_id, 0)
+        if used >= per_doc:
+            continue
+        if used == 0:
             parts.append(f"\n=== Document: {title} ===\n")
-        if used + len(text) > MAX_CHARS:
-            break
-        parts.append(text)
-        used += len(text)
+            titles.append(title)
+        remaining = per_doc - used
+        chunk = text[:remaining]
+        parts.append(chunk)
+        doc_used[doc_id] = used + len(chunk)
     return "\n".join(parts), titles
 
 

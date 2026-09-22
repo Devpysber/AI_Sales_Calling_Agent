@@ -145,7 +145,7 @@ def test_compact_history_soon_saves_compacted_upto(monkeypatch):
     saved = {}
     stream.save_session = lambda **k: saved.update(k)
 
-    monkeypatch.setattr(agent, "compact_history", lambda history, prior=None: "caller wants pricing")
+    monkeypatch.setattr(agent, "compact_history", lambda history, prior=None, since=0: "caller wants pricing")
     captured = []
     monkeypatch.setattr(voice_stream.asyncio, "create_task", lambda coro: captured.append(coro))
 

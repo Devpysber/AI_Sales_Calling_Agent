@@ -20,7 +20,7 @@ from app.models.call import Call
 from app.models.document import Document, DocumentChunk
 from app.models.event import Event
 from app.models.lead import Lead
-from app.services import events
+from app.services import events, tts
 
 log = get_logger(__name__)
 from app.services.settings_service import SettingsService, coerce
@@ -59,6 +59,14 @@ AUTOMATION_DEFAULTS = {
 }
 
 LANGUAGE_CODES = ("en-IN", "hi-IN", "bn-IN", "ta-IN", "te-IN", "kn-IN", "ml-IN", "mr-IN", "gu-IN", "pa-IN", "od-IN")
+
+# Caps mirror the UI's own limits (Agent.tsx) so API/import clients can't push unbounded text into the prompt.
+PROFILE_LIMITS = {
+    "greeting_en": 200, "greeting_hi": 200, "company_tagline": 400, "call_to_action": 200,
+    "objective": 600, "instructions": 3000, "objection_handling": 3000, "qualification_criteria": 1500,
+    "forbidden_topics": 1500, "agent_name": 60, "company_name": 120, "agent_role": 60,
+    "customer_noun": 40, "website_url": 200,
+}
 
 PROFILE_DEFAULTS = {
     "agent_name": "Ashish",
@@ -283,7 +291,7 @@ def _wire_own_number(agent_id: int, number: str | None, actor: str) -> None:
 
 def create(data: dict, actor: str = "admin", created_by: str | None = None) -> dict:
     meta = _clean_meta({"name": data.get("name"), **{k: data[k] for k in META_FIELDS if k in data and k != "name"}})
-    profile = coerce(PROFILE_DEFAULTS, {k: v for k, v in (data.get("profile") or {}).items() if v not in (None, "")})
+    profile = _validate_profile_values(coerce(PROFILE_DEFAULTS, {k: v for k, v in (data.get("profile") or {}).items() if v not in (None, "")}))
     copy_from = data.get("copy_from")
     automation = {}
     if copy_from:
@@ -423,8 +431,21 @@ def get_profile(agent_id: int) -> dict:
     return profile
 
 
+def _validate_profile_values(values: dict) -> dict:
+    if "voice_speaker" in values and values["voice_speaker"] not in tts.SPEAKERS:
+        raise ValueError("Unknown voice")
+    if "default_language" in values and values["default_language"] not in LANGUAGE_CODES:
+        raise ValueError("Unknown language")
+    if "max_call_minutes" in values and not 1 <= int(values["max_call_minutes"]) <= 30:
+        raise ValueError("Max call length must be 1-30 minutes")
+    for key, cap in PROFILE_LIMITS.items():
+        if key in values and values[key] is not None:
+            values[key] = str(values[key])[:cap]
+    return values
+
+
 def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
-    values = dict(values)
+    values = _validate_profile_values(dict(values))
     if "inbound_collect" in values:
         if not isinstance(values["inbound_collect"], list):
             raise ValueError("inbound_collect must be a list")

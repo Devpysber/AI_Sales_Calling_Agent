@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import workspace
 from app.core.auth import actor
@@ -39,7 +40,7 @@ async def upload(request: Request, file: UploadFile = File(...), title: str = Fo
     if len(content) > MAX_UPLOAD:
         raise HTTPException(413, "File too large (max 25 MB).")
     try:
-        return rag.add_document(agent_id, title.strip() or file.filename, file.filename, content, file.content_type, actor(request))
+        return await run_in_threadpool(rag.add_document, agent_id, title.strip() or file.filename, file.filename, content, file.content_type, actor(request))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -54,7 +55,7 @@ def add_text(body: TextDoc, request: Request, agent_id: int = Depends(workspace)
 
 @router.post("/search")
 def search(body: Query, agent_id: int = Depends(workspace)):
-    return {"results": rag.search(agent_id, body.query, body.top_k)}
+    return {"results": rag.search(agent_id, body.query, body.top_k), "semantic": rag.stats(agent_id)["semantic"]}
 
 
 @router.get("/{doc_id}")

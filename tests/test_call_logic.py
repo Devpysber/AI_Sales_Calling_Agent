@@ -138,6 +138,24 @@ def test_usage_bills_llm_by_tokens_when_measured(monkeypatch):
     assert u["per_call"]["total_cost"] == u["cost_per_connected_call"]
 
 
+def test_postpone_for_outage_respects_ai_auto_emails_off(monkeypatch, client, base):
+    """A workspace with AI emails switched off must not get the 'we will call you later' mail either."""
+    from app.services import agents, call_service
+    from app.services.crm_service import CRMService
+
+    agent_id = int(base.rsplit("/", 1)[1])
+    crm = CRMService(agent_id)
+    lead = crm.create({"name": "Neha", "phone": "+917879417267", "email": "neha@example.com"}, actor="system")
+
+    sent = []
+    monkeypatch.setattr("app.services.notification_service.send_email",
+                         lambda *a, **k: sent.append(a) or "sent via test")
+    monkeypatch.setattr(agents, "get_automation", lambda _id: {"ai_auto_emails": False})
+
+    calls = call_service.CallService(agent_id)
+    calls._postpone_for_outage(lead, "trigger", "detail")
+    assert sent == []
+
 def test_stop_calling_message_never_books_a_callback(client, base, monkeypatch):
     """A caller whose whole message is 'turn off the calls' was rung back an hour later by the team_action slot."""
     from app.services import llm

@@ -1220,13 +1220,13 @@ COMPACT_PROMPT = (
 )
 
 
-def compact_history(history: list[dict], prior: str | None = None) -> str:
+def compact_history(history: list[dict], prior: str | None = None, since: int = 0) -> str:
     """One-paragraph memory of the turns that have fallen out of the prompt window.
 
     Runs between turns, never on the reply path: an unfinished or failed compaction just means the
     next turn carries the previous summary.
     """
-    older = history[:-MAX_HISTORY_TURNS]
+    older = history[since:-MAX_HISTORY_TURNS]
     if not older:
         return prior or ""
     transcript = "\n".join(f"{'Agent' if t['role'] == 'assistant' else 'Customer'}: {t['text']}" for t in older)

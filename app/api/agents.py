@@ -70,6 +70,10 @@ def create_agent(body: AgentIn, request: Request, response: Response):
     
     if body.copy_from and not agents.exists(body.copy_from):
         raise HTTPException(400, "The agent to copy from does not exist.")
+    if body.copy_from and user == "team" and body.copy_from not in payload.get("unlocked", []):
+        raise HTTPException(403, "LOCKED")
+    if user == "team" and (body.profile or {}).get("agent_password"):
+        raise HTTPException(403, "Administrator access required.")
 
     # A team member may only create the number of workspaces the admin allowed them (one by default).
     if user == "team":

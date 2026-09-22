@@ -78,3 +78,23 @@ def test_team_member_agent_limit(client, monkeypatch):
     agent_service.create({"name": "Limit test"}, actor="team", created_by="member-1")
     assert agent_service.created_count("member-1") == before + 1
     assert agent_service.created_count("someone-else") == 0    # counted per member
+
+
+def test_no_followup_email_for_a_time_the_lead_never_agreed_to(client, base, monkeypatch):
+    """A callback time we invented ourselves (fallback/unclear-time slot) must not be emailed to the
+    lead as "we have scheduled a follow-up call with you" — they never agreed to it."""
+    import threading
+    from app.services.crm_service import CRMService
+
+    started = []
+    monkeypatch.setattr(threading, "Thread", lambda *a, **k: started.append(1) or type(
+        "T", (), {"start": lambda self: None})())
+
+    crm = CRMService(int(base.rsplit("/", 1)[1]))
+    lead = crm.create({"name": "Caller", "phone": "+917879417266", "email": "caller@example.com"}, actor="system")
+
+    crm.update(lead["id"], {"callback_at": "2030-01-01 10:00", "_no_followup_email": True}, actor="ai")
+    assert started == []                                # synthetic slot: no email thread started
+
+    crm.update(lead["id"], {"callback_at": "2030-01-01 11:00"}, actor="ai")
+    assert started == [1]                                # a customer-agreed time still gets the email

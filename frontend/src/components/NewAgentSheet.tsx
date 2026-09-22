@@ -160,6 +160,10 @@ export default function NewAgentSheet({ open, onClose, onCreated }: {
       profile.objective ??= t.objective
       profile.call_to_action ??= t.cta
       profile.instructions ??= t.talk
+      // Non-sales templates must not inherit the sales-only objection/qualification defaults
+      // (PROFILE_DEFAULTS in app/services/agents.py talks price, vendors and "wants a meeting").
+      if (t.objections) profile.objection_handling ??= t.objections
+      if (t.criteria) profile.qualification_criteria ??= t.criteria
       // How the agent introduces itself and what it calls the person on the line.
       profile.agent_role = t.role
       profile.customer_noun = t.caller
@@ -252,7 +256,7 @@ export default function NewAgentSheet({ open, onClose, onCreated }: {
             </Field>
           </div>
           <Field label={copyFrom ? 'What the company does' : 'What the company does *'} hint="One or two lines the agent can say. Details belong in the knowledge base.">
-            <Textarea name="company_tagline" rows={2} required={!copyFrom} maxLength={400} placeholder="e.g. 2 & 3 BHK apartments in Hinjewadi, Pune, ready to move in, from ₹65 lakh." />
+            <Textarea name="company_tagline" rows={2} required={!copyFrom} maxLength={200} placeholder="e.g. 2 & 3 BHK apartments in Hinjewadi, Pune, ready to move in, from ₹65 lakh." />
           </Field>
         </section>
 

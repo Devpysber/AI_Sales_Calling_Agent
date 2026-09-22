@@ -112,7 +112,7 @@ def _send_smtp(to: str, subject: str, body: str, from_: str):
     if settings.email_reply_to:
         message["Reply-To"] = settings.email_reply_to
     message.set_content(body)
-    message.add_alternative(_html_template(body), subtype='html')
+    message.add_alternative(_html_template(body, from_.split("<")[0].strip().strip('"')), subtype='html')
     with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
         smtp.starttls()
         if settings.smtp_username:

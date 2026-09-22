@@ -2,6 +2,10 @@
 
 from app.services import llm
 
+# conftest's autouse fake_ai fixture replaces llm.embed with a stub for every test;
+# grab the real function here, at import time, before any fixture runs.
+_real_embed = llm.embed
+
 
 class _Resp:
     def __init__(self, status_code: int, body: dict | None = None):
@@ -21,7 +25,7 @@ def test_no_credits_marks_openrouter_dead_and_returns_none(monkeypatch):
     marked = []
     monkeypatch.setattr(llm, "_mark_openrouter_dead", lambda reason: marked.append(reason))
 
-    assert llm.embed(["hello"]) is None
+    assert _real_embed(["hello"]) is None
     assert marked, "a 402 response must mark OpenRouter dead"
 
 
@@ -33,5 +37,5 @@ def test_unrelated_error_status_does_not_mark_openrouter_dead(monkeypatch):
     marked = []
     monkeypatch.setattr(llm, "_mark_openrouter_dead", lambda reason: marked.append(reason))
 
-    assert llm.embed(["hello"]) is None
+    assert _real_embed(["hello"]) is None
     assert not marked, "a 5xx response should not be treated as an account error"

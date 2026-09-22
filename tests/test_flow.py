@@ -89,8 +89,10 @@ def test_knowledge_rag(client, base):
         if client.get(f"{base}/knowledge/{doc['id']}").json()["status"] == "ready":
             break
         time.sleep(0.05)
-    results = client.post(f"{base}/knowledge/search", json={"query": "growth plan price"}).json()["results"]
+    resp = client.post(f"{base}/knowledge/search", json={"query": "growth plan price"}).json()
+    results = resp["results"]
     assert results and "Growth plan" in results[0]["text"]
+    assert resp["semantic"] is False  # no embeddings configured in tests: keyword-only mode
 
     reply = client.post(f"{base}/playground", json={"message": "What does the growth plan cost?", "speak": True}).json()
     assert reply["reply"] == "Our Growth plan fits you."  # knowledge reached the prompt

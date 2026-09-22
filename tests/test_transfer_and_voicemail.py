@@ -104,3 +104,40 @@ def test_plivo_machine_verdict_hangs_up_and_ends_as_no_answer(client, base, monk
         sid2 = db.get(Call, cid2).session_id
     client.post(f"/api/plivo/answer?sid={sid2}&cid={cid2}", data={"CallUUID": "u-n", "Machine": "true"})
     assert not call_session.get(sid2).get("voicemail")
+
+
+def test_missed_transfer_books_a_callback_emails_the_team_and_tells_the_caller(client, base, monkeypatch):
+    """Team did not pick up: callback task with the request, outcome callback_requested, email with call id, customer-facing line."""
+    import time
+    from app.services import agents, call_session, notification_service
+    from app.services.call_service import CallService
+    agent_id = int(base.rsplit("/", 1)[1])
+    agents.update_profile(agent_id, {"transfer_number": "+919000000011", "forward_fallback": "message", "notify_missed_calls": True,
+                                     "team_members": [{"name": "Neha", "role": "Sales", "phone": "+919000000011", "email": "neha@team.test"}]}, actor="test")
+    monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
+    monkeypatch.setattr("app.services.call_service.public_url_reachable", lambda: True)
+    monkeypatch.setattr("app.services.call_service.CallService.active_count", lambda self: 0)
+    sent = []
+    monkeypatch.setattr(notification_service, "send_email", lambda to, subject, body, **k: sent.append((to, subject, body)) or "sent via test")
+    lead = client.post(f"{base}/leads", json={"name": "Missed", "phone": "9477777777"}).json()
+    cid = client.post(f"{base}/calls", json={"lead_id": lead["id"]}).json()["call_id"]
+    from app.models.call import Call
+    from app.core.database import get_db
+    with get_db() as db:
+        sid = db.get(Call, cid).session_id
+    session = call_session.get(sid)
+    call_session.add_turn(session, "customer", "us Swift ka inspection report chahiye")
+    call_session.save(session)
+    call_session.update(sid, transfer_reason="us Swift ka inspection report chahiye")
+    xml = client.post(f"/api/plivo/transfer-done?sid={sid}&cid={cid}&idx=5", data={"DialStatus": "no-answer"}).text
+    assert "passed your request" in xml or "<Play" in xml
+    assert "<Hangup" in xml and "<Record" not in xml
+    for _ in range(50):  # the callback and the email are made off the reply path
+        if sent and (client.get(f"{base}/leads/{lead['id']}").json().get("callback_at")):
+            break
+        time.sleep(0.05)
+    after = client.get(f"{base}/leads/{lead['id']}").json()
+    assert after["callback_at"] and after["call_status"] == "Pending" and "inspection report" in (after.get("notes") or "")
+    assert client.get(f"{base}/calls/{cid}").json()["outcome"] == "callback_requested"
+    to, subject, body = next(m for m in sent if m[0] == "neha@team.test")
+    assert "Callback needed" in subject and "inspection report" in body and f"Call ID: {cid}" in body and "+919477777777" in body

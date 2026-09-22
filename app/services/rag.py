@@ -78,17 +78,23 @@ def expand_query(query: str) -> str:
 def extract_text(filename: str, content: bytes) -> str:
     name = filename.lower()
     if name.endswith(".pdf"):
-        from pypdf import PdfReader
-        reader = PdfReader(io.BytesIO(content))
-        return "\n\n".join((page.extract_text() or "") for page in reader.pages)
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(content))
+            return "\n\n".join((page.extract_text() or "") for page in reader.pages)
+        except Exception as e:
+            raise ValueError(f"Could not read the file ({type(e).__name__}). Is it encrypted or corrupt?") from e
     if name.endswith(".docx"):
-        import docx
-        document = docx.Document(io.BytesIO(content))
-        parts = [p.text for p in document.paragraphs]
-        for table in document.tables:
-            for row in table.rows:
-                parts.append(" | ".join(cell.text for cell in row.cells))
-        return "\n".join(parts)
+        try:
+            import docx
+            document = docx.Document(io.BytesIO(content))
+            parts = [p.text for p in document.paragraphs]
+            for table in document.tables:
+                for row in table.rows:
+                    parts.append(" | ".join(cell.text for cell in row.cells))
+            return "\n".join(parts)
+        except Exception as e:
+            raise ValueError(f"Could not read the file ({type(e).__name__}). Is it encrypted or corrupt?") from e
     if name.endswith((".txt", ".md", ".csv")):
         for encoding in ("utf-8-sig", "cp1252", "latin-1"):
             try:
@@ -155,30 +161,35 @@ def add_text(agent_id: int, title: str, text: str, actor: str = "admin") -> dict
 def _process(agent_id: int, doc_id: int, text: str, actor: str):
     try:
         chunks = chunk_text(text)
-        # Embed in batches; keyword search still works if this fails
+        # Embed in batches; keyword search still works if this fails. A failed batch keeps chunks
+        # already embedded rather than discarding every billed call made so far.
         collected = []
         for batch in (chunks[i:i + 64] for i in range(0, len(chunks), 64)):
             result = llm.embed(batch)
             if result is None:
-                collected = None
+                collected.extend([None] * len(batch))
                 break
             collected.extend(result)
         vectors = collected
 
         with get_db() as db:
             for i, chunk in enumerate(chunks):
-                vector = np.asarray(vectors[i], dtype=np.float32).tobytes() if vectors else None
+                vector = (np.asarray(vectors[i], dtype=np.float32).tobytes()
+                          if vectors and vectors[i] is not None else None)
                 db.add(DocumentChunk(document_id=doc_id, position=i, text=chunk, embedding=vector))
             doc = db.get(Document, doc_id)
             doc.chunk_count = len(chunks)
-            doc.embedded = bool(vectors)
+            doc.embedded = any(v is not None for v in vectors)
+            if vectors and not all(v is not None for v in vectors):
+                doc.error = ("Semantic search unavailable for some passages (embedding provider "
+                             "failed); keyword search works.")
             doc.status = "ready"
             title = doc.title
         _bump_version(agent_id)
         from app.services import knowledge_profile
         knowledge_profile.rebuild_async(agent_id)
         events.record("document.added", f"Knowledge added: {title}",
-                      f"{len(chunks)} chunks · {'semantic + keyword' if vectors else 'keyword'} search",
+                      f"{len(chunks)} chunks · {'semantic + keyword' if any(v is not None for v in vectors) else 'keyword'} search",
                       agent_id=agent_id, actor=actor, data={"document_id": doc_id})
     except Exception as e:
         log.exception("Document %s processing failed", doc_id)
@@ -340,7 +351,9 @@ def prefetch(agent_id: int, query: str, timeout: float = 2.5) -> None:
 
     def run():
         try:
-            _load_index(agent_id)
+            idx = _load_index(agent_id)
+            if idx.vectors is None or not idx.has_vector.any():
+                return None  # no embedded chunks to search; don't pay for a query embedding
             return _do_embed(query, timeout)
         except Exception as e:  # noqa: BLE001 - a warm cache is an optimisation, never a failure
             log.debug("RAG prefetch failed: %s", e)

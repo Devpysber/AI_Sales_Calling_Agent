@@ -790,6 +790,7 @@ class CallService:
             if merged != (current.get("notes") or ""):
                 updates["notes"] = merged
             callback_at = _valid_callback(s.get("callback_at"))
+            synthetic_callback = False
             if meeting_at:
                 # A meeting or visit is booked: the meeting IS the next contact. A callback on top rang the
                 # customer twice ("discovery call at 5 PM" plus a callback an hour later).
@@ -803,6 +804,7 @@ class CallService:
                 except Exception:
                     cfg = {}
                 callback_at = _next_callback_slot(cfg)
+                synthetic_callback = True
                 events.record("callback.unclear", f"Callback time unclear — scheduled for {callback_at}",
                               f"Model gave: {str(s.get('callback_at') or '')[:60] or 'no time'}",
                               agent_id=self.agent_id, lead_id=lead_id, call_id=call_id, actor="ai")
@@ -815,11 +817,25 @@ class CallService:
                 # message IS "stop calling me": ringing them an hour later is the opposite of what they asked.
                 soon = 15 if str(s.get("urgent") or "").lower() in ("true", "yes", "1") else 60
                 callback_at = (datetime.now(IST) + timedelta(minutes=soon)).strftime("%Y-%m-%d %H:%M")
+                synthetic_callback = True
                 if soon == 15 and str(s.get("team_action") or "").strip():
                     self._urgent_team_alert(lead_id, call_id, str(s.get("team_action")))
             if callback_at:
                 updates["callback_at"] = callback_at
                 updates.setdefault("follow_up_date", callback_at[:10])
+                if synthetic_callback:
+                    # The lead never agreed to this time (it's our own +15/+60 min or unclear-time
+                    # fallback slot): don't send a "we have scheduled a follow-up call" email for it.
+                    updates["_no_followup_email"] = True
+            emails_for_lead = s.get("send_email") or []
+            if isinstance(emails_for_lead, dict):
+                emails_for_lead = [emails_for_lead]
+            if isinstance(emails_for_lead, list) and any(
+                isinstance(e, dict) and "lead" in str(e.get("to") or "").lower() for e in emails_for_lead
+            ):
+                # A send_email to the lead is already queued below for this same call: don't also fire
+                # the CRM's own "follow-up call scheduled" mail on top of it.
+                updates["_no_followup_email"] = True
             spoken_lang = spoken_language(history)
             if spoken_lang and spoken_lang != (self.crm.get(lead_id) or {}).get("language"):
                 # The script the caller actually used beats a seeded or guessed value: the next call's greeting
@@ -870,14 +886,10 @@ class CallService:
                         for recipient in set(recipients):
                             try:
                                 status = send_email(recipient, subject, e["body"], lead_id=lead_id, agent_id=self.agent_id, actor="ai")
-                                if email_sent(status):
-                                    events.record("email.sent", f"Sent email to {target} ({recipient})", lead_id=lead_id, call_id=call_id, actor="ai")
-                                else:
+                                if not email_sent(status):
                                     log.error("Failed to send post-call email to %s: %s", recipient, status)
-                                    events.record("email.failed", f"Failed to send email to {target}: {status}", lead_id=lead_id, call_id=call_id, actor="system")
                             except Exception as err:
                                 log.error("Failed to send post-call email to %s: %s", recipient, err)
-                                events.record("email.failed", f"Failed to send email to {target}: {err}", lead_id=lead_id, call_id=call_id, actor="system")
             if callback_at:
                 events.record("callback.scheduled", f"Callback scheduled for {callback_at}", lead_id=lead_id, call_id=call_id, actor="ai")
 
@@ -1120,7 +1132,7 @@ class CallService:
         self.crm.update(lead["id"], {"callback_at": at, "call_status": "Pending"}, actor="system",
                         event_type="callback.postponed", title=f"Call moved to {later:%d %b %H:%M}: AI providers unavailable")
         company = (agents.get_profile(self.agent_id) or {}).get("company_name") or (agents.get(self.agent_id) or {}).get("name") or "our team"
-        if lead.get("email") and not lead.get("do_not_call"):
+        if lead.get("email") and not lead.get("do_not_call") and agents.get_automation(self.agent_id).get("ai_auto_emails", True):
             body = (f"Hi {lead.get('name') or ''},\n\nWe were about to call you but our lines are busy right now. "
                     f"We will call you around {later:%I:%M %p} today ({later:%d %b}).\n\nIf another time suits you better, just reply to this email.\n\n{company}")
             email_sent(send_email(lead["email"], f"{company}: we will call you a little later", body, lead_id=lead["id"], agent_id=self.agent_id, actor="system"))

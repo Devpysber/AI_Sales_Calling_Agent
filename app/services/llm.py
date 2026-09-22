@@ -597,6 +597,12 @@ def embed(texts: list[str], timeout: float = 30) -> list[list[float]] | None:
             json={"model": settings.openrouter_embedding_model, "input": texts},
             timeout=timeout,
         )
+        if res.status_code >= 400:
+            msg = f"{res.status_code}: {res.text[:200]}"
+            if res.status_code in (401, 402):
+                _mark_openrouter_dead(msg)
+            log.warning("Embeddings unavailable: %s", msg)
+            return None
         data = res.json()
         vectors = [item["embedding"] for item in sorted(data["data"], key=lambda d: d.get("index", 0))]
         return vectors if len(vectors) == len(texts) else None

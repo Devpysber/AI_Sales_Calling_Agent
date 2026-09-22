@@ -456,25 +456,61 @@ async def transfer(request: Request):
     return xml(r)
 
 
-FALLBACK_LINES = {"en": "Sorry, our team is busy right now. I can help you, what do you need?",
-                  "hi": "माफ़ कीजिए, हमारी टीम अभी व्यस्त है। मैं आपकी मदद कर सकता हूँ, बताइए क्या जानना है?"}
+# Nobody on the team picked up: the caller hears that the request has been passed on and a call back is coming
+# (never "I sent an email"). With the AI fallback on, the agent stays on the line for anything else.
+FALLBACK_LINES = {"en": "The team is on another call right now, but I have passed your request to them and they will call you back shortly. Anything else I can help with meanwhile?",
+                  "hi": "टीम अभी दूसरी call पर है, पर मैंने आपकी बात उन तक पहुँचा दी है, वो आपको जल्दी call करेंगे। इस बीच और कुछ पूछना है?"}
+FALLBACK_CLOSE = {"en": "The team is on another call right now, but I have passed your request to them and they will call you back shortly. Thank you.",
+                  "hi": "टीम अभी दूसरी call पर है, पर मैंने आपकी बात उन तक पहुँचा दी है, वो आपको जल्दी call करेंगे। धन्यवाद।"}
 
 
 def _notify_missed(session: dict, persona: dict, status: str):
-    """Tell the whole team about a forwarded call nobody answered, with the caller's details."""
-    from app.services.notification_service import notify_team
+    """Tell the team about a forwarded call nobody answered: who, their number, what they wanted, the call id."""
+    from app.services.notification_service import notify_team, send_email, email_sent
 
     if not persona.get("notify_missed_calls", True):
         return
     lead = session.get("lead") or {}
     who = lead.get("name") or lead.get("phone") or "Unknown caller"
-    lines = [f"{who} called {persona.get('company_name')} and was forwarded to {persona.get('transfer_number')}, but nobody answered ({status}).",
-             "", f"Phone: {lead.get('phone') or '—'}"]
+    request_text = (session.get("transfer_reason") or "").strip()
+    lines = [f"{who} called {persona.get('company_name')} and asked for the team; the transfer to {persona.get('transfer_number')} was not answered ({status}).",
+             "", f"Phone: {lead.get('phone') or '—'}", f"Request: {request_text or 'not captured — see the transcript'}",
+             f"Call ID: {session.get('call_id') or '—'}", f"Agent: {persona.get('agent_name')} · {persona.get('company_name')}"]
     for key, label in (("company", "Company"), ("status", "Stage"), ("summary", "Last summary"), ("meeting_at", "Meeting")):
         if lead.get(key):
             lines.append(f"{label}: {lead[key]}")
-    lines += ["", "Call them back soon."]
-    notify_team(f"Missed call: {who}", "\n".join(lines), lead_id=session.get("lead_id"), agent_id=session.get("agent_id"))
+    lines += ["", "The caller was told the team will call back; a callback is on the lead."]
+    subject = f"Callback needed: {who} - {persona.get('company_name')}"
+    delivered = set(notify_team(subject, "\n".join(lines), lead_id=session.get("lead_id"), agent_id=session.get("agent_id")))
+    # This agent's own team list (per-agent members may not be in the shared accounts list).
+    for m in persona.get("team_members") or []:
+        address = (m.get("email") or "").strip().lower() if isinstance(m, dict) else ""
+        if address and address not in delivered:
+            if email_sent(send_email(address, subject, "\n".join(lines), lead_id=session.get("lead_id"), agent_id=session.get("agent_id"), actor="ai")):
+                delivered.add(address)
+
+
+def _book_callback_after_missed_transfer(session: dict, persona: dict) -> None:
+    """A callback task on the lead with the caller's request, and the call marked callback_requested."""
+    from app.core.database import get_db
+    from app.models.call import Call
+    from app.services.call_service import _next_callback_slot
+    from app.services.crm_service import CRMService
+    lead_id, agent_id = session.get("lead_id"), session.get("agent_id")
+    request_text = (session.get("transfer_reason") or "").strip()
+    if lead_id and agent_id:
+        crm = CRMService(agent_id)
+        current = crm.get(lead_id) or {}
+        note = f"[missed transfer] Asked for the team: {request_text or 'see transcript'}"
+        notes = ((current.get("notes") or "") + "\n" + note).strip()[-2000:]
+        when = _next_callback_slot(agents.get_automation(agent_id))
+        crm.update(lead_id, {"callback_at": when, "call_status": "Pending", "notes": notes}, actor="system",
+                   event_type="callback.scheduled", title=f"Callback {when}: team did not pick up the transfer")
+    if session.get("call_id"):
+        with get_db() as db:
+            call = db.get(Call, session["call_id"])
+            if call is not None:
+                call.outcome = "callback_requested"
 
 
 @router.post("/transfer-done")
@@ -505,7 +541,10 @@ async def transfer_done(request: Request):
     if cid:
         await asyncio.to_thread(CallService().mark_transferred, cid, f"Team did not answer ({status})", None)
     if session:
-        asyncio.get_running_loop().run_in_executor(None, _notify_missed, session, persona, status)
+        # Off the reply path: the caller hears the fallback line while the callback and the email are made.
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, _book_callback_after_missed_transfer, session, persona)
+        loop.run_in_executor(None, _notify_missed, session, persona, status)
 
     key = lang_key(session)
     if persona.get("forward_fallback", "ai") == "ai":
@@ -522,14 +561,15 @@ async def transfer_done(request: Request):
             await asyncio.to_thread(listen, r, session, text=greeting if not audio_id else None, audio_id=audio_id)
             return xml(r)
 
-    text = ("Sorry, our team is not available right now. Please leave a message after the beep." if key == "en"
-            else "माफ़ करना, हमारी टीम अभी व्यस्त है। कृपया बीप के बाद अपना संदेश छोड़ें।")
+    # AI fallback off: the caller is told the request is with the team and the call ends; the callback and
+    # the email above carry the request, so no voicemail beep is needed.
+    text = FALLBACK_CLOSE[key]
     if session:
+        call_session.add_turn(session, "assistant", text)
+        call_session.save(session)
         audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
         speak(r, session, text, audio_id=audio_id)
-        # Record voicemail up to 2 minutes
-        r.add(plivoxml.RecordElement(action=f"{settings.base_url}/api/plivo/voicemail?cid={session['call_id']}",
-                                     method="POST", max_length=120, play_beep=True))
+        r.add(plivoxml.HangupElement())
     else:
         r.add(plivoxml.SpeakElement(text, voice="WOMAN", language="en-IN"))
         r.add(plivoxml.HangupElement())

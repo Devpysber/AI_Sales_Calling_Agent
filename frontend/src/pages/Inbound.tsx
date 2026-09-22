@@ -300,7 +300,7 @@ export default function Inbound() {
               </label>
               <label className={cn('flex items-center gap-3 rounded-xl border border-border px-3 py-2.5 text-sm', !hasNumber && 'opacity-50')}>
                 <Bot className="size-4 shrink-0 text-fg-2" />
-                <span className="min-w-0 flex-1"><span className="block font-semibold">If your team doesn't pick up, the AI takes the call</span><span className="text-xs text-muted">Off: the caller hears “our team will call you back” and the call ends.</span></span>
+                <span className="min-w-0 flex-1"><span className="block font-semibold">If your team doesn't pick up, the AI takes the call</span><span className="text-xs text-muted">Either way a missed transfer books a callback with the caller's request and emails the team. On: the agent tells the caller the team will ring back and stays on the line. Off: the caller hears that and the call ends.</span></span>
                 <Switch checked={form.forward_fallback === 'ai'} onChange={(v) => set('forward_fallback', v ? 'ai' : 'message')} disabled={!hasNumber || busy} label="AI fallback" />
               </label>
               <label className={cn('flex items-center gap-3 rounded-xl border border-border px-3 py-2.5 text-sm', !hasNumber && 'opacity-50')}>

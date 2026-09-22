@@ -32,7 +32,7 @@ def _to_ist_text(value: str) -> str | None:
 def send_email_tool(to: str, subject: str, body: str, agent_id: int) -> str:
     """Send an email to anyone."""
     try:
-        status = send_email(to, subject, body, agent_id=agent_id, actor="system")
+        status = send_email(to, subject, body, agent_id=agent_id, actor="ai")
         return f"Email successfully sent to {to}" if email_sent(status) else f"Failed to send email: {status}"
     except Exception as e:
         return f"Failed to send email: {str(e)}"
@@ -861,7 +861,7 @@ def execute_tool(name: str, arguments: str, agent_id: int, role: str = "team") -
     except Exception as e:
         log.exception("tool %s failed", name)
         result = f"Tool {name} failed: {e}"
-    if result.lower().startswith(("failed", "tool ", "access denied", "error")):
+    if name != "send_email" and result.lower().startswith(("failed", "tool ", "access denied", "error")):
         from app.services.heal_service import report
         report("tool_failed", f"{name}({json.dumps(args, ensure_ascii=False)[:300]}) -> {result[:300]}", agent_id=agent_id,
                data={"name": name, "args": args, "agent_id": agent_id, "role": role}, title=f"Call tool failed: {name}")

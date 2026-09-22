@@ -315,13 +315,19 @@ const EXAMPLES = ['How much does it cost?', 'What services do you offer?', 'How 
 function RetrievalTester({ docs, onOpen }: { docs: KnowledgeDoc[]; onOpen: (id: number) => void }) {
   const { base } = useAgent()
   const [query, setQuery] = useState('')
-  const search = useMutation({ mutationFn: (q: string) => api<{ results: SearchResult[] }>(`${base}/knowledge/search`, { method: 'POST', json: { query: q, top_k: 4 } }) })
+  const search = useMutation({ mutationFn: (q: string) => api<{ results: SearchResult[]; semantic: boolean }>(`${base}/knowledge/search`, { method: 'POST', json: { query: q, top_k: 3 } }) })
   const run = (q: string) => { const t = q.trim(); if (t) { setQuery(t); search.mutate(t) } }
   const results = search.data?.results
   const best = results?.[0]?.score ?? 0
+  // Keyword-only mode (no embeddings) normalises BM25 to 1.0 on any single term hit, so a lone
+  // keyword match anywhere in the doc can otherwise read as "well covered" when the live call
+  // (which gates on needs_knowledge() and a much shorter embed budget) might retrieve nothing.
+  const queryTerms = [...new Set(query.toLowerCase().split(/\W+/).filter((w) => w.length >= 3))]
+  const matchedTerms = results?.length ? queryTerms.filter((w) => (results[0].title + ' ' + results[0].text).toLowerCase().includes(w)).length : 0
+  const keywordOnlyWeak = !search.data?.semantic && matchedTerms < 2
   const verdict = !results ? null : !results.length || best < 0.2
     ? { tone: 'danger' as const, text: 'Not covered — the agent will offer a specialist follow-up instead of answering.' }
-    : best < 0.45 ? { tone: 'warning' as const, text: 'Weak match — the answer may be vague. Consider adding a clearer note.' }
+    : best < 0.45 || keywordOnlyWeak ? { tone: 'warning' as const, text: 'Weak match — the answer may be vague. Consider adding a clearer note.' }
       : { tone: 'success' as const, text: 'Well covered — the agent can answer this confidently.' }
 
   return (

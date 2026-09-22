@@ -1007,10 +1007,11 @@ class CallStream:
             return
         self.compacted_at = turns
         history, prior = list(self.session["history"]), self.session.get("summary")
+        since = int(self.session.get("compacted_upto") or 0)
 
         def run():
             try:
-                return agent.compact_history(history, prior)
+                return agent.compact_history(history, prior, since=since)
             except Exception as e:  # noqa: BLE001 - the summary is an optimisation, not state we need
                 log.warning("History compaction failed for %s: %s", self.session_id[:8], e)
                 return None

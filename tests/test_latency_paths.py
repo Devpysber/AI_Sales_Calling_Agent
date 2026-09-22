@@ -34,6 +34,22 @@ def test_compact_history_only_folds_turns_past_the_window(monkeypatch):
     assert "line 17" not in folded  # inside the window: still sent verbatim as a turn
 
 
+def test_compact_history_since_skips_already_summarised_turns(monkeypatch):
+    calls = []
+
+    def fake_complete(messages, **kw):
+        calls.append(messages)
+        return type("R", (), {"text": "summary"})()
+
+    monkeypatch.setattr(agent.llm, "complete", fake_complete)
+
+    history = turns(agent.MAX_HISTORY_TURNS + 20)
+    agent.compact_history(history, "old summary", since=10)
+    folded = calls[0][1]["content"]
+    assert "line 0" not in folded and "line 9" not in folded  # already covered by prior summary
+    assert "line 10" in folded  # first turn past the prior compaction edge
+
+
 def test_a_summary_reaches_the_prompt_as_earlier_in_this_call(monkeypatch):
     monkeypatch.setattr(agent.rag, "search", lambda *a, **k: [])
     monkeypatch.setattr(agent.agents, "get_profile", lambda _id: {"agent_name": "A", "company_name": "Acme",
@@ -74,7 +90,10 @@ def test_reply_path_joins_an_inflight_prefetch_instead_of_a_second_embed_call(mo
         return [[0.4, 0.5, 0.6]]
 
     monkeypatch.setattr(rag.llm, "embed", fake_embed)
-    monkeypatch.setattr(rag, "_load_index", lambda agent_id: None)
+    monkeypatch.setattr(rag, "_load_index", lambda agent_id: type("Idx", (), {
+        "vectors": __import__("numpy").array([[1.0, 0.0]], dtype="float32"),
+        "has_vector": __import__("numpy").array([True]),
+    })())
     rag._embed_cache.clear()
     rag._inflight.clear()
 

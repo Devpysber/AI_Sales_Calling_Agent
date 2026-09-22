@@ -53,19 +53,19 @@ class TTSError(RuntimeError):
 # Paired with miniaudio for clean MP3 → WAV / PCM conversion.
 # ---------------------------------------------------------------------------
 
-# Best Edge TTS neural voice per Indian language code
-_EDGE_VOICE_MAP: dict[str, str] = {
-    "hi-IN": "hi-IN-MadhurNeural",      # Hindi – male, natural
-    "en-IN": "en-IN-NeerjaNeural",      # Indian English – female
-    "bn-IN": "bn-IN-BashkarNeural",     # Bengali – male
-    "ta-IN": "ta-IN-ValluvarNeural",    # Tamil – male
-    "te-IN": "te-IN-MohanNeural",       # Telugu – male
-    "kn-IN": "kn-IN-GaganNeural",       # Kannada – male
-    "ml-IN": "ml-IN-MidhunNeural",      # Malayalam – male
-    "mr-IN": "mr-IN-ManoharNeural",     # Marathi – male
-    "gu-IN": "gu-IN-NiranjanNeural",    # Gujarati – male
-    "pa-IN": "hi-IN-MadhurNeural",      # Punjabi – Edge has no pa-IN; Hindi closest
-    "od-IN": "hi-IN-MadhurNeural",      # Odia – Edge has no od-IN; Hindi closest
+# Best Edge TTS neural voice per Indian language code, as (male, female) pairs
+_EDGE_VOICE_MAP: dict[str, tuple[str, str]] = {
+    "hi-IN": ("hi-IN-MadhurNeural", "hi-IN-SwaraNeural"),
+    "en-IN": ("en-IN-PrabhatNeural", "en-IN-NeerjaNeural"),
+    "bn-IN": ("bn-IN-BashkarNeural", "bn-IN-TanishaaNeural"),
+    "ta-IN": ("ta-IN-ValluvarNeural", "ta-IN-PallaviNeural"),
+    "te-IN": ("te-IN-MohanNeural", "te-IN-ShrutiNeural"),
+    "kn-IN": ("kn-IN-GaganNeural", "kn-IN-SapnaNeural"),
+    "ml-IN": ("ml-IN-MidhunNeural", "ml-IN-SobhanaNeural"),
+    "mr-IN": ("mr-IN-ManoharNeural", "mr-IN-AarohiNeural"),
+    "gu-IN": ("gu-IN-NiranjanNeural", "gu-IN-DhwaniNeural"),
+    "pa-IN": ("hi-IN-MadhurNeural", "hi-IN-SwaraNeural"),  # Edge has no pa-IN; Hindi closest
+    "od-IN": ("hi-IN-MadhurNeural", "hi-IN-SwaraNeural"),  # Edge has no od-IN; Hindi closest
 }
 
 
@@ -76,14 +76,17 @@ def _is_quota_error(err_text: str) -> bool:
     return any(m in low for m in markers)
 
 
-def _edge_mp3_bytes(text: str, language: str | None = None) -> bytes:
+def _edge_mp3_bytes(text: str, language: str | None = None, speaker: str | None = None) -> bytes:
     """Return MP3 bytes from Microsoft Edge TTS (neural voice, no API key)."""
     import asyncio
     import io
     import edge_tts
+    from app.services.agent import FEMALE_SPEAKERS
 
     lang_code = language or detect_language(text)
-    voice = _EDGE_VOICE_MAP.get(lang_code, "hi-IN-MadhurNeural")
+    male_voice, female_voice = _EDGE_VOICE_MAP.get(lang_code, ("hi-IN-MadhurNeural", "hi-IN-SwaraNeural"))
+    female = (speaker or "").strip().lower() in FEMALE_SPEAKERS
+    voice = female_voice if female else male_voice
 
     async def _run() -> bytes:
         buf = io.BytesIO()
@@ -130,15 +133,15 @@ def _mp3_to_pcm8k(mp3_bytes: bytes) -> bytes:
     return bytes(decoded.samples)
 
 
-def _edge_synthesize_wav(text: str, language: str | None = None) -> bytes:
+def _edge_synthesize_wav(text: str, language: str | None = None, speaker: str | None = None) -> bytes:
     """Synthesise speech with Edge TTS and return WAV bytes."""
-    mp3 = _edge_mp3_bytes(text, language)
+    mp3 = _edge_mp3_bytes(text, language, speaker)
     return _mp3_to_wav(mp3)
 
 
-def _edge_synthesize_pcm(text: str, language: str | None = None) -> bytes:
+def _edge_synthesize_pcm(text: str, language: str | None = None, speaker: str | None = None) -> bytes:
     """Synthesise speech with Edge TTS and return raw 16-bit PCM at 8 kHz."""
-    mp3 = _edge_mp3_bytes(text, language)
+    mp3 = _edge_mp3_bytes(text, language, speaker)
     return _mp3_to_pcm8k(mp3)
 
 
@@ -155,7 +158,7 @@ def detect_language(text: str, default: str = "en-IN") -> str:
 def _sarvam_synthesize(text: str, language: str | None = None, speaker: str | None = None) -> bytes:
     if not settings.sarvam_api_key:
         log.warning("SARVAM_API_KEY not set – falling back to Edge TTS")
-        return FallbackAudio(_edge_synthesize_wav(text, language))
+        return FallbackAudio(_edge_synthesize_wav(text, language, speaker))
     body = {
         "text": text[:2500],
         "target_language_code": language or detect_language(text),
@@ -173,7 +176,7 @@ def _sarvam_synthesize(text: str, language: str | None = None, speaker: str | No
                 err_msg = f"Sarvam TTS {res.status_code}: {res.text[:200]}"
                 if _is_quota_error(res.text + str(res.status_code)):
                     log.warning("%s – switching to Edge TTS fallback", err_msg)
-                    return FallbackAudio(_edge_synthesize_wav(text, language))
+                    return FallbackAudio(_edge_synthesize_wav(text, language, speaker))
                 raise TTSError(err_msg)
             return b"".join(base64.b64decode(chunk) for chunk in res.json()["audios"])
         except TTSError as e:
@@ -189,7 +192,7 @@ def _sarvam_synthesize_pcm(text: str, language: str | None = None, speaker: str 
     """Raw 16-bit little-endian mono PCM at 8 kHz, ready for the phone stream."""
     if not settings.sarvam_api_key:
         log.warning("SARVAM_API_KEY not set – falling back to Edge TTS for PCM")
-        return FallbackAudio(_edge_synthesize_pcm(text, language))
+        return FallbackAudio(_edge_synthesize_pcm(text, language, speaker))
     body = {"text": text[:2500], "target_language_code": language or detect_language(text), "model": settings.sarvam_tts_model,
             "speech_sample_rate": 8000, "output_audio_codec": "linear16"}
     if speaker:
@@ -199,7 +202,7 @@ def _sarvam_synthesize_pcm(text: str, language: str | None = None, speaker: str 
         err_msg = f"Sarvam TTS {res.status_code}: {res.text[:200]}"
         if _is_quota_error(res.text + str(res.status_code)):
             log.warning("%s – switching to Edge TTS fallback for PCM", err_msg)
-            return FallbackAudio(_edge_synthesize_pcm(text, language))
+            return FallbackAudio(_edge_synthesize_pcm(text, language, speaker))
         raise TTSError(err_msg)
     pcm = b"".join(base64.b64decode(chunk) for chunk in res.json()["audios"])
     return pcm[44:] if pcm[:4] == b"RIFF" else pcm

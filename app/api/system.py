@@ -323,6 +323,19 @@ async def update_secrets(body: dict):
     saved = sorted([k for k, v in credentials.items() if v] + [k for k in body if k in plain])
     return {"ok": True, "saved": saved, "cleared": sorted(k for k, v in credentials.items() if not v)}
 
+@router.post("/system/email/test", dependencies=[Depends(require_admin)])
+async def send_test_email():
+    """Send a one-line test email to the logged-in admin, so the provider can be verified from the
+    UI instead of on the first real customer email."""
+    from app.core.auth import login_email
+    from app.services.notification_service import send_email
+    to = login_email()
+    if not to:
+        raise HTTPException(400, "No admin email on file to send the test to.")
+    status = send_email(to, "Test email", "This is a test email from your AI Voice Agent system.",
+                         actor="system")
+    return {"ok": True, "to": to, "status": status}
+
 @router.get("/system/team-members", dependencies=[Depends(require_admin)])
 async def get_team_members():
     from app.services import agents as agent_service

@@ -239,6 +239,15 @@ function ProfileEditor({ section, draft, setDraft, data }: {
 
   const fill = (t: string) => t.replace(/\{(\w+)\}/g, (m, k: string) => ({ name: 'Rahul', agent: draft.agent_name, company: draft.company_name })[k] ?? m)
 
+  // Mirrors app/services/agent.py FEMALE_SPEAKERS/genderize: the live call rewrites masculine Hindi
+  // first-person verb forms to feminine for these speakers, so the preview must match.
+  const FEMALE_SPEAKERS = new Set(['priya', 'neha', 'pooja', 'simran', 'kavya', 'ishita', 'shreya', 'tanya', 'shruti', 'suhani',
+    'kavitha', 'rupali', 'ritu', 'roopa', 'anushka', 'manisha', 'vidya', 'arya', 'maya', 'meera'])
+  const FEMININE_PAIRS: [string, string][] = [['बोल रहा हूँ', 'बोल रही हूँ'], ['सुन नहीं पाया', 'सुन नहीं पाई'], ['जोड़ता हूँ', 'जोड़ती हूँ'],
+    ['सकता हूँ', 'सकती हूँ'], ['करता हूँ', 'करती हूँ'], ['देता हूँ', 'देती हूँ'], ['रहा हूँ', 'रही हूँ'], ['समझ गया', 'समझ गई']]
+  const genderize = (t: string) => FEMALE_SPEAKERS.has((draft.voice_speaker || '').trim().toLowerCase())
+    ? FEMININE_PAIRS.reduce((s, [masc, fem]) => s.split(masc).join(fem), t) : t
+
   const preview = async (key: string, text: string, language: string) => {
     const token = ++previewToken.current
     if (playing === key) { audio.current?.pause(); setPlaying(null); return }
@@ -330,7 +339,7 @@ function ProfileEditor({ section, draft, setDraft, data }: {
         </Section>
 
         <Section title="Voice" description="Sarvam Bulbul text-to-speech."
-          aside={<Button size="sm" onClick={() => preview('voice', fill(draft.greeting_en || `Hello, this is ${draft.agent_name}.`), 'en-IN')}>{playing === 'voice' ? <Square /> : <Volume2 />}{playing === 'voice' ? 'Stop' : 'Hear voice'}</Button>}>
+          aside={<Button size="sm" onClick={() => preview('voice', genderize(fill(draft.greeting_en || `Hello, this is ${draft.agent_name}.`)), 'en-IN')}>{playing === 'voice' ? <Square /> : <Volume2 />}{playing === 'voice' ? 'Stop' : 'Hear voice'}</Button>}>
           <div className="grid gap-4 sm:grid-cols-3">
             <Field label="Speaker"><Select value={draft.voice_speaker} onChange={(e) => set('voice_speaker', e.target.value)}>{data.voices.map((v) => <option key={v} value={v}>{titleCase(v)}</option>)}</Select></Field>
             <Field label="Default language" hint="Used when a lead has none"><Select value={draft.default_language} onChange={(e) => set('default_language', e.target.value)}>{Object.entries(data.languages).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></Field>
@@ -351,9 +360,9 @@ function ProfileEditor({ section, draft, setDraft, data }: {
                   </div>
                   <Textarea rows={2} value={draft[key]} maxLength={200} onChange={(e) => set(key, e.target.value)} className={cn(bad.length && 'border-danger focus:border-danger focus:ring-danger/15')} />
                   <div className="flex items-start gap-3 rounded-lg bg-surface-2 px-3 py-2.5">
-                    <Button size="icon" variant="ghost" className="-my-2 -ml-1 size-10 sm:-my-1 sm:size-8" onClick={() => preview(key, fill(draft[key]), lang)} disabled={!draft[key].trim()} aria-label={`Play ${label} greeting`}>{playing === key ? <Square /> : <Play />}</Button>
+                    <Button size="icon" variant="ghost" className="-my-2 -ml-1 size-10 sm:-my-1 sm:size-8" onClick={() => preview(key, genderize(fill(draft[key])), lang)} disabled={!draft[key].trim()} aria-label={`Play ${label} greeting`}>{playing === key ? <Square /> : <Play />}</Button>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm text-fg-2">{fill(draft[key]) || <span className="text-muted">Empty</span>}</p>
+                      <p className="text-sm text-fg-2">{genderize(fill(draft[key])) || <span className="text-muted">Empty</span>}</p>
                       <p className={cn('mt-0.5 text-xs', bad.length ? 'text-danger' : words > 18 ? 'text-warning' : 'text-muted')}>
                         {bad.length ? `Unknown placeholder ${bad.map((b) => `{${b}}`).join(', ')}` : `Preview for a lead named Rahul · ${words} words · ${draft[key].length}/200 chars${words > 18 ? ' — shorter is cheaper (TTS is billed per character)' : ''}`}
                       </p>
