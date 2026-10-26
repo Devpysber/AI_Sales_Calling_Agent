@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, LogOut, MessageSquareCode, ShieldCheck, Smartphone } from 'lucide-react'
 import { toast } from 'sonner'
@@ -7,10 +8,12 @@ import { useAgent } from '@/lib/agent'
 import type { AutomationSettings } from '@/lib/types'
 import { titleCase } from '@/lib/utils'
 
-type WaStatus = { status?: string; info?: { pushname?: string; wid?: string; number?: string; phone?: string } }
+type WaStatus = { status?: string; phone?: string | null; pushname?: string | null }
 type WaQr = { status?: string; qr?: string }
 
-const TONE: Record<string, 'success' | 'warning' | 'neutral'> = { connected: 'success', qr: 'warning', initializing: 'warning' }
+const TONE: Record<string, 'success' | 'warning' | 'neutral'> = { connected: 'success', qr_ready: 'warning', initializing: 'warning', authenticated: 'warning' }
+// The bridge is loading WhatsApp Web or showing a QR: keep asking for the code until the phone scans it.
+const WAITING = ['qr_ready', 'initializing', 'authenticated']
 
 export default function WhatsApp() {
   const { agent, base } = useAgent()
@@ -26,7 +29,9 @@ export default function WhatsApp() {
   })
   const status = statusQ.data?.status ?? (statusQ.isError ? 'disconnected' : 'initializing')
   const isConnected = status === 'connected'
-  const waiting = status === 'qr' || status === 'initializing'
+  // Asking for a QR starts a browser on the server (~450 MB), so it only happens once someone clicks Link.
+  const [linking, setLinking] = useState(false)
+  const waiting = linking && !isConnected || WAITING.includes(status)
 
   // Polls only while the bridge is waiting for a scan; react-query stops it on unmount.
   const qrQ = useQuery({
@@ -36,8 +41,8 @@ export default function WhatsApp() {
     refetchInterval: waiting ? 3000 : false,
   })
 
-  const info = statusQ.data?.info
-  const number = (info?.number || info?.phone || info?.wid || '').replace(/@.*$/, '')
+  const info = { pushname: statusQ.data?.pushname }
+  const number = (statusQ.data?.phone || '').replace(/@.*$/, '')
 
   const disconnect = useMutation({
     mutationFn: () => api(`${base}/whatsapp/disconnect`, { method: 'POST' }),
@@ -74,7 +79,7 @@ export default function WhatsApp() {
       <PageHeader title="WhatsApp" description={`Link a WhatsApp number so ${agent?.name || 'this agent'} can chat with leads.`} />
 
       <Card className="space-y-6 p-4 sm:p-6">
-        <CardHeader title="Connection" action={<Badge tone={TONE[status] ?? 'neutral'}>{isConnected ? 'Connected' : status === 'qr' ? 'Scan required' : titleCase(status)}</Badge>} />
+        <CardHeader title="Connection" action={<Badge tone={TONE[status] ?? 'neutral'}>{isConnected ? 'Connected' : status === 'qr_ready' ? 'Scan required' : status === 'not_linked' ? 'Not linked' : titleCase(status)}</Badge>} />
         <div className="grid items-center gap-8 md:grid-cols-2">
           <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border bg-surface-2/40 p-6 text-center">
             {isConnected ? (
@@ -95,6 +100,7 @@ export default function WhatsApp() {
               <div className="space-y-4 py-12">
                 {waiting ? <div className="mx-auto size-12 animate-spin rounded-full border-4 border-brand border-t-transparent" /> : <Smartphone className="mx-auto size-10 text-muted" />}
                 <p className="text-sm text-muted">{waiting ? 'Preparing the QR code...' : 'WhatsApp is not connected.'}</p>
+                {!waiting && <Button size="sm" onClick={() => setLinking(true)}><Smartphone className="size-4" />Link a number</Button>}
               </div>
             )}
           </div>

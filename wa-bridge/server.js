@@ -141,6 +141,7 @@ function getClient(agentId) {
         status: 'initializing',
         phone: null,
         pushname: null,
+        qrWantedAt: Date.now(),
         updatedAt: new Date().toISOString()
     };
 
@@ -200,9 +201,14 @@ function getClient(agentId) {
 }
 
 // 1. Get status & QR code
+// Status never starts a browser (each one is ~450 MB, and lead pages poll this): an agent with no
+// running session is simply not linked until someone asks for its QR code.
 app.get('/api/wa/:agentId/status', (req, res) => {
     const agentId = req.params.agentId;
-    const session = getClient(agentId);
+    const session = sessions[agentId];
+    if (!session) {
+        return res.json({ ok: true, agentId, status: 'not_linked', hasQr: false, qr: null, phone: null, pushname: null });
+    }
     res.json({
         ok: true,
         agentId,
@@ -219,8 +225,22 @@ app.get('/api/wa/:agentId/status', (req, res) => {
 app.get('/api/wa/:agentId/qr', (req, res) => {
     const agentId = req.params.agentId;
     const session = getClient(agentId);
+    session.qrWantedAt = Date.now();
     res.json({ ok: true, agentId, status: session.status, qr: session.qrDataUrl });
 });
+
+// A QR nobody is looking at any more (page closed, never scanned) closes its browser after 3 minutes.
+const QR_IDLE_MS = 180000;
+setInterval(() => {
+    for (const [agentId, session] of Object.entries(sessions)) {
+        if (!['qr_ready', 'error', 'auth_failed'].includes(session.status)) continue;
+        if (Date.now() - (session.qrWantedAt || 0) < QR_IDLE_MS) continue;
+        session.manual = true; // its 'disconnected' event must not schedule a reconnect
+        delete sessions[agentId];
+        session.client.destroy().catch(() => {});
+        console.log(`[Agent ${agentId}] Unscanned QR closed to free memory.`);
+    }
+}, 60000);
 
 // 2. Disconnect / Logout
 app.post('/api/wa/:agentId/disconnect', async (req, res) => {
@@ -248,11 +268,11 @@ app.post('/api/wa/:agentId/send', async (req, res) => {
         return res.status(400).json({ ok: false, error: 'Recipient "to" and "text" are required.' });
     }
 
-    const session = getClient(agentId);
-    if (session.status !== 'connected') {
+    const session = sessions[agentId];  // never starts a browser: only a QR request links a number
+    if (!session || session.status !== 'connected') {
         return res.status(503).json({
             ok: false,
-            error: `WhatsApp not connected (Status: ${session.status}). Please scan QR code first.`
+            error: `WhatsApp not connected (Status: ${session ? session.status : 'not_linked'}). Please scan QR code first.`
         });
     }
 
