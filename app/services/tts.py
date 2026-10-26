@@ -282,6 +282,32 @@ def prepare_audio_id(text: str, language: str, speaker: str) -> str:
     return key
 
 
+def split_for_speech(text: str, first_max: int = 90) -> list[str]:
+    """
+    Sentence-sized clips for the playground: each renders in parallel and the first is short, so speech
+    starts sooner. Tiny fragments merge into a neighbour; an over-long first clip splits once at a comma.
+    """
+    import re
+    text = (text or "").strip()
+    pieces = [p.strip() for p in re.split(r"(?<=[.!?।।])\s+", text) if p.strip()]
+    merged: list[str] = []
+    for p in pieces:
+        if merged and (len(merged[-1]) < 20 or len(p) < 20):
+            merged[-1] += " " + p
+        else:
+            merged.append(p)
+    if not merged:
+        return [text] if text else []
+    first = merged[0]
+    if len(first) > first_max:
+        mid = len(first) // 2
+        commas = [m.end() for m in re.finditer(r"[,;:—–]\s+", first) if 20 <= m.end() <= len(first) - 20]
+        if commas:
+            cut = min(commas, key=lambda c: abs(c - mid))
+            merged[0:1] = [first[:cut].strip(), first[cut:].strip()]
+    return merged
+
+
 def cached_audio_id(text: str, language: str, speaker: str) -> str:
     """
     Audio id for a line Plivo will fetch by URL moments later (legacy voice mode). The render starts in

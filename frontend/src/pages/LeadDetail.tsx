@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Ban, Bot, Building2, CalendarClock, Check, ChevronRight, Clock, Copy, Gauge, Lightbulb, ListPlus, Mail, MapPin,
-  Globe, MessageSquareQuote, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOutgoing, Play, RefreshCw, ShieldAlert, Sparkles, Target, Trash2, User,
+  Globe, MessageSquare, MessageSquareQuote, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOutgoing, Play, RefreshCw, ShieldAlert, Sparkles, Target, Trash2, User,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
@@ -99,7 +99,7 @@ export default function LeadDetail() {
   const qc = useQueryClient()
   const confirm = useConfirm()
   const startCall = useStartCall()
-  const [tab, setTab] = useState<'conversation' | 'calls' | 'activity'>('conversation')
+  const [tab, setTab] = useState<'conversation' | 'calls' | 'whatsapp' | 'activity'>('conversation')
   const [callId, setCallId] = useState<number | null>(null)
   const [transcriptOf, setTranscriptOf] = useState<number | null>(null)
   const [editing, setEditing] = useState(false)
@@ -234,6 +234,18 @@ export default function LeadDetail() {
           <Button variant="outline-danger" size="icon" title="Delete lead" aria-label="Delete lead" loading={remove.isPending} onClick={async () => {
             if (await confirm({ title: `Delete ${l.name ?? 'this lead'}?`, description: 'The lead and its activity are removed permanently. Call records are kept.', confirmLabel: 'Delete', danger: true })) remove.mutate()
           }}><Trash2 /></Button>
+          {l.phone && (
+            <a
+              href={`https://wa.me/${l.phone.replace(/[^0-9]/g, '')}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-10 sm:h-9.5 px-3.5 items-center gap-1.5 rounded-xl font-semibold text-xs border border-[#25D366]/40 bg-[#25D366]/10 text-[#25D366] hover:bg-[#25D366]/20 transition-all shadow-xs"
+              title="Open direct WhatsApp conversation"
+            >
+              <MessageSquare className="size-4" />
+              <span>WhatsApp</span>
+            </a>
+          )}
           <Button onClick={() => setEditing(true)}><Pencil />Edit</Button>
           <Button onClick={() => navigate(path(`/emails?lead=${l.id}`))}><Mail />Email</Button>
           <QueueButton disabled={l.do_not_call} loading={queue.isPending} onQueue={(at) => queue.mutate(at)} />
@@ -333,6 +345,7 @@ export default function LeadDetail() {
               <Tabs value={tab} onChange={setTab} items={[
                 { value: 'conversation', label: 'Transcript' },
                 { value: 'calls', label: `Calls (${stats.total})` },
+                { value: 'whatsapp', label: 'WhatsApp' },
                 { value: 'activity', label: `Timeline (${activity.data?.length ?? 0})` },
               ]} />
               {tab === 'conversation' && shownCallId !== null && (
@@ -413,6 +426,8 @@ export default function LeadDetail() {
                   </ol>
                 ) : <EmptyState icon={<PhoneCall />} title="No calls yet" action={<Button variant="primary" disabled={l.do_not_call} loading={startCall.isPending} onClick={() => startCall.mutate(l.id)}><PhoneCall />Call now</Button>} />
               )}
+
+              {tab === 'whatsapp' && <WhatsAppPanel base={base} leadId={l.id} phone={l.phone} />}
 
               {tab === 'activity' && (
                 activity.isLoading ? <Skeleton className="h-32" />
@@ -591,3 +606,54 @@ function QueueButton({ disabled, loading, onQueue }: { disabled: boolean; loadin
   )
 }
 
+
+type WaMsg = { id: number; direction: 'in' | 'out'; text: string; provider?: string; created_at: string }
+
+/** WhatsApp thread with this lead. Mounted only while its tab is open, so the 5 s poll stops when it is hidden. */
+function WhatsAppPanel({ base, leadId, phone }: { base: string; leadId: number; phone: string }) {
+  const qc = useQueryClient()
+  const [text, setText] = useState('')
+  const endRef = useRef<HTMLDivElement>(null)
+  const status = useQuery({ queryKey: ['wa-status', base], queryFn: () => api<{ status?: string }>(`${base}/whatsapp/status`), refetchInterval: 15000 })
+  const connected = status.data?.status === 'connected'
+  const msgs = useQuery({
+    queryKey: ['lead-whatsapp', leadId],
+    queryFn: async () => { const r = await api<WaMsg[] | { messages: WaMsg[] }>(`${base}/leads/${leadId}/whatsapp`); return Array.isArray(r) ? r : r.messages ?? [] },
+    refetchInterval: 5000,
+  })
+  const send = useMutation({
+    mutationFn: (t: string) => api(`${base}/whatsapp/send`, { method: 'POST', json: { to: phone, text: t } }),
+    onSuccess: () => { setText(''); qc.invalidateQueries({ queryKey: ['lead-whatsapp', leadId] }) },
+    onError: (e: Error) => toast.error(e.message),
+  })
+  const count = msgs.data?.length ?? 0
+  useEffect(() => { endRef.current?.scrollIntoView({ block: 'nearest' }) }, [count])
+  const submit = () => { const t = text.trim(); if (t && connected && !send.isPending) send.mutate(t) }
+
+  return (
+    <div className="space-y-3">
+      {msgs.isLoading ? <Skeleton className="h-32" />
+        : msgs.isError ? <p className="text-sm text-danger">Could not load WhatsApp messages. {msgs.error.message}</p>
+        : !count ? <p className="text-sm text-muted">No WhatsApp messages with this lead yet.</p>
+        : (
+          <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
+            {msgs.data!.map((m) => (
+              <div key={m.id} className={cn('flex', m.direction === 'out' ? 'justify-end' : 'justify-start')}>
+                <div className={cn('max-w-[80%] rounded-2xl px-3 py-2 text-sm', m.direction === 'out' ? 'bg-brand/15 text-fg' : 'bg-surface-2 text-fg')}>
+                  <p className="break-words whitespace-pre-wrap">{m.text}</p>
+                  <div className="mt-1 text-right text-[10px] text-muted">{formatDate(m.created_at)}</div>
+                </div>
+              </div>
+            ))}
+            <div ref={endRef} />
+          </div>
+        )}
+      <div className="flex items-end gap-2">
+        <Textarea rows={2} value={text} disabled={!connected} placeholder={connected ? 'Type a WhatsApp message' : 'Connect WhatsApp to send messages'}
+          onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }} />
+        <Button variant="primary" disabled={!connected || !text.trim()} loading={send.isPending} onClick={submit}>Send</Button>
+      </div>
+      {!connected && !status.isLoading && <p className="text-xs text-muted">This agent's WhatsApp is not connected. Link a number on the WhatsApp page to chat from here.</p>}
+    </div>
+  )
+}

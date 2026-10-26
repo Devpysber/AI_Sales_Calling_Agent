@@ -44,6 +44,7 @@ AUTOMATION_DEFAULTS = {
     "calling_days": [0, 1, 2, 3, 4, 5],
     "max_concurrent_calls": 3,
     "ai_auto_emails": True,
+    "whatsapp_auto_reply": True,         # the agent answers chats on its linked WhatsApp number
     "meeting_reminder_enabled": False,
     "meeting_reminder_hour": 9,
     "daily_report_enabled": False,

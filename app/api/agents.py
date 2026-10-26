@@ -360,8 +360,8 @@ async def playground(body: PlaygroundMessage, request: Request, agent_id: int = 
     try:
         profile = agents.get_profile(agent_id)
         language = res.get("language") or tts.detect_language(res["reply"], profile.get("default_language") or "en-IN")
-        audio_id = await asyncio.to_thread(tts.prepare_audio_id, res["reply"], language, profile["voice_speaker"])
-        res["audio_url"] = tts.audio_url(audio_id) if audio_id else ""
+        res["audio_urls"] = await _prepare_clips(res["reply"], language, profile["voice_speaker"])
+        res["audio_url"] = res["audio_urls"][0] if res["audio_urls"] else ""
     except TTSError as e:
         res["audio_url"] = ""
         res["audio_error"] = str(e)
@@ -370,6 +370,12 @@ async def playground(body: PlaygroundMessage, request: Request, agent_id: int = 
         usage = playground_usage(request)
     res["usage"] = usage
     return res
+
+
+async def _prepare_clips(reply: str, language: str, speaker: str) -> list[str]:
+    """Short clips, all rendering at once, so the first is heard without waiting for the whole reply."""
+    ids = [await asyncio.to_thread(tts.prepare_audio_id, p, language, speaker) for p in tts.split_for_speech(reply)]
+    return [tts.audio_url(i) for i in ids if i]
 
 
 async def _team_playground(body: PlaygroundMessage, request: Request, agent_id: int, usage: dict, new_try: bool) -> dict:
@@ -413,8 +419,8 @@ async def _team_playground(body: PlaygroundMessage, request: Request, agent_id: 
            "tool_result": tool_note, "spoken_chars": sum(len(t.get("text") or "") for t in history if t.get("role") == "assistant") + len(reply),
            "char_budget": int(settings.tts_chars_per_call or 0), "steer": None}
     try:
-        audio_id = await asyncio.to_thread(tts.prepare_audio_id, reply, res["language"], profile["voice_speaker"])
-        res["audio_url"] = tts.audio_url(audio_id) if audio_id else ""
+        res["audio_urls"] = await _prepare_clips(reply, res["language"], profile["voice_speaker"])
+        res["audio_url"] = res["audio_urls"][0] if res["audio_urls"] else ""
     except TTSError as e:
         res["audio_url"] = ""
         res["audio_error"] = str(e)

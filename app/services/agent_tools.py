@@ -408,6 +408,25 @@ def send_sms_tool(to: str, message: str, agent_id: int, role: str = "team") -> s
     except Exception as e:
         return f"Failed to send SMS to {to}. Error: {str(e)}"
 
+
+def send_whatsapp_tool(to: str, message: str, agent_id: int, role: str = "team") -> str:
+    """Send a WhatsApp message (quote, catalog, pricing, confirmation) directly to the caller."""
+    digits = "".join(ch for ch in str(to or "") if ch.isdigit())
+    if not digits:
+        return "Failed: I need the recipient phone number in digits."
+    try:
+        from app.services.whatsapp_service import send_whatsapp_message_sync
+        res = send_whatsapp_message_sync(to=digits, text=message, agent_id=agent_id)
+        if res.get("queued") or res.get("refused"):
+            return res["error"]
+        if res.get("ok"):
+            provider = res.get("provider", "whatsapp")
+            return f"WhatsApp message successfully sent to {digits} via {provider}."
+        else:
+            return f"WhatsApp queued: {res.get('error', 'Pending connection')}"
+    except Exception as e:
+        return f"Failed to send WhatsApp to {to}: {str(e)}"
+
 def book_calendar_event_tool(email: str, date_time: str, duration_minutes: int = 30, agent_id: int | None = None) -> str:
     """Record a meeting time on the CRM lead matching the email. No external calendar is connected."""
     from app.services.call_service import _valid_meeting
@@ -1287,6 +1306,21 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "send_whatsapp",
+            "description": "Send an immediate WhatsApp message, price quote, brochure, catalog, or confirmation to the caller's phone number during or right after the call.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": {"type": "string", "description": "The customer's 10-digit phone number."},
+                    "message": {"type": "string", "description": "The exact message or quote text to send via WhatsApp."}
+                },
+                "required": ["to", "message"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "send_sms",
             "description": "Send an SMS message to a phone number.",
             "parameters": {
@@ -1624,6 +1658,8 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
         return check_agent_schedule_tool(agent_id)
     elif name == "schedule_callback":
         return schedule_callback_tool(args.get("lead_id"), args.get("date_time"), agent_id, lead=args.get("lead") or args.get("name"))
+    elif name == "send_whatsapp":
+        return send_whatsapp_tool(args.get("to") or args.get("phone"), args.get("message") or args.get("text"), agent_id, role)
     elif name == "send_sms":
         return send_sms_tool(args.get("to"), args.get("message"), agent_id, role)
     elif name == "book_calendar_event":

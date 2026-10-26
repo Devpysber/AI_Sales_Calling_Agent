@@ -85,12 +85,6 @@ export default function SecretsForm() {
     queryKey: ['system', 'secrets'],
     queryFn: () => api<Secrets>('/api/system/secrets'),
   })
-  // The effective server value: without it the placeholder "+919876543210" is mistaken for the live number.
-  const { data: runtime } = useQuery({
-    queryKey: ['system', 'runtime'],
-    queryFn: () => api<{ _server?: Record<string, string> }>('/api/system/runtime'),
-  })
-  const server = runtime?._server ?? {}
 
   const [form, setForm] = useState<Record<string, string>>({})
   // Keys explicitly removed with the bin — the only way an empty value for a saved credential reaches the server.
@@ -152,14 +146,18 @@ export default function SecretsForm() {
           <h3 className="font-bold">Telephony & AI</h3>
           {cred('plivo_auth_id', 'Plivo Auth ID', { placeholder: 'MA…', help: '20 characters starting with MA or SA, from the Plivo console overview.' })}
           {cred('plivo_auth_token', 'Plivo Auth Token', { secret: true })}
-          {cred('plivo_phone_number', 'Plivo Phone Number', { placeholder: '+919876543210', help: `International format, including the country code. Currently in use: ${server.plivo_phone_number || 'not set'}` })}
+          {cred('plivo_phone_number', 'Plivo Phone Number', { placeholder: '+919876543210', help: 'International format, including the country code.' })}
           {cred('openrouter_api_key', 'OpenRouter API Key', { secret: true, placeholder: 'sk-or-…' })}
           {cred('sarvam_api_key', 'Sarvam API Key', { secret: true, placeholder: 'sk_…' })}
         </div>
         <div className="space-y-4">
           <h3 className="font-bold">Email (Resend)</h3>
           {cred('resend_api_key', 'Resend API Key', { secret: true, placeholder: 're_…' })}
-          {cred('email_from', 'Email From', { placeholder: 'Company <noreply@domain.com>', help: `The domain must be verified in Resend. Currently in use: ${server.email_from || 'not set'}` })}
+          {cred('email_from', 'Email From', { placeholder: 'Company <noreply@domain.com>', help: 'The domain must be verified in Resend.' })}
+          <h3 className="font-bold pt-2">WhatsApp & Post-Call (Composio)</h3>
+          {cred('composio_api_key', 'Composio API Key', { secret: true, placeholder: 'comp_…', help: 'For automated WhatsApp follow-ups and CRM post-call actions.' })}
+          {cred('whatsapp_token', 'Meta WhatsApp Access Token (Optional)', { secret: true, placeholder: 'EAA…' })}
+          {cred('whatsapp_phone_number_id', 'WhatsApp Phone Number ID (Optional)', { placeholder: '100…' })}
         </div>
       </div>
       <div className="grid gap-6 border-t border-border p-4 sm:p-5 md:grid-cols-2">
@@ -172,18 +170,12 @@ export default function SecretsForm() {
           {num('cost_per_call_minute', 'Plivo Cost per Minute', '0.38')}
           {num('cost_per_10k_tts_chars', 'Sarvam TTS per 10k Chars', '30.00')}
           {num('cost_per_stt_hour', 'Sarvam STT per Hour', '30.00')}
-          {num('cost_per_llm_request', 'LLM per Request (flat, used when tokens are not measured)', '0.209352')}
-          {num('cost_per_1m_llm_input', 'LLM per 1M Input Tokens (sarvam-105b 29.28)', '29.28')}
-          {num('cost_per_1m_llm_output', 'LLM per 1M Output Tokens (sarvam-105b 73.20)', '73.20')}
-          <p className="text-xs text-muted">Leave a field empty to use the server .env value. Token pricing applies to calls that carry token counts; older calls stay on the flat rate.</p>
+          {num('cost_per_llm_request', 'Sarvam LLM per Request', '0.02')}
         </div>
         <div className="space-y-4">
           <h3 className="font-bold">Balances</h3>
           {num('sarvam_credits', 'Sarvam credits (as topped up)', '100.00')}
           {secrets?.sarvam_credits_estimate != null && <p className="-mt-2 text-xs text-muted">Estimated left after measured usage: {secrets.sarvam_credits_estimate}. Re-enter the amount whenever you top up.</p>}
-          <h3 className="pt-2 font-bold">Limits</h3>
-          {num('playground_monthly_limit', 'Playground rehearsals per team member per month', '5')}
-          <p className="-mt-2 text-xs text-muted">0 means unlimited. Administrators are never limited. Each member sees their own usage line in the playground.</p>
         </div>
       </div>
       <div className="flex flex-col gap-2 border-t border-border p-4 sm:flex-row sm:items-center sm:justify-end sm:p-5">

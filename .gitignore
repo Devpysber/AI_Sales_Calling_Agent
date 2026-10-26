@@ -52,3 +52,8 @@ temp.txt
 script.py
 fix_unicode.py
 venv/
+
+# WhatsApp bridge sessions and deps
+wa-bridge/.wwebjs_auth/
+wa-bridge/.wwebjs_cache/
+wa-bridge/node_modules/

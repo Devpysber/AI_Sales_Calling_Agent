@@ -303,6 +303,47 @@ def session_agent(session: dict) -> int | None:
         return db.scalar(select(Call.agent_id).where(Call.id == session.get("call_id"))) if session.get("call_id") else None
 
 
+def apply_turn_signals(crm_service, lead_id: int | None, result: dict, call_id: int | None = None):
+    """Map one turn's crm_update / intent / qualification onto the lead (shared by calls and WhatsApp chat)."""
+    if not lead_id:
+        return
+    crm = result["crm_update"]
+    updates = {k: crm[k] for k in ("requirements", "objections", "follow_up_date", "email") if crm.get(k)}
+    if crm.get("requirement") and not updates.get("requirements"):
+        updates["requirements"] = str(crm["requirement"])[:500]
+    meeting_at = _valid_meeting(crm.get("meeting_at"))
+    if meeting_at:
+        updates["meeting_at"] = meeting_at
+    elif str(crm.get("meeting_at") or "").strip().lower() in ("cancelled", "canceled", "cancel") and (crm_service.get(lead_id) or {}).get("meeting_at"):
+        # The customer called the booking off and took no new slot: the reminder job must not ring them for it.
+        updates["meeting_at"] = ""
+        updates["status"] = "Follow Up"
+    callback_at = _valid_meeting(crm.get("callback_at"))  # same shape and sanity rules as a meeting time
+    if callback_at and not meeting_at:
+        updates["callback_at"] = callback_at
+        updates["call_status"] = "Pending"  # the callback job dials it
+    if result["qualification"]:
+        updates["qualification"] = result["qualification"]
+    if result["intent"] == "do_not_call":
+        updates["do_not_call"] = True
+        updates["status"] = "Do Not Call"
+    elif result["intent"] == "not_interested":
+        updates["status"] = "Not Interested"
+    elif meeting_at:
+        updates["status"] = "Meeting Booked"
+    elif result["intent"] in ("interested", "pricing", "meeting"):
+        updates["status"] = "Interested"
+    if updates:
+        before = crm_service.get(lead_id) or {}
+        changed = {k: v for k, v in updates.items() if before.get(k) != v}
+        if changed:
+            crm_service.update(lead_id, changed, actor="ai", event_type="ai.crm_update",
+                               title="AI updated " + ", ".join(k.replace("_", " ") for k in changed))
+            if "meeting_at" in changed:
+                events.record("meeting.booked", f"Meeting booked for {changed['meeting_at']}", lead_id=lead_id,
+                              call_id=call_id, actor="ai")
+
+
 class CallService:
     """Calls of one agent. agent_id=None is unscoped: only for Plivo webhooks that carry a call id."""
 
@@ -1148,44 +1189,7 @@ class CallService:
         _turn_pool.submit(run)
 
     def _apply_turn_signals(self, session: dict, result: dict):
-        lead_id = session.get("lead_id")
-        if not lead_id:
-            return
-        crm = result["crm_update"]
-        updates = {k: crm[k] for k in ("requirements", "objections", "follow_up_date", "email") if crm.get(k)}
-        if crm.get("requirement") and not updates.get("requirements"):
-            updates["requirements"] = str(crm["requirement"])[:500]
-        meeting_at = _valid_meeting(crm.get("meeting_at"))
-        if meeting_at:
-            updates["meeting_at"] = meeting_at
-        elif str(crm.get("meeting_at") or "").strip().lower() in ("cancelled", "canceled", "cancel") and (self.crm.get(lead_id) or {}).get("meeting_at"):
-            # The customer called the booking off and took no new slot: the reminder job must not ring them for it.
-            updates["meeting_at"] = ""
-            updates["status"] = "Follow Up"
-        callback_at = _valid_meeting(crm.get("callback_at"))  # same shape and sanity rules as a meeting time
-        if callback_at and not meeting_at:
-            updates["callback_at"] = callback_at
-            updates["call_status"] = "Pending"  # the callback job dials it
-        if result["qualification"]:
-            updates["qualification"] = result["qualification"]
-        if result["intent"] == "do_not_call":
-            updates["do_not_call"] = True
-            updates["status"] = "Do Not Call"
-        elif result["intent"] == "not_interested":
-            updates["status"] = "Not Interested"
-        elif meeting_at:
-            updates["status"] = "Meeting Booked"
-        elif result["intent"] in ("interested", "pricing", "meeting"):
-            updates["status"] = "Interested"
-        if updates:
-            before = self.crm.get(lead_id) or {}
-            changed = {k: v for k, v in updates.items() if before.get(k) != v}
-            if changed:
-                self.crm.update(lead_id, changed, actor="ai", event_type="ai.crm_update",
-                                title="AI updated " + ", ".join(k.replace("_", " ") for k in changed))
-                if "meeting_at" in changed:
-                    events.record("meeting.booked", f"Meeting booked for {changed['meeting_at']}", lead_id=lead_id,
-                                  call_id=session.get("call_id"), actor="ai")
+        apply_turn_signals(self.crm, session.get("lead_id"), result, call_id=session.get("call_id"))
 
     # ---------------- queries ----------------
 

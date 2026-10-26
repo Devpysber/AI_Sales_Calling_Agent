@@ -474,6 +474,27 @@ def past_conversations(agent_id: int, lead: dict, limit: int = 3) -> str:
     return _cached(("calls", agent_id, lead_id), build)
 
 
+def recent_whatsapp(agent_id: int, lead: dict, limit: int = 6, width: int = 140) -> str:
+    """The last few WhatsApp messages with this lead, oldest first (newest last), each cut to `width` characters."""
+    lead_id = lead.get("id")
+    if not lead_id:
+        return ""
+
+    def build():
+        from sqlalchemy import select
+
+        from app.core.database import get_db
+        from app.models.whatsapp_message import WhatsAppMessage
+        with get_db() as db:
+            rows = db.execute(
+                select(WhatsAppMessage.direction, WhatsAppMessage.text)
+                .where(WhatsAppMessage.agent_id == agent_id, WhatsAppMessage.lead_id == lead_id)
+                .order_by(WhatsAppMessage.id.desc()).limit(limit)
+            ).all()
+        return "\n".join(f"- {'Customer' if d == 'in' else 'You'}: {' '.join(t.split())[:width]}" for d, t in reversed(rows))
+    return _cached(("wa", agent_id, lead_id), build)
+
+
 def can_transfer(persona: dict, agent_id: int | None = None) -> bool:
     """A live hand-off is only possible when the agent may transfer AND a number is actually set."""
     from app.services import team_service
@@ -595,8 +616,10 @@ Field rules: intent "end_call" only when they said goodbye or that's all; otherw
 
 
 def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: int | None = None,
-                   brief_lines: int | None = None, calls_lines: int | None = None) -> str:
-    """brief_lines / calls_lines: keep only that many lines of the company brief / earlier calls (prompt budget)."""
+                   brief_lines: int | None = None, calls_lines: int | None = None, channel: str = "call",
+                   chat_lines: int | None = None) -> str:
+    """brief_lines / calls_lines / chat_lines: keep only that many lines of the company brief / earlier calls /
+    recent WhatsApp chat (prompt budget). The chat is shown on calls only: a WhatsApp turn carries it as history."""
     now = datetime.now(IST)
     if lead.get("call_purpose") in ("team", "admin"):
         return _team_prompt(persona, lead, knowledge, agent_id, now)
@@ -667,6 +690,10 @@ def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: i
     role = (persona.get("agent_role") or "").strip() or "senior sales consultant"
     caller_noun = (persona.get("customer_noun") or "").strip() or "customer"
     Caller = caller_noun[:1].upper() + caller_noun[1:]
+    wa_chat = recent_whatsapp(agent_id, lead) if (agent_id and channel == "call") else ""
+    if wa_chat and chat_lines is not None:
+        wa_chat = "\n".join(wa_chat.splitlines()[-chat_lines:] if chat_lines else [])
+    chat_block = f"\n\n# Recent WhatsApp chat with this {caller_noun} (newest last)\n{wa_chat}" if wa_chat else ""
     female = gender(persona) == "female"
     gender_line = (f"You are a {'woman' if female else 'man'}; in Hindi use {'feminine' if female else 'masculine'} "
                    f"verb forms ({'बोल रही हूँ, करती हूँ, सकती हूँ' if female else 'बोल रहा हूँ, करता हूँ, सकता हूँ'}).")
@@ -785,7 +812,7 @@ Name a colleague only from this list, only when it helps ("Rohit aapko call kare
 
 # Earlier conversations with this {caller_noun} (newest first)
 {history or '- None: this is the first conversation.'}
-Continue from what was discussed: no re-introduction, no re-asking what they already told you.
+Continue from what was discussed: no re-introduction, no re-asking what they already told you.{chat_block}
 
 # Company brief (from the knowledge base)
 {brief or '- Not available'}
@@ -861,6 +888,34 @@ If the call is wrapping up, you said goodbye, they answered 'no' to needing anyt
 Thanks, "ok bye", "theek hai", silence after the goal is achieved: say one short farewell with {END_MARK}. Do not offer more help a second time."""
 
 
+# WhatsApp turn: same JSON turn as a call, but "reply" is a chat message and the model may request an action.
+WHATSAPP_ACTIONS = ("call_now", "callback", "handoff")
+WHATSAPP_SCHEMA = (TURN_SCHEMA
+                   .replace("what you say next (spoken, 1-2 short sentences, customer's language)",
+                            "your WhatsApp message (1-3 short sentences, customer's language and script)")
+                   .replace('  "end_call": false,\n', '  "action": "none | call_now | callback | handoff",\n'))
+
+WHATSAPP_RULES = """# This is a WhatsApp chat, not a phone call
+Ignore anything above about speaking, the phone line, hanging up or what the caller hears: you are typing in a WhatsApp chat and the messages so far are in this conversation.
+- Write like a real person texting: short messages, 1-3 sentences, one idea at a time, at most one question per message.
+- Mirror the customer's language and script exactly, including Hinglish in Latin script. Never say you are an AI, a bot or a model.
+- No markdown headers or bold. Use a list only when they ask for options.
+- Links, prices, addresses and numbers from Knowledge may be shared as written; state no company fact that is not in Knowledge.
+- Never claim something was sent, booked or arranged unless it actually was. No re-introduction, no re-asking what you already know.
+
+# Output
+Your entire output must start with '{' and be only this JSON object — no prose before or after it:
+""" + WHATSAPP_SCHEMA + """
+action: "call_now" when they ask to be called or want to talk now (the call is placed for you: say you are calling in a moment); "callback" when a time to call is agreed (also fill crm_update.callback_at, relative times via # Today); "handoff" when they want a human; otherwise "none".
+Field rules: write every detail into crm_update on the SAME turn it is confirmed (email, requirement, meeting_at, callback_at). Visit or meeting agreed: intent "meeting", crm_update.meeting_at, qualification "Hot". Opt-out ("stop", "don't message/call me"): intent "do_not_call". Refusal: "not_interested". qualification stays "Unknown" until need is discussed."""
+
+
+def chat_prompt(system: str) -> str:
+    """The call system prompt with its voice-only output rules swapped for WhatsApp chat rules."""
+    cut = system.rfind("\n# Output\n")
+    return (system[:cut] if cut != -1 else system) + "\n" + WHATSAPP_RULES
+
+
 # Turns that cannot need the knowledge base: acknowledgements, closings, scheduling talk. Keyword search still
 # runs for them; the paid embedding round trip does not.
 _NO_RAG = re.compile(r"^\W*(haan|han|ji|ok|okay|hmm+|accha|acha|theek hai|thik hai|bye|nahi|nahin|no|yes|sure|bolo|boliye|batao|"
@@ -928,7 +983,7 @@ def compact_live_prompt(system: str, budget: int) -> str:
 
 def build_messages(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True,
                    top_k: int = 5, embed_timeout: float = 1.0, summary: str | None = None,
-                   compacted_upto: int | None = None) -> tuple[list[dict], list[dict]]:
+                   compacted_upto: int | None = None, channel: str = "call") -> tuple[list[dict], list[dict]]:
     persona = agents.get_profile(agent_id)
 
     query = retrieval_query(history, customer_text)
@@ -940,10 +995,13 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
     knowledge = sorted(knowledge, key=lambda k: -float(k.get("score") or 0))
     window = history_window(history, summary, compacted_upto)
 
-    live_budget = settings.live_prompt_char_budget if lead.get("call_purpose") not in ("team", "admin") else 0
+    live_budget = settings.live_prompt_char_budget if lead.get("call_purpose") not in ("team", "admin") and channel == "call" else 0
 
-    def render(brief_lines=None, calls_lines=None) -> str:
-        system = _system_prompt(persona, lead, knowledge, agent_id, brief_lines=brief_lines, calls_lines=calls_lines)
+    def render(brief_lines=None, calls_lines=None, chat_lines=None) -> str:
+        system = _system_prompt(persona, lead, knowledge, agent_id, brief_lines=brief_lines, calls_lines=calls_lines,
+                                channel=channel, chat_lines=chat_lines)
+        if channel == "whatsapp":
+            system = chat_prompt(system)
         if live_budget:
             # Only when an operator has set LIVE_PROMPT_CHAR_BUDGET, and only for a customer call: a
             # colleague's check-in and the playground always hear the agent's full instructions.
@@ -961,6 +1019,7 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
         # exception: (1) lowest-scored passage, (2) earlier-call lines, (3) oldest turns beyond 6, (4) brief lines.
         brief_n = len(company_brief(agent_id).splitlines()) if agent_id else 0
         calls_n = len(past_conversations(agent_id, lead).splitlines()) if agent_id else 0
+        chat_n = len(recent_whatsapp(agent_id, lead).splitlines()) if (agent_id and channel == "call") else 0
 
         def size() -> int:
             return len(system) + sum(len(t["text"]) for t in window) + len(customer_text)
@@ -977,6 +1036,8 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
                 knowledge.pop()
             elif calls_n > 0:
                 calls_n -= 1
+            elif chat_n > 0:
+                chat_n -= 1
             elif len(window) > MIN_HISTORY_TURNS:
                 window = window[1:]
             elif brief_n > 0:
@@ -987,7 +1048,7 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
                 knowledge.pop()
             else:
                 break
-            system = render(brief_lines=brief_n, calls_lines=calls_n)
+            system = render(brief_lines=brief_n, calls_lines=calls_n, chat_lines=chat_n)
         if size() > budget:
             log.warning("Prompt still over budget after trimming: %s chars (budget %s)", size(), budget)
     messages = [{"role": "system", "content": system}]
@@ -1295,9 +1356,10 @@ EMPTY_REPLY = {
 
 
 def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, use_embeddings: bool = True,
-            summary: str | None = None, guidance: str | None = None, embed_timeout: float = 0.6) -> dict:
+            summary: str | None = None, guidance: str | None = None, embed_timeout: float = 0.6, channel: str = "call") -> dict:
     """
     Generate the next turn for one agent (its persona and its own knowledge base). `history` excludes `customer_text`.
+    channel "whatsapp": a chat message (no speech clean-up, no canned fallback line) plus an `action` the caller carries out.
     `guidance` is the same steer a live call gets from voice_stream (budget nearly spent, wrap up), so the playground
     rehearses the call the way it will actually run.
     """
@@ -1305,14 +1367,16 @@ def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, 
     # Same gate as a live turn: "hi", "ha", "ok" never wait on a paid embedding round trip (up to 1s serial
     # here, since the playground has no prefetch during speech); BM25 still runs for them.
     use_embeddings = use_embeddings and needs_knowledge(customer_text)
-    messages, knowledge = build_messages(agent_id, history, customer_text, lead, use_embeddings, embed_timeout=embed_timeout, summary=summary)
+    chat = channel == "whatsapp"
+    messages, knowledge = build_messages(agent_id, history, customer_text, lead, use_embeddings, embed_timeout=embed_timeout, summary=summary,
+                                         channel=channel)
     if guidance:
         messages[0]["content"] += ("\n# Live supervisor instruction (highest priority; follow it in this reply; never mention it)\n"
                                    + guidance + "\n\n")
     result = llm.complete(messages, json_mode=True, max_tokens=400, temperature=0.4)
     data = _parse_turn(result.text)
-    reply = plain_speech(str(data.get("reply") or "").strip())
-    if not reply:
+    reply = str(data.get("reply") or "").strip() if chat else plain_speech(str(data.get("reply") or "").strip())
+    if not reply and not chat:
         # sarvam-105b sometimes answers a tool-call markup (<tool_call>end_call ...) with no speech at all,
         # e.g. right after the caller gives a callback time. One more round with the model, told to speak,
         # beats any canned line: it confirms the time it just heard, in the caller's language.
@@ -1328,7 +1392,7 @@ def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, 
     # fall back to detection / the session language instead of sending Sarvam an unknown code.
     raw_lang = str(data.get("language") or "").strip().lower().replace("_", "-")
     language = next((code for code, name in LANGUAGES.items() if raw_lang in (code.lower(), code[:2].lower(), name.lower())), None)
-    if not reply:
+    if not reply and not chat:
         # The model sent no spoken text (usually an end_call with an empty reply). Speak in the call's
         # language, and say goodbye when it is ending the call rather than asking the caller to repeat.
         lang = "hi" if str(language or lead.get("language") or agents.get_profile(agent_id).get("default_language") or "").lower().startswith("hi") else "en"
@@ -1341,6 +1405,7 @@ def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, 
         "qualification": data.get("qualification") if data.get("qualification") in ("Hot", "Warm", "Cold") else None,
         "end_call": bool(data.get("end_call")),
         "crm_update": _clean_crm({k: str(v).strip() for k, v in crm.items() if v not in (None, "", [], {})}),
+        **({"action": next((a for a in WHATSAPP_ACTIONS if a == str(data.get("action") or "").strip().lower()), "none")} if chat else {}),
         "knowledge": [{"title": k["title"], "score": k["score"], "text": k["text"][:300]} for k in knowledge],
         "provider": f"{result.provider}:{result.model}",
         "llm_ms": result.latency_ms,

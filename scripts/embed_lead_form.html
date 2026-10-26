@@ -1,0 +1,61 @@
+<!-- HTML / JavaScript Lead Form Integration for Webflow / WordPress / Landing Pages -->
+
+<form id="leadCaptureForm">
+  <input type="text" name="name" placeholder="Full Name" required />
+  <input type="tel" name="phone" placeholder="Phone Number (e.g. +91 98765 43210)" required />
+  <input type="email" name="email" placeholder="Email Address" />
+  <input type="text" name="city" placeholder="City" />
+  <textarea name="message" placeholder="How can we help you?"></textarea>
+  <button type="submit">Submit Enquiry</button>
+</form>
+
+<script>
+  // Choose your website target: "wedeazzy", "hotelzz", or "pets24x7"
+  const TARGET_WEBSITE = "wedeazzy"; 
+
+  // Replace with your VPS domain or ngrok public base URL
+  const SERVER_BASE_URL = "https://your-domain.com";
+
+  const AGENT_CONFIGS = {
+    wedeazzy: {
+      agentId: 2,
+      token: "GZDPcQ6Gl8Ry-W7unE29mcXfIR9R7SOa"
+    },
+    hotelzz: {
+      agentId: 3,
+      token: "CfZcOgx6HqP_c9IwgscblFpXSY7OtEyj"
+    },
+    pets24x7: {
+      agentId: 4,
+      token: "AKZAB1wH1HrwGHwEXT6PAIjsnuu8kE_5"
+    }
+  };
+
+  const form = document.getElementById("leadCaptureForm");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData.entries());
+
+    const config = AGENT_CONFIGS[TARGET_WEBSITE];
+    const endpoint = `${SERVER_BASE_URL}/api/public/agents/${config.agentId}/leads?token=${config.token}`;
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data)
+      });
+      const result = await response.json();
+      if (response.ok && result.ok) {
+        alert("Enquiry submitted! Our AI voice concierge will call you shortly.");
+        form.reset();
+      } else {
+        alert("Failed to submit enquiry: " + (result.detail || "Please try again."));
+      }
+    } catch (err) {
+      console.error("Submission error:", err);
+      alert("Error submitting enquiry. Please check your connection.");
+    }
+  });
+</script>

@@ -19,6 +19,7 @@ x-app: &app
     PUBLIC_BASE_URL: https://${DOMAIN:?set DOMAIN}
     RUN_MIGRATIONS: "false"
     RUN_SCHEDULER: "false"
+    WA_BRIDGE_URL: http://wa-bridge:4050
   restart: unless-stopped
   logging: { driver: json-file, options: { max-size: "20m", max-file: "5" } }
 
@@ -51,6 +52,25 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
+
+  # WhatsApp chat: links a number per agent by QR and relays messages to the api. Private network only.
+  wa-bridge:
+    build: ./wa-bridge
+    environment:
+      WA_BRIDGE_SECRET: ${WA_BRIDGE_SECRET:-}
+      API_URL: http://api:8000
+    volumes:
+      - ./wa-bridge/.wwebjs_auth:/app/.wwebjs_auth
+    shm_size: 512m
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:4050/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources: { limits: { memory: 700m } }
+    restart: unless-stopped
+    logging: { driver: json-file, options: { max-size: "20m", max-file: "5" } }
 
   nginx:
     build: { context: ., dockerfile: deploy/Dockerfile.web }

@@ -24,7 +24,8 @@ from app.core.logging import get_logger
 log = get_logger(__name__)
 COOKIE = "va_session"
 TTL = 12 * 3600
-PUBLIC_API = ("/api/plivo/", "/api/media/", "/api/health", "/api/auth/login", "/api/public/")
+PUBLIC_API = ("/api/plivo/", "/api/media/", "/api/health", "/api/auth/login", "/api/public/",
+              "/api/whatsapp/inbound")  # the bridge authenticates with X-Bridge-Secret
 
 if not settings.secret_key:
     log.warning("SECRET_KEY not set: sessions reset on restart and differ between replicas")

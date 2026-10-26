@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Activity, BarChart3, BookOpen, Bot, CalendarClock, Check, ChevronsLeft, ChevronsRight, ChevronsUpDown, Columns3,
-  Download, Keyboard, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Lock, Mail, Menu, MessageSquareText, Moon, Pause, PhoneCall, Plus, Search, Settings,
+  Download, Keyboard, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Lock, Mail, Menu, MessageSquare, MessageSquareText, Moon, Pause, PhoneCall, Plus, Search, Settings,
   SlidersHorizontal, Sparkles, Sun, Upload, UserPlus, Users, X,
 } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -42,6 +42,7 @@ const AGENT_NAV: { section: string; items: NavItem[] }[] = [
     section: 'Build', items: [
       { to: '/agent', label: 'Persona & playground', icon: Bot, key: 'g' },
       { to: '/knowledge', label: 'Knowledge base', icon: BookOpen, key: 'k', count: (a) => a.stats.documents || null },
+      { to: '/whatsapp', label: 'WhatsApp', icon: MessageSquare, key: 'w' },
       { to: '/automation', label: 'Automation', icon: CalendarClock, key: 'u', count: (a) => a.automation_on ? <span className="text-success">On</span> : null },
       { to: '/settings', label: 'Agent settings', icon: SlidersHorizontal, key: 's' },
     ],

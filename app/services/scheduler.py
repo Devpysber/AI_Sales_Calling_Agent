@@ -198,10 +198,16 @@ def job_daily_report(agent_id, cfg, force=False):
     return send_email(recipient, f"{name}: voice agent daily report", body, agent_id=agent_id)
 
 
+def job_whatsapp_summary(agent_id, cfg, force=False):
+    """Summarise WhatsApp chats that have gone quiet onto the lead (what a finished call does for its lead)."""
+    from app.services import whatsapp_agent
+    return whatsapp_agent.summarise_quiet_chats(agent_id)
+
+
 JOBS = {"auto_dial": job_auto_dial, "retry_calls": job_retry_calls, "callbacks": job_callbacks, "nurture": job_nurture, "queue": job_queue,
-        "meeting_reminder": job_meeting_reminder, "daily_report": job_daily_report}
+        "meeting_reminder": job_meeting_reminder, "daily_report": job_daily_report, "whatsapp_summary": job_whatsapp_summary}
 LABELS = {"auto_dial": "Auto-dial", "retry_calls": "Retry calls", "callbacks": "Callbacks", "nurture": "Follow-ups", "queue": "Call queue", "meeting_reminder": "Meeting reminders",
-          "daily_report": "Daily report"}
+          "daily_report": "Daily report", "whatsapp_summary": "WhatsApp summaries"}
 
 
 def _state_key(agent_id: int, job: str) -> str:
@@ -209,7 +215,7 @@ def _state_key(agent_id: int, job: str) -> str:
 
 
 QUIET_RESULTS = ("outside calling hours", "no pending leads", "no leads to retry", "no callbacks due",
-                 "queue empty", "all call slots busy", "nothing to do", "no leads due", "no leads to follow up")
+                 "queue empty", "all call slots busy", "nothing to do", "no leads due", "no leads to follow up", "no chats to summarise")
 
 
 def _did_nothing(result: str) -> bool:
@@ -275,10 +281,11 @@ def _due(agent_id: int, cfg: dict) -> list[str]:
 
     due = []
     # Callbacks are checked every tick but only logged when something was due (see tick()).
-    cfg = {**cfg, "nurture_interval_minutes": 60}
+    cfg = {**cfg, "nurture_interval_minutes": 60, "whatsapp_summary_enabled": True, "whatsapp_summary_interval_minutes": 15}
     for job, enabled, minutes in (("auto_dial", "auto_dial_enabled", "auto_dial_interval_minutes"),
                                   ("retry_calls", "retry_enabled", "retry_interval_minutes"),
-                                  ("nurture", "nurture_enabled", "nurture_interval_minutes")):
+                                  ("nurture", "nurture_enabled", "nurture_interval_minutes"),
+                                  ("whatsapp_summary", "whatsapp_summary_enabled", "whatsapp_summary_interval_minutes")):
         if cfg[enabled] and (not last(job) or now - last(job) >= timedelta(minutes=cfg[minutes])):
             due.append(job)
     for job, enabled, hour in (("meeting_reminder", "meeting_reminder_enabled", "meeting_reminder_hour"),

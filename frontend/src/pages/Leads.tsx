@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle, PhoneIncoming, ArrowDown, ArrowUp, ArrowUpRight, Ban, CalendarCheck, Clock, Download, Flame, Globe, ListPlus, PhoneCall, PhoneOff, Plus,
-  Search, Sparkles, Trash2, Upload, Users, X,
+  MessageSquare, Search, Sparkles, Trash2, Upload, Users, X,
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -385,8 +385,22 @@ export default function Leads() {
                   <td className="px-3 text-[13px] whitespace-nowrap"><NextStep l={l} /></td>
                   <td className="px-3 text-[13px] whitespace-nowrap text-muted" title={formatDate(l.last_contacted_at)}>{l.last_contacted_at ? timeAgo(l.last_contacted_at) : 'Never'}</td>
                   <td className="px-4 text-right" onClick={(e) => e.stopPropagation()}>
-                    <Button size="sm" variant="primary" disabled={l.do_not_call || l.phone_valid === false} loading={startCall.isPending && startCall.variables === l.id}
-                      onClick={() => startCall.mutate(l.id)}><PhoneCall />Call</Button>
+                    <div className="flex items-center justify-end gap-1.5">
+                      {l.phone && (
+                        <a
+                          href={`https://wa.me/${l.phone.replace(/[^0-9]/g, '')}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex h-8 items-center gap-1 rounded-md border border-[#25D366]/40 bg-[#25D366]/10 px-2.5 text-xs font-semibold text-[#25D366] hover:bg-[#25D366]/20 transition-colors"
+                          title="Open direct WhatsApp chat"
+                        >
+                          <MessageSquare className="size-3.5" />
+                          <span>WhatsApp</span>
+                        </a>
+                      )}
+                      <Button size="sm" variant="primary" disabled={l.do_not_call || l.phone_valid === false} loading={startCall.isPending && startCall.variables === l.id}
+                        onClick={() => startCall.mutate(l.id)}><PhoneCall />Call</Button>
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -152,6 +152,17 @@ class Settings(BaseSettings):
     smtp_password: str = Field("", alias="SMTP_PASSWORD")
     smtp_from: str = Field("", alias="SMTP_FROM")
 
+    # ---------------- WhatsApp ----------------
+    # wa-bridge: the whatsapp-web.js container (QR-linked numbers). The secret signs both directions.
+    wa_bridge_url: str = Field("http://wa-bridge:4050", alias="WA_BRIDGE_URL")
+    wa_bridge_secret: str = Field("", alias="WA_BRIDGE_SECRET")
+    # Send fallbacks, tried when no QR-linked number is connected
+    # New conversations an agent's number may start per day (replies to inbound messages are not counted)
+    wa_daily_new_chats: int = Field(30, alias="WA_DAILY_NEW_CHATS")
+    composio_api_key: str = Field("", alias="COMPOSIO_API_KEY")
+    whatsapp_token: str = Field("", alias="WHATSAPP_TOKEN")
+    whatsapp_phone_number_id: str = Field("", alias="WHATSAPP_PHONE_NUMBER_ID")
+
     # ---------------- Files ----------------
     upload_dir: str = Field("data/uploads", alias="UPLOAD_DIR")
     legacy_excel_file: str = Field("data/Leads.xlsx", alias="EXCEL_FILE")

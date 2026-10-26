@@ -532,22 +532,29 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }) }, [history])
   useEffect(() => () => { audio.current?.pause(); stopMic(); window.clearTimeout(mouthTimer.current); if (analyser.current) { cancelAnimationFrame(analyser.current.raf); analyser.current.source?.disconnect(); analyser.current.node?.disconnect(); void analyser.current.ctx.close() } }, [])
 
-  const play = (url: string) => {
+  // The backend builds audio URLs from PUBLIC_BASE_URL (often an ngrok host). Play the same-origin path instead so the
+  // request goes through the dev proxy / this origin: a cross-origin element routed through an AnalyserNode is silent.
+  const sameOrigin = (url: string) => {
+    try { const u = new URL(url, location.origin); return u.origin === location.origin ? u.href : u.pathname + u.search } catch { return url }
+  }
+
+  const play = (url: string, rest: string[] = [], chained = false) => {
     audio.current?.pause();
     window.clearTimeout(mouthTimer.current)
-    // The backend builds audio URLs from PUBLIC_BASE_URL (often an ngrok host). Play the same-origin path instead so the
-    // request goes through the dev proxy / this origin: a cross-origin element routed through an AnalyserNode is silent.
-    let src = url
-    try { const u = new URL(url, location.origin); src = u.origin === location.origin ? u.href : u.pathname + u.search } catch { /* keep as given */ }
-    audio.current = new Audio(src);
+    audio.current = new Audio(sameOrigin(url));
     // 'play' fires as soon as play() is called, seconds before a deferred TTS file has downloaded, so the
     // mouth used to move in silence. 'playing' means audio is actually coming out; 'waiting' means it stalled.
     audio.current.onplaying = () => setIsSpeaking(true);
-    setSpokenFrac(0); lastFrac.current = 0
+    if (!chained) { setSpokenFrac(0); lastFrac.current = 0 }
+    // Reply is split into short clips so the first is heard sooner: warm the next while this one plays.
+    if (rest.length) { const nx = new Audio(sameOrigin(rest[0])); nx.preload = 'auto' }
     audio.current.onwaiting = () => setIsSpeaking(false);
     audio.current.crossOrigin = 'anonymous'
     meter(audio.current)
-    audio.current.onended = () => { setIsSpeaking(false); level.current = 0; setSpokenFrac(1) };
+    audio.current.onended = () => {
+      if (rest.length) { play(rest[0], rest.slice(1), true); return }
+      setIsSpeaking(false); level.current = 0; setSpokenFrac(1)
+    };
     audio.current.onerror = () => setIsSpeaking(false);
     audio.current.onpause = () => setIsSpeaking(false);
     // pause() from the next reply / Restart, or blocked autoplay, rejects play(): swallow it and reset the speaking state.
@@ -563,7 +570,7 @@ function Playground({ profile, unsaved, invalid, onSave, saving }: { profile: Ag
       if (vars.session !== session.current) return // the rehearsal was restarted or switched while this reply was in flight
       if (res.usage) qc.setQueryData(['playground-usage', base], res.usage)
       setHistory((h) => { setSelected(h.length); return [...h, { role: 'assistant', text: res.reply, meta: res }] })
-      if (speak && res.audio_url) play(res.audio_url)
+      if (speak && (res.audio_urls?.length || res.audio_url)) play(res.audio_urls?.[0] || res.audio_url!, res.audio_urls?.slice(1))
       else {
         // Voice off or TTS fallback active: mouth the reply for roughly as long as it would take.
         // Detach the old element's handlers before pausing: its 'pause' event lands a task later and

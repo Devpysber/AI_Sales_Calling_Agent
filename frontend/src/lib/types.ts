@@ -173,6 +173,7 @@ export interface AutomationSettings {
   nurture_enabled: boolean
   nurture_after_days: number
   nurture_max_attempts: number
+  whatsapp_auto_reply: boolean
 }
 
 export interface AnalyticsKpis {
@@ -242,6 +243,7 @@ export interface AgentTurnResult {
   llm_ms: number
   total_ms: number
   audio_url?: string
+  audio_urls?: string[]
   audio_error?: string
 }
 

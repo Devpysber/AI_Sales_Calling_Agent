@@ -64,6 +64,7 @@ const ActivityPage = lazy(page(() => import('@/pages/Activity')))
 const Agent = lazy(page(() => import('@/pages/Agent')))
 const Knowledge = lazy(page(() => import('@/pages/Knowledge')))
 const Automation = lazy(page(() => import('@/pages/Automation')))
+const WhatsApp = lazy(page(() => import('@/pages/WhatsApp')))
 const AgentSettings = lazy(page(() => import('@/pages/AgentSettings')))
 const SettingsPage = lazy(page(() => import('@/pages/Settings')))
 const ProfilePage = lazy(page(() => import('@/pages/Profile')))
@@ -132,6 +133,7 @@ export default function App() {
           <Route path="activity" element={<ActivityPage />} />
           <Route path="agent" element={<Agent />} />
           <Route path="knowledge" element={<Knowledge />} />
+          <Route path="whatsapp" element={<WhatsApp />} />
           <Route path="automation" element={<Automation />} />
           <Route path="settings" element={<AgentSettings />} />
           <Route path="*" element={<Navigate to="." replace />} />
