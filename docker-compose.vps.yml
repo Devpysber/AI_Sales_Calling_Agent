@@ -68,7 +68,7 @@ services:
       timeout: 5s
       retries: 3
     deploy:
-      resources: { limits: { memory: 700m } }
+      resources: { limits: { memory: 1200m } }  # ~450 MB per linked number's Chromium
     restart: unless-stopped
     logging: { driver: json-file, options: { max-size: "20m", max-file: "5" } }
 

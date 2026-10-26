@@ -121,6 +121,8 @@ function getClient(agentId) {
         puppeteer: {
             headless: true,
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+            protocolTimeout: 180000, // WhatsApp Web's first load on a small VPS takes well over the 30 s default
+            timeout: 120000,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -285,11 +287,19 @@ app.get('/health', (req, res) => {
 });
 
 // Bring back every number that was linked before a restart (LocalAuth keeps `session-agent_<id>`).
+// One at a time: two WhatsApp Web loads at once starve each other and both time out. Chromium's
+// Singleton* files left by a killed container would make it refuse the profile, so they go first.
 function restoreSessions() {
     try {
+        let delay = 0;
         for (const dir of fs.readdirSync(AUTH_DIR)) {
             const m = /^session-agent_(\d+)$/.exec(dir);
-            if (m) getClient(m[1]);
+            if (!m) continue;
+            for (const lock of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+                fs.rmSync(path.join(AUTH_DIR, dir, lock), { force: true });
+            }
+            setTimeout(() => getClient(m[1]), delay);
+            delay += 60000;
         }
     } catch (err) {
         console.log('No saved WhatsApp sessions to restore.');
