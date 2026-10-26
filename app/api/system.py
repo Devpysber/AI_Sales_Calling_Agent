@@ -13,7 +13,7 @@ from app.core import store
 from app.core.config import settings
 from app.core.secrets import get_all_secrets_from_db, set_secrets_in_db
 from app.core.database import engine
-from app.services import tts
+from app.services import tts, user_service
 from app.services.notification_service import email_configured, email_detail
 
 router = APIRouter(prefix="/api", tags=["system"])
@@ -382,6 +382,7 @@ async def add_team_member(body: TeamMemberUpdate):
     }
     members.append(new_member)
     SettingsService().set_state("team_members", members)
+    user_service.sync_team_member(new_member)
     return {"ok": True}
 
 class TeamMemberEdit(BaseModel):
@@ -410,6 +411,7 @@ async def update_team_member(member_id: str, body: TeamMemberEdit):
             values[key] = values[key].strip()
     member.update(values)
     SettingsService().set_state("team_members", members)
+    user_service.sync_team_member(member)
     safe = {k: v for k, v in member.items() if k != "password_hash"}
     return {"ok": True, "member": safe}
 
@@ -419,6 +421,7 @@ async def delete_team_member(member_id: str):
     members = SettingsService().get_state("team_members") or []
     members = [m for m in members if m.get("id") != member_id]
     SettingsService().set_state("team_members", members)
+    user_service.disable_team_member(member_id)
     return {"ok": True}
 
 class TeamMemberPasswordUpdate(BaseModel):

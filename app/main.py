@@ -55,6 +55,8 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(run_migrations)
         from app.services import agents
         from app.services.crm_service import CRMService
+        from app.services import user_service
+        await asyncio.to_thread(user_service.ensure_bootstrap)
         first = (await asyncio.to_thread(agents.ids) or [None])[0]
         await asyncio.to_thread(CRMService(first).import_legacy_excel, settings.legacy_excel_file)
 

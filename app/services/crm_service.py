@@ -5,6 +5,7 @@ Every instance is bound to one agent so leads never mix between agents.
 
 import io
 import re
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -20,11 +21,14 @@ log = get_logger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 
 # Fields the AI may never write: the phone number is what we dial, so it stays under human control.
-AI_PROTECTED = {"phone"}
+AI_PROTECTED = {"phone", "owner_user_id"}
 
 EDITABLE = {"name", "company", "phone", "email", "city", "language", "source", "tags", "notes", "do_not_call",
             "status", "call_status", "retry_count", "qualification", "summary", "requirements", "objections",
-            "follow_up_date", "meeting_at", "callback_at"}
+            "follow_up_date", "meeting_at", "callback_at", "owner_user_id"}
+
+# Set per request (api/deps.lead_scope) for a caller without leads.view_all: they only work their own leads.
+LEAD_OWNER_SCOPE: ContextVar[int | None] = ContextVar("lead_owner_scope", default=None)
 
 SORTABLE = {"id": Lead.id, "name": Lead.name, "company": Lead.company, "status": Lead.status,
             "last_contacted_at": Lead.last_contacted_at, "created_at": Lead.created_at,
@@ -146,13 +150,19 @@ class CRMService:
 
     def __init__(self, agent_id: int | None = None):
         self.agent_id = agent_id
+        self.owner_user_id = LEAD_OWNER_SCOPE.get()
 
     def _scoped(self, query):
+        if self.owner_user_id is not None:
+            # Unassigned leads stay shared: until someone assigns them, a rep keeps seeing what they see today.
+            query = query.where(or_(Lead.owner_user_id == self.owner_user_id, Lead.owner_user_id.is_(None)))
         return query.where(Lead.agent_id == self.agent_id) if self.agent_id is not None else query
 
     def _load(self, db, lead_id: int) -> Lead | None:
         lead = db.get(Lead, lead_id)
         if lead is None or (self.agent_id is not None and lead.agent_id != self.agent_id):
+            return None
+        if self.owner_user_id is not None and lead.owner_user_id not in (None, self.owner_user_id):
             return None
         return lead
 
@@ -441,7 +451,7 @@ class CRMService:
         if not normalize_phone(data.get("phone")):
             raise ValueError("A valid phone number is required (10-digit Indian or +country code).")
         with get_db() as db:
-            lead = Lead(agent_id=self.agent_id, status="New", language="en-IN", retry_count=0)
+            lead = Lead(agent_id=self.agent_id, status="New", language="en-IN", retry_count=0, owner_user_id=self.owner_user_id)
             self._apply(lead, {k: v for k, v in data.items() if v not in (None, "")}, actor)
             db.add(lead)
             db.flush()
@@ -492,6 +502,8 @@ class CRMService:
             query = db.query(Lead).filter(Lead.id.in_(lead_ids))
             if self.agent_id is not None:
                 query = query.filter(Lead.agent_id == self.agent_id)
+            if self.owner_user_id is not None:
+                query = query.filter(Lead.owner_user_id == self.owner_user_id)
             count = query.delete(synchronize_session=False)
         if count:
             events.record("lead.deleted", f"Deleted {count} lead(s)", agent_id=self.agent_id, actor=actor, data={"ids": lead_ids})

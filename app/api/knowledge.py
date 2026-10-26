@@ -4,6 +4,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import workspace
 from app.core.auth import actor
+from app.core.permissions import require
 from app.services import knowledge_profile, rag
 
 router = APIRouter(prefix="/api/agents/{agent_id}/knowledge", tags=["knowledge"])
@@ -34,7 +35,7 @@ def refresh_coverage(agent_id: int = Depends(workspace)):
     return {"status": "analyzing"}
 
 
-@router.post("/upload")
+@router.post("/upload", dependencies=[Depends(require("knowledge.manage", legacy_team=True))])
 async def upload(request: Request, file: UploadFile = File(...), title: str = Form(""), agent_id: int = Depends(workspace)):
     content = await file.read()
     if len(content) > MAX_UPLOAD:
@@ -45,7 +46,7 @@ async def upload(request: Request, file: UploadFile = File(...), title: str = Fo
         raise HTTPException(400, str(e))
 
 
-@router.post("/text")
+@router.post("/text", dependencies=[Depends(require("knowledge.manage", legacy_team=True))])
 def add_text(body: TextDoc, request: Request, agent_id: int = Depends(workspace)):
     try:
         return rag.add_text(agent_id, body.title, body.text, actor(request))
@@ -76,7 +77,7 @@ def get(doc_id: int, agent_id: int = Depends(workspace)):
     return doc
 
 
-@router.delete("/{doc_id}")
+@router.delete("/{doc_id}", dependencies=[Depends(require("knowledge.manage", legacy_team=True))])
 def delete(doc_id: int, request: Request, agent_id: int = Depends(workspace)):
     if not rag.delete_document(agent_id, doc_id, actor(request)):
         raise HTTPException(404, "Document not found.")

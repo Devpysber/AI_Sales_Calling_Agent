@@ -14,6 +14,7 @@ from app.api.deps import workspace, require_admin
 from app.core import store
 from app.core.auth import actor
 from app.core.config import settings
+from app.core.permissions import can, require
 from app.services import agent, agents, analytics, events, scheduler, tts
 from app.services.call_service import within_calling_hours
 from app.services.crm_service import CRMService
@@ -40,12 +41,16 @@ class AgentPatch(BaseModel):
     status: str | None = None
 
 
+def _org_id(request: Request) -> int | None:
+    return (getattr(request.state, "principal", None) or {}).get("organization_id")
+
+
 @router.get("")
 def list_agents(request: Request):
     user = getattr(request.state, "user", "admin")
-    all_a = agents.list_agents()
+    all_a = agents.list_agents(_org_id(request))
     payload = getattr(request.state, "token_payload", {})
-    if user == "team":
+    if user == "team" and payload.get("team_id"):
         unlocked = payload.get("unlocked", [])
         reduced = []
         for a in all_a:
@@ -82,7 +87,10 @@ def create_agent(body: AgentIn, request: Request, response: Response):
     user = getattr(request.state, "user", "")
     payload = getattr(request.state, "token_payload", {})
     team_id = payload.get("team_id")
-    
+
+    # A team member's right to create is the per-member limit below; everyone else needs the permission.
+    if user != "team" and not can(request, "agents.manage"):
+        raise HTTPException(403, "You don't have permission to do this.")
     if body.copy_from and not agents.exists(body.copy_from):
         raise HTTPException(400, "The agent to copy from does not exist.")
     if body.copy_from and user == "team" and body.copy_from not in payload.get("unlocked", []):
@@ -103,7 +111,8 @@ def create_agent(body: AgentIn, request: Request, response: Response):
     data = body.model_dump(exclude_none=True)
     try:
         from app.core.auth import actor
-        result = agents.create(data, actor=actor(request), created_by=team_id if user == "team" else "admin")
+        result = agents.create(data, actor=actor(request), created_by=team_id if user == "team" else "admin",
+                               organization_id=_org_id(request))
         
         unlocked = payload.get("unlocked", [])
         if result["id"] not in unlocked:
@@ -115,7 +124,7 @@ def create_agent(body: AgentIn, request: Request, response: Response):
 
         # The client seeds its agent list with this response and the shell reads .stats/.persona/.setup from
         # it before the refetch lands, so return the same shape as GET /api/agents, not the bare row.
-        summary = next((a for a in agents.list_agents() if a["id"] == result["id"]), result)
+        summary = next((a for a in agents.list_agents(_org_id(request)) if a["id"] == result["id"]), result)
         if user == "team":
             summary["locked"] = False
         return summary
@@ -128,7 +137,7 @@ def live(request: Request):
     """Live calls across agents, for the incoming-call banner (polled often, kept cheap)."""
     user = getattr(request.state, "user", "admin")
     payload = getattr(request.state, "token_payload", {})
-    unlocked = payload.get("unlocked", []) if user == "team" else None
+    unlocked = payload.get("unlocked", []) if user == "team" and payload.get("team_id") else agents.ids(organization_id=_org_id(request))
     # The newest event rides along so every open page can refresh when the agent changes something
     # from a live call (automation switched, lead updated, details sent) without a push channel.
     return {"live_calls": agents.live_calls(unlocked), "latest_event": events.latest(unlocked)}
@@ -138,7 +147,7 @@ def live(request: Request):
 def overview(request: Request, days: int = Query(14, ge=7, le=60)):
     user = getattr(request.state, "user", "admin")
     payload = getattr(request.state, "token_payload", {})
-    unlocked = payload.get("unlocked", []) if user == "team" else None
+    unlocked = payload.get("unlocked", []) if user == "team" and payload.get("team_id") else agents.ids(organization_id=_org_id(request))
     return agents.overview(days, unlocked)
 
 
@@ -187,7 +196,7 @@ def unlock_agent(body: Unlock, request: Request, response: Response, agent_id: i
     raise HTTPException(403, "Invalid password.")
 
 
-@router.delete("/{agent_id}", dependencies=[Depends(require_admin)])
+@router.delete("/{agent_id}", dependencies=[Depends(require_admin), Depends(require("agents.manage"))])
 def delete_agent(request: Request, agent_id: int = Depends(workspace)):
     agents.delete(agent_id, actor=actor(request))
     return {"ok": True}
@@ -484,7 +493,7 @@ def put_inbound_owner(request: Request, agent_id: int = Depends(workspace)):
         raise HTTPException(400, str(e))
 
 
-@router.put("/{agent_id}/automation")
+@router.put("/{agent_id}/automation", dependencies=[Depends(require("automation.manage", legacy_team=True))])
 def update_automation(values: dict, request: Request, agent_id: int = Depends(workspace)):
     try:
         return agents.update_automation(agent_id, values, actor=actor(request))

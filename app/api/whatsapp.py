@@ -10,7 +10,8 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.api.deps import workspace
+from app.api.deps import lead_scope, workspace
+from app.core.permissions import require
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.logging import get_logger
@@ -142,7 +143,7 @@ def _chat_id_of(agent_id: int, lead_id: int) -> str | None:
             .order_by(WhatsAppMessage.id.desc()).limit(1))
 
 
-@router.post("/api/agents/{agent_id}/whatsapp/send")
+@router.post("/api/agents/{agent_id}/whatsapp/send", dependencies=[Depends(require("whatsapp.send"))])
 async def send(body: SendIn, agent_id: int = Depends(workspace)):
     if not body.text.strip():
         raise HTTPException(422, "Message text is required.")
@@ -157,7 +158,7 @@ async def send(body: SendIn, agent_id: int = Depends(workspace)):
     return result
 
 
-@router.get("/api/agents/{agent_id}/leads/{lead_id}/whatsapp")
+@router.get("/api/agents/{agent_id}/leads/{lead_id}/whatsapp", dependencies=[Depends(lead_scope)])
 def lead_chat(lead_id: int, agent_id: int = Depends(workspace)):
     if not CRMService(agent_id).get(lead_id):
         raise HTTPException(404, "Lead not found.")

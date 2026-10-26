@@ -25,6 +25,7 @@ class Agent(Base):
     status: Mapped[str] = mapped_column(String(16), default="active")  # active | paused
     # Team member id that created this workspace ("admin" for the owner): the per-member agent limit counts these.
     created_by: Mapped[str | None] = mapped_column(String(64), index=True)
+    organization_id: Mapped[int | None] = mapped_column(Integer, index=True)  # NULL = not yet adopted (ensure_bootstrap)
     profile: Mapped[str | None] = mapped_column(Text)     # JSON persona (see agents.PROFILE_DEFAULTS)
     automation: Mapped[str | None] = mapped_column(Text)  # JSON schedule (see agents.AUTOMATION_DEFAULTS)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -38,6 +39,7 @@ class Agent(Base):
             "phone_number": self.phone_number,
             "status": self.status,
             "created_by": self.created_by,
+            "organization_id": self.organization_id,
             "created_at": iso(self.created_at),
         }
 

@@ -5,13 +5,14 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from app.api.deps import require_admin, workspace
+from app.api.deps import lead_scope, require_admin, workspace
 from app.core.auth import actor
-from app.services import agents, events
+from app.core.permissions import require
+from app.services import agents, events, user_service
 from app.services.call_service import IST, CallError, CallService
 from app.services.crm_service import CRMService
 
-router = APIRouter(prefix="/api/agents/{agent_id}/leads", tags=["leads"])
+router = APIRouter(prefix="/api/agents/{agent_id}/leads", tags=["leads"], dependencies=[Depends(lead_scope)])
 MAX_UPLOAD = 20 * 1024 * 1024
 
 
@@ -139,7 +140,7 @@ def board(search: str | None = None, qualification: str | None = None, per_colum
     return CRMService(agent_id).board(BOARD_STATUSES, search, qualification, per_column)
 
 
-@router.get("/export")
+@router.get("/export", dependencies=[Depends(require("leads.export", legacy_team=True))])
 def export(search: str | None = None, status: str | None = None, call_status: str | None = None,
            qualification: str | None = None, view: str | None = None, source: str | None = None,
            agent_id: int = Depends(workspace)):
@@ -367,11 +368,27 @@ def patch(lead_id: int, body: LeadPatch, request: Request, agent_id: int = Depen
         raise HTTPException(400, str(e))
 
 
-@router.delete("/{lead_id}")
+@router.delete("/{lead_id}", dependencies=[Depends(require("leads.delete", legacy_team=True))])
 def delete(lead_id: int, request: Request, agent_id: int = Depends(workspace)):
     if not CRMService(agent_id).delete([lead_id], actor=actor(request)):
         raise HTTPException(404, "Lead not found.")
     return {"ok": True}
+
+
+class Assign(BaseModel):
+    user_id: int | None = None  # null = unassign
+
+
+@router.post("/{lead_id}/assign", dependencies=[Depends(require("leads.assign"))])
+def assign(lead_id: int, body: Assign, request: Request, agent_id: int = Depends(workspace)):
+    if body.user_id is not None:
+        target = user_service.get(body.user_id)
+        if not target or target["status"] != "active" or target["organization_id"] != request.state.principal["organization_id"]:
+            raise HTTPException(400, "That user can't be assigned leads.")
+    try:
+        return CRMService(agent_id).update(lead_id, {"owner_user_id": body.user_id}, actor=actor(request), title="Lead assigned")
+    except LookupError as e:
+        raise HTTPException(404, str(e))
 
 
 @router.get("/{lead_id}/activity")

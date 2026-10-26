@@ -89,21 +89,55 @@ def read_token(token: str | None) -> dict | None:
     return data if data.get("exp", 0) > time.time() else None
 
 
+def _set_principal(request: Request, user_id, organization_id, role: str):
+    from app.core.permissions import make_principal
+    request.state.principal = make_principal(user_id, organization_id, role)
+
+
+def _default_org_id() -> int | None:
+    from app.services import user_service
+    org = user_service.default_org()
+    if org is None:
+        user_service.ensure_bootstrap()
+        org = user_service.default_org()
+    return org["id"] if org else None
+
+
 def current_user(request: Request) -> str | None:
     if not auth_enabled():
+        _set_principal(request, None, _default_org_id(), "owner")
         return "admin"
     header = request.headers.get("Authorization", "")
     if settings.api_token and header.startswith("Bearer ") and hmac.compare_digest(header[7:], settings.api_token):
+        _set_principal(request, None, _default_org_id(), "owner")  # an integration token acts as the default org's owner
         return "api"
     payload = read_token(request.cookies.get(COOKIE))
     if payload:
-        if payload.get("u") == "team":
+        from app.services import team_service, user_service
+        label = payload["u"]
+        if payload.get("uid"):
+            user = getattr(request.state, "session_user", None) or user_service.get(payload["uid"])
+            if not user or user["status"] != "active":
+                return None
+            request.state.session_user = user
             # A member removed from Sales Team Accounts must not keep working until the cookie expires.
-            from app.services import team_service
+            if user["legacy_team_id"] and not team_service.by_id(user["legacy_team_id"]):
+                return None
+            label = "admin" if user["role"] in ("owner", "admin") else "team"
+            if user["legacy_team_id"]:
+                payload["team_id"] = user["legacy_team_id"]
+            _set_principal(request, user["id"], user["organization_id"], user["role"])
+        elif label == "team":
             if not team_service.by_id(payload.get("team_id")):
                 return None
+            row = user_service.find_by_legacy_team_id(payload.get("team_id"))
+            if row and row["status"] != "active":
+                return None
+            _set_principal(request, row["id"] if row else None, row["organization_id"] if row else _default_org_id(), "sales_exec")
+        else:
+            _set_principal(request, None, _default_org_id(), "owner")
         request.state.token_payload = payload
-        return payload["u"]
+        return label
     return None
 
 
@@ -118,6 +152,10 @@ async def auth_middleware(request: Request, call_next):
         if not user:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
         request.state.user = user
+        principal = getattr(request.state, "principal", None)
+        if (principal and principal["role"] == "viewer" and request.method not in ("GET", "HEAD", "OPTIONS")
+                and not path.startswith("/api/auth/")):
+            return JSONResponse({"detail": "You don't have permission to do this."}, status_code=403)
     return await call_next(request)
 
 
@@ -137,6 +175,24 @@ def login(body: Login, request: Request, response: Response):
     if not auth_enabled():
         raise HTTPException(400, "Login is disabled: set ADMIN_PASSWORD on the server.")
     identifier = (body.email or body.username).strip().lower()
+    from app.services import user_service
+    user_service.ensure_bootstrap()
+    account = user_service.find_by_email(identifier)
+    if account:
+        if account["status"] != "active" or not user_service.verify_password(account, body.password):
+            raise HTTPException(401, "Invalid email or password.")
+        label = "admin" if account["role"] in ("owner", "admin") else "team"
+        payload = {"u": label, "uid": account["id"], "org": account["organization_id"], "exp": int(time.time()) + TTL}
+        if account["legacy_team_id"]:
+            payload.update(team_id=account["legacy_team_id"], unlocked=[])
+        if account["role"] == "owner":
+            profile = _profile()
+            profile["last_login_at"], profile["last_login_ip"] = int(time.time()), ip
+            _save_profile(profile)
+        user_service.touch_login(account["id"])
+        https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+        response.set_cookie(COOKIE, make_token(payload), max_age=TTL, httponly=True, samesite="lax", secure=https, path="/")
+        return {"user": label}
     expected = login_email()
     known = hmac.compare_digest(identifier, expected) if expected else hmac.compare_digest(identifier, settings.admin_username.lower())
     target_user = "admin"   # the session carries the ROLE; deps.py and every guard compare against it
@@ -182,6 +238,14 @@ def logout(response: Response):
     return {"ok": True}
 
 
+def _identity(request: Request) -> dict:
+    """Role key, permissions and organisation of whoever current_user just resolved."""
+    from app.services import user_service
+    principal = getattr(request.state, "principal", None) or {}
+    return {"role_key": principal.get("role"), "permissions": sorted(principal.get("permissions") or ()),
+            "organization": user_service.organization(principal.get("organization_id"))}
+
+
 @router.get("/me")
 def me(request: Request):
     user = current_user(request)
@@ -199,8 +263,10 @@ def me(request: Request):
         return {
             "user": user,
             "auth_enabled": auth_enabled(),
-            "display_name": (member.get("name") or member.get("email") or "Team Member") if member else "Team Member",
+            "display_name": (member.get("name") or member.get("email") or "Team Member") if member
+                            else ((getattr(request.state, "session_user", None) or {}).get("name") or "Team Member"),
             "role": "Team Member",
+            **_identity(request),
             # The client hides the create button once the admin's limit is used up.
             "agent_limit": limit,
             "agents_created": used,
@@ -208,7 +274,8 @@ def me(request: Request):
         }
     profile = _profile()
     return {"user": user, "auth_enabled": auth_enabled(),
-            "display_name": profile.get("display_name") or settings.admin_username, "role": profile.get("role") or "Administrator"}
+            "display_name": profile.get("display_name") or settings.admin_username, "role": profile.get("role") or "Administrator",
+            **_identity(request)}
 
 
 class ProfileUpdate(BaseModel):
@@ -295,6 +362,8 @@ def update_profile(body: ProfileUpdate, request: Request):
     fields["email"] = email.lower()
     profile = {**current, **{k: v.strip() for k, v in fields.items()}}
     _save_profile(profile)
+    from app.services import user_service
+    user_service.sync_owner()
     return _public_profile(profile)
 
 
@@ -330,4 +399,6 @@ def change_password(body: PasswordChange, request: Request):
         raise HTTPException(400, "Use at least 10 characters mixing upper and lower case letters with numbers or symbols.")
     profile = {**_profile(), "password_hash": _hash_password(new), "password_changed_at": int(time.time())}
     _save_profile(profile)
+    from app.services import user_service
+    user_service.sync_owner()
     return {"ok": True}

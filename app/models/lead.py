@@ -28,6 +28,7 @@ class Lead(Base):
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     queue_position: Mapped[int | None] = mapped_column(Integer, index=True)  # order in the call queue (lower first)
     last_call_uuid: Mapped[str | None] = mapped_column(String(64))
+    owner_user_id: Mapped[int | None] = mapped_column(Integer, index=True)  # the sales rep this lead is assigned to
 
     qualification: Mapped[str | None] = mapped_column(String(64), index=True)
     summary: Mapped[str | None] = mapped_column(Text)
@@ -59,6 +60,7 @@ class Lead(Base):
             "call_status": self.call_status,
             "retry_count": self.retry_count,
             "queue_position": self.queue_position,
+            "owner_user_id": self.owner_user_id,
             "qualification": self.qualification,
             "summary": self.summary,
             "requirements": self.requirements,

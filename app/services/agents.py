@@ -196,9 +196,11 @@ def require(agent_id: int) -> dict:
     return agent
 
 
-def ids(active_only: bool = False) -> list[int]:
+def ids(active_only: bool = False, organization_id: int | None = None) -> list[int]:
     with get_db() as db:
         query = select(Agent.id).order_by(Agent.id)
+        if organization_id is not None:
+            query = query.where(or_(Agent.organization_id == organization_id, Agent.organization_id.is_(None)))
         if active_only:
             query = query.where(Agent.status == "active")
         return list(db.scalars(query))
@@ -223,11 +225,14 @@ def desks() -> list[dict]:
     return rows
 
 
-def list_agents() -> list[dict]:
+def list_agents(organization_id: int | None = None) -> list[dict]:
     today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
     today_utc = (today - timedelta(hours=5, minutes=30)).replace(tzinfo=None)
     with get_db() as db:
-        agents = [a.to_dict() for a in db.scalars(select(Agent).order_by(Agent.id))]
+        query = select(Agent).order_by(Agent.id)
+        if organization_id is not None:  # an agent no organisation has adopted yet stays visible
+            query = query.where(or_(Agent.organization_id == organization_id, Agent.organization_id.is_(None)))
+        agents = [a.to_dict() for a in db.scalars(query)]
 
         def per_agent(query):
             return dict(db.execute(query).all())
@@ -374,7 +379,7 @@ def _unwire_own_number(agent_id: int, number: str | None, actor: str) -> None:
             set_inbound_owner("+" + digits, None, actor=actor)
 
 
-def create(data: dict, actor: str = "admin", created_by: str | None = None) -> dict:
+def create(data: dict, actor: str = "admin", created_by: str | None = None, organization_id: int | None = None) -> dict:
     meta = _clean_meta({"name": data.get("name"), **{k: data[k] for k in META_FIELDS if k in data and k != "name"}})
     profile = _validate_profile_values(coerce(PROFILE_DEFAULTS, {k: v for k, v in (data.get("profile") or {}).items() if v not in (None, "")}))
     # Whoever makes the agent is its first colleague, at the top of the ring order, unless the form named
@@ -395,7 +400,7 @@ def create(data: dict, actor: str = "admin", created_by: str | None = None) -> d
         _assert_unique(db, meta)
         count = db.scalar(select(func.count(Agent.id))) or 0
         agent = Agent(**{"color": COLORS[count % len(COLORS)], "status": "active", **meta},
-                      created_by=created_by,
+                      created_by=created_by, organization_id=organization_id,
                       profile=json.dumps(profile, ensure_ascii=False), automation=json.dumps(automation))
         db.add(agent)
         db.flush()

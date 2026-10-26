@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from app.api.deps import require_admin, workspace
 from app.core.auth import actor
+from app.core.permissions import require
 from app.services import agents, events, team_service
 from app.services.call_service import CallError, CallService, within_calling_hours
 from app.services.voice_stream import LIVE
@@ -20,7 +21,7 @@ class StartCall(BaseModel):
     purpose: str | None = None  # "confirm_meeting" | "follow_up"; None = normal sales call
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require("calls.start", legacy_team=True))])
 async def start(body: StartCall, request: Request, agent_id: int = Depends(workspace)):
     try:
         return await asyncio.to_thread(CallService(agent_id).start, body.lead_id, "manual", actor(request), body.purpose)
