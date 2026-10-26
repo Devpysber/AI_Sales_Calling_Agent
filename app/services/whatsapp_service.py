@@ -7,12 +7,13 @@ Supports:
 """
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 import random
 import re
-import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
@@ -75,9 +76,20 @@ OPT_OUT_TAG = "whatsapp_opt_out"
 GAP_SECONDS = (20, 60)       # random gap between messages we initiate, per number
 DUPLICATE_RECIPIENTS = 3     # the same text to more than this many people in 24 h is refused
 
-STOP_RE = re.compile(
-    r"^\W*(stop|unsubscribe|opt[ -]?out)\W*$|unsubscribe|(message|msg|text) (mat|nahi|na) (karo|karna|kijiye)|(message|messages|msg|whatsapp) band karo|"
-    r"(don'?t|do not|never|stop) (message|messaging|text|texting|msg|whatsapp)", re.I)
+# A stop request is the WHOLE message ("don't text me, just call me at 5" is not one), matched on the normalised text.
+_STOP_PHRASES = (
+    r"stop|unsubscribe|opt ?out|"
+    r"(stop|dont|do not|never) (messaging|texting|message|text|msg|whatsapp)|"
+    r"stop sending (messages|texts|msgs)|"
+    r"(message|msg|text|whatsapp) (mat|nahi|na) (karo|karna|kijiye|bhejo|bhejna)|"
+    r"(message|messages|msg|whatsapp) band (karo|kijiye|kar do|kardo)")
+STOP_RE = re.compile(rf"(?:(?:please|pls|plz) )?(?:mujhe )?(?:{_STOP_PHRASES})(?: me)?(?: (?:please|pls|plz))?", re.I)
+STOP_MAX_CHARS = 40
+
+
+def is_stop_request(text: str) -> bool:
+    flat = " ".join(re.sub(r"[^\w\s]", " ", (text or "").lower().replace("'", "").replace("’", "")).split())
+    return len(flat) <= STOP_MAX_CHARS and bool(STOP_RE.fullmatch(flat))
 
 
 def is_opted_out(lead: dict | None) -> bool:
@@ -110,8 +122,71 @@ def _has_inbound(agent_id: int, recipient: str) -> bool:
             WhatsAppMessage.agent_id == agent_id, WhatsAppMessage.phone == recipient, WhatsAppMessage.direction == "in").limit(1)) is not None
 
 
-def _check_limits(agent_id: int, lead_id: int | None, recipient: str, text: str, reply: bool, cleared: bool, send_later) -> dict | None:
-    """None when the send may go now; otherwise the refused / queued result."""
+QUEUE_KEY = "wa:queue"
+QUEUE_PER_TICK = 5           # queued sends made per scheduler tick
+QUEUE_RETRIES = 3            # re-queues of a send the bridge rate-limited
+@contextlib.contextmanager
+def _queue_lock():
+    """The api enqueues and the worker drains: a lock in the shared store, not a thread lock, keeps both from losing jobs."""
+    owner = uuid.uuid4().hex
+    for _ in range(50):
+        if store.acquire_lock(QUEUE_KEY, owner, 10):
+            break
+        time.sleep(0.1)
+    else:
+        raise RuntimeError("WhatsApp send queue is busy")
+    try:
+        yield
+    finally:
+        store.release_lock(QUEUE_KEY, owner)
+
+
+def _enqueue(job: dict, delay: float, attempts: int = 0) -> None:
+    """Hold a send in the shared store (it survives an api restart); the scheduler's tick sends it when due."""
+    with _queue_lock():
+        jobs = store.get_json(QUEUE_KEY, []) or []
+        store.set_json(QUEUE_KEY, [*jobs, {"due": time.time() + delay, "attempts": attempts, "args": job}], ttl=86400)
+
+
+def _do_not_contact(job: dict) -> bool:
+    """A lead marked do-not-call while its message waited in the queue is not messaged either."""
+    agent_id, lead_id = job.get("agent_id"), job.get("lead_id")
+    if not (agent_id and lead_id):
+        return False
+    from app.services.crm_service import CRMService
+    return bool((CRMService(agent_id).get(lead_id) or {}).get("do_not_call"))
+
+
+def drain_queue() -> int:
+    """Scheduler: send queued messages that are due. Opt-out and do-not-call are re-checked at send time (_cleared skips only the spacing rules)."""
+    with _queue_lock():
+        jobs = store.get_json(QUEUE_KEY, []) or []
+        now = time.time()
+        due = [j for j in jobs if j["due"] <= now][:QUEUE_PER_TICK]
+        if not due:
+            return 0
+        store.set_json(QUEUE_KEY, [j for j in jobs if j not in due], ttl=86400)
+    for job in due:
+        if _do_not_contact(job["args"]):
+            continue
+        try:
+            result = send_whatsapp_message_sync(**job["args"], _cleared=True)
+        except Exception:
+            log.exception("Queued WhatsApp send failed")
+            continue
+        if result.get("rate_limited") and job["attempts"] < QUEUE_RETRIES:
+            _enqueue(job["args"], 30, job["attempts"] + 1)
+    return len(due)
+
+
+def _recipient_opted_out(agent_id: int, lead_id: int | None, recipient: str) -> bool:
+    from app.services.crm_service import CRMService
+    crm = CRMService(agent_id)
+    return is_opted_out((crm.get(lead_id) if lead_id else None) or crm.find_by_phone(recipient))
+
+
+def _check_limits(agent_id: int, lead_id: int | None, recipient: str, text: str, reply: bool, cleared: bool, job: dict) -> dict | None:
+    """None when the send may go now; otherwise the refused / queued result. `job` is what the queue re-sends."""
     from app.services.crm_service import CRMService
     crm = CRMService(agent_id)
     lead = (crm.get(lead_id) if lead_id else None) or crm.find_by_phone(recipient) or {}
@@ -137,9 +212,7 @@ def _check_limits(agent_id: int, lead_id: int | None, recipient: str, text: str,
     store.set_json(f"wa:gap:{agent_id}", run_at + random.uniform(*GAP_SECONDS), ttl=3600)
     if run_at - now > 1:
         delay = run_at - now
-        timer = threading.Timer(delay, send_later)
-        timer.daemon = True
-        timer.start()
+        _enqueue(job, delay)
         return _limited(agent_id, lead_id, text, "queued",
                         f"Queued, not sent yet: WhatsApp messages we start are spaced out; this goes in about {int(delay)}s.")
     return None
@@ -165,43 +238,67 @@ async def send_whatsapp_message(
     2. Composio WhatsApp API.
     3. Meta Cloud API.
     """
-    recipient = clean_phone(to)
+    recipient = to.strip() if "@" in to else clean_phone(to)   # a full JID (an @lid sender) is used as it is
     if not recipient:
         return {"ok": False, "error": "Invalid phone number"}
+    job = dict(to=recipient, text=text, agent_id=agent_id, lead_id=lead_id, call_id=call_id, via=via)
 
     if agent_id and via != "dashboard":
-        verdict = await asyncio.to_thread(
-            _check_limits, agent_id, lead_id, recipient, text, reply, _cleared,
-            lambda: send_whatsapp_message_sync(to=recipient, text=text, agent_id=agent_id, lead_id=lead_id, call_id=call_id,
-                                               via=via, _cleared=True))
+        verdict = await asyncio.to_thread(_check_limits, agent_id, lead_id, recipient, text, reply, _cleared, job)
         if verdict:
             return verdict
+    elif agent_id and await asyncio.to_thread(_recipient_opted_out, agent_id, lead_id, recipient):
+        # A person typing in the dashboard skips the spacing rules, but not the lead's request to be left alone.
+        return await asyncio.to_thread(_limited, agent_id, lead_id, text, "refused",
+                                       f"Not sent: +{recipient} asked not to be messaged on WhatsApp.")
 
     # 1. Native WhatsApp Web Bridge check
-    try:
-        if agent_id:
-            base = f"{settings.wa_bridge_url.rstrip('/')}/api/wa/{agent_id}"
+    connected = False
+    base = f"{settings.wa_bridge_url.rstrip('/')}/api/wa/{agent_id}"
+    if agent_id:
+        try:
             async with httpx.AsyncClient(timeout=8.0, headers=_bridge_headers()) as client:
                 status_res = await client.get(f"{base}/status")
-                if status_res.status_code == 200:
-                    data = status_res.json()
-                    if data.get("status") == "connected":
-                        send_res = await client.post(f"{base}/send", json={"to": recipient, "text": text, "typing": reply}, timeout=45.0)
-                        if send_res.status_code == 200 and send_res.json().get("ok"):
-                            events.record(
-                                "whatsapp.sent",
-                                f"WhatsApp sent to +{recipient}",
-                                text[:120],
-                                agent_id=agent_id,
-                                lead_id=lead_id,
-                                call_id=call_id,
-                                actor="ai"
-                            )
-                            _save_outbound(agent_id, lead_id, recipient, text, "native_qr",
-                                           send_res.json().get("messageId"), via)
-                            return {"ok": True, "provider": "native_qr", "data": send_res.json()}
-    except Exception as e:
-        log.warning("Native WhatsApp Web Bridge error: %s", e)
+                connected = status_res.status_code == 200 and status_res.json().get("status") == "connected"
+        except Exception as e:
+            log.warning("Native WhatsApp Web Bridge error: %s", e)  # nothing was sent: the other providers may try
+    if connected:
+        # From here the bridge owns the send. Falling through to Composio/Meta after a failure here could deliver the
+        # same message twice, or from another number, so every outcome below ends this call.
+        try:
+            # Longer than the bridge's worst case: 20 s waiting for a send slot, 6.8 s of typing, then the send.
+            async with httpx.AsyncClient(timeout=8.0, headers=_bridge_headers()) as client:
+                send_res = await client.post(f"{base}/send", json={"to": recipient, "text": text, "typing": reply}, timeout=60.0)
+        except httpx.ConnectError as e:
+            log.warning("WhatsApp bridge refused the send connection: %s", e)
+            return {"ok": False, "error": "WhatsApp bridge unreachable; the message was not sent."}
+        except Exception as e:
+            log.warning("WhatsApp bridge send outcome unknown: %s", e)
+            return {"ok": False, "unknown": True, "error": "WhatsApp send outcome unknown (the bridge did not answer in time). "
+                                                           "Check the chat before sending again; it was not resent."}
+        try:
+            body = send_res.json() if send_res.content else {}
+        except ValueError:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        if send_res.status_code == 200 and body.get("ok"):
+            events.record(
+                "whatsapp.sent",
+                f"WhatsApp sent to +{recipient}",
+                text[:120],
+                agent_id=agent_id,
+                lead_id=lead_id,
+                call_id=call_id,
+                actor="ai"
+            )
+            _save_outbound(agent_id, lead_id, recipient, text, "native_qr", body.get("messageId"), via)
+            return {"ok": True, "provider": "native_qr", "data": body}
+        if send_res.status_code == 429:
+            if not (reply or _cleared or via == "dashboard"):
+                await asyncio.to_thread(_enqueue, job, 30)
+                return {"ok": False, "queued": True, "error": "Queued, not sent yet: this WhatsApp number is at its sending rate limit."}
+            return {"ok": False, "rate_limited": True, "error": "WhatsApp rate limit reached for this number; try again in a minute."}
+        return {"ok": False, "error": body.get("error") or f"WhatsApp bridge error (HTTP {send_res.status_code}); the message was not sent."}
 
     # 2. Composio WhatsApp Tool Action Call
     composio_key = getattr(settings, "composio_api_key", "")

@@ -618,11 +618,11 @@ function WhatsAppPanel({ base, leadId, phone }: { base: string; leadId: number; 
   const connected = status.data?.status === 'connected'
   const msgs = useQuery({
     queryKey: ['lead-whatsapp', leadId],
-    queryFn: async () => { const r = await api<WaMsg[] | { messages: WaMsg[] }>(`${base}/leads/${leadId}/whatsapp`); return Array.isArray(r) ? r : r.messages ?? [] },
+    queryFn: async () => { const r = await api<WaMsg[] | { items: WaMsg[] }>(`${base}/leads/${leadId}/whatsapp`); return Array.isArray(r) ? r : r.items ?? [] },
     refetchInterval: 5000,
   })
   const send = useMutation({
-    mutationFn: (t: string) => api(`${base}/whatsapp/send`, { method: 'POST', json: { to: phone, text: t } }),
+    mutationFn: (t: string) => api(`${base}/whatsapp/send`, { method: 'POST', json: { to: phone, text: t, lead_id: leadId } }),
     onSuccess: () => { setText(''); qc.invalidateQueries({ queryKey: ['lead-whatsapp', leadId] }) },
     onError: (e: Error) => toast.error(e.message),
   })

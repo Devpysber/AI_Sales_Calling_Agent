@@ -319,6 +319,13 @@ def tick():
             report("scheduler_error", f"Agent {agent_id}: {type(e).__name__}: {str(e)[:300]}", agent_id=agent_id,
                    data={"agent_id": agent_id, "job": None})
             continue
+    # WhatsApp sends held back by the spacing rule live in the store and go out here, so a restart loses none.
+    if store.acquire_lock("scheduler", OWNER, LOCK_TTL):
+        try:
+            from app.services import whatsapp_service
+            whatsapp_service.drain_queue()
+        except Exception:
+            log.exception("WhatsApp queue drain failed")
     CallService().expire_stale()
     from app.services.heal_service import SCHEDULER_TICK_KEY
     store.set_json(SCHEDULER_TICK_KEY, time.time())

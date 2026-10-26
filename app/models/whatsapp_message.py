@@ -18,6 +18,7 @@ class WhatsAppMessage(Base):
     agent_id: Mapped[int] = mapped_column(Integer, index=True)
     lead_id: Mapped[int | None] = mapped_column(Integer, index=True)
     phone: Mapped[str] = mapped_column(String(32), index=True)  # digits only, with country code
+    chat_id: Mapped[str | None] = mapped_column(String(64), index=True)  # WhatsApp JID; the reply address of an @lid sender
     direction: Mapped[str] = mapped_column(String(8))  # in | out
     text: Mapped[str] = mapped_column(Text)
     wa_message_id: Mapped[str | None] = mapped_column(String(128), unique=True)  # dedupes bridge retries

@@ -1,7 +1,10 @@
 """WhatsApp chat agent: inbound webhook, shared prompt memory, and the limits that protect a linked number."""
 
+import asyncio
 import re
+import time
 
+import httpx
 import pytest
 from sqlalchemy import func, select
 
@@ -131,7 +134,7 @@ def test_one_reply_covers_the_whole_burst_and_a_dashboard_reply_pauses_it():
 # ---------------- send limits ----------------
 
 def _check(agent_id, to, text, reply=False, lead_id=None):
-    return whatsapp_service._check_limits(agent_id, lead_id, to, text, reply, False, lambda: None)
+    return whatsapp_service._check_limits(agent_id, lead_id, to, text, reply, False, {"to": to, "text": text, "agent_id": agent_id})
 
 
 @pytest.fixture
@@ -163,10 +166,17 @@ def test_opt_out_blocks_everything_and_dnc_blocks_initiated(open_gap):
     dnc = crm.create({"phone": "9822200011", "do_not_call": True})
     assert _check(9102, "919822200011", "Offer for you")["refused"]
     assert _check(9102, "919822200011", "Thanks for writing", reply=True) is None   # answering them is still fine
-    assert whatsapp_service.STOP_RE.search("please message band karo") and whatsapp_service.STOP_RE.search("STOP")
-    assert not whatsapp_service.STOP_RE.search("booking band karo") and not whatsapp_service.STOP_RE.search("call band karo")
-    assert not whatsapp_service.STOP_RE.search("stop by tomorrow at 5")
     assert dnc["do_not_call"]
+
+
+def test_only_a_whole_message_stop_request_opts_out():
+    stop = whatsapp_service.is_stop_request
+    for text in ("STOP", "Stop!", "please message band karo", "msg mat bhejo", "WhatsApp band karo 🙏", "Don't message me",
+                 "stop texting me pls", "unsubscribe", "opt out", "message mat karo please"):
+        assert stop(text), text
+    for text in ("booking band karo", "call band karo", "stop by tomorrow at 5", "don't text me, just call me at 5",
+                 "how do I unsubscribe from the newsletter but keep updates", "I will unsubscribe later"):
+        assert not stop(text), text
 
 
 def test_same_text_to_a_fourth_person_is_refused(open_gap):
@@ -178,20 +188,169 @@ def test_same_text_to_a_fourth_person_is_refused(open_gap):
     assert refused and refused["refused"] and "Personalise" in refused["error"]
 
 
-def test_second_initiated_send_is_queued_not_sent(monkeypatch):
-    started = []
-
-    class FakeTimer:
-        daemon = False
-
-        def __init__(self, delay, fn):
-            started.append(delay)
-
-        def start(self):
-            pass
-
-    monkeypatch.setattr(whatsapp_service.threading, "Timer", FakeTimer)
+def test_second_initiated_send_is_queued_in_the_store_and_drained(monkeypatch):
+    from app.core import store
+    store.delete(whatsapp_service.QUEUE_KEY)
     assert _check(9104, "919822200030", "First hello") is None
     queued = _check(9104, "919822200031", "Second hello")
-    assert queued and queued["queued"] and 15 <= started[0] <= 61
+    jobs = store.get_json(whatsapp_service.QUEUE_KEY)
+    assert queued and queued["queued"] and len(jobs) == 1 and 15 <= jobs[0]["due"] - time.time() <= 61
     assert _check(9104, "919822200031", "A reply goes at once", reply=True) is None
+    sent = []
+    monkeypatch.setattr(whatsapp_service, "send_whatsapp_message_sync", lambda **kw: sent.append(kw) or {"ok": True})
+    assert whatsapp_service.drain_queue() == 0 and not sent        # not due yet
+    store.set_json(whatsapp_service.QUEUE_KEY, [{**jobs[0], "due": time.time() - 1}])
+    assert whatsapp_service.drain_queue() == 1
+    assert sent[0]["to"] == "919822200031" and sent[0]["_cleared"] and not store.get_json(whatsapp_service.QUEUE_KEY)
+
+
+# ---------------- bridge send outcomes ----------------
+
+class _Res:
+    def __init__(self, status, body=None):
+        self.status_code, self._body = status, body or {}
+        self.content = b"{}"
+
+    def json(self):
+        return self._body
+
+
+def _fake_bridge(monkeypatch, send):
+    """A connected bridge whose /send does `send(kwargs)`; Composio is configured so any fall-through is visible."""
+    calls = {"send": 0, "other": 0}
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            return _Res(200, {"status": "connected"})
+
+        async def post(self, url, **kw):
+            if url.endswith("/send"):
+                calls["send"] += 1
+                return send(kw)
+            calls["other"] += 1
+            return _Res(200)
+
+    from app.core.config import settings
+    monkeypatch.setattr(whatsapp_service.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(settings, "composio_api_key", "k", raising=False)
+    return calls
+
+
+def _send(**kw):
+    return asyncio.run(whatsapp_service.send_whatsapp_message(to="919833300001", text="hello", agent_id=9110, **kw))
+
+
+def test_a_failed_bridge_send_never_falls_through_to_another_provider(monkeypatch):
+    calls = _fake_bridge(monkeypatch, lambda kw: _Res(500, {"error": "boom"}))
+    out = _send(reply=True)
+    assert out == {"ok": False, "error": "boom"} and calls == {"send": 1, "other": 0}
+
+
+def test_a_bridge_timeout_is_reported_unknown_and_not_resent(monkeypatch):
+    def timeout(kw):
+        assert kw["timeout"] >= 60
+        raise httpx.ReadTimeout("slow")
+    calls = _fake_bridge(monkeypatch, timeout)
+    out = _send(reply=True)
+    assert not out["ok"] and "send outcome unknown" in out["error"] and calls == {"send": 1, "other": 0}
+
+
+def test_a_rate_limited_reply_is_an_error_but_an_initiated_send_is_queued(monkeypatch):
+    from app.core import store
+    store.delete(whatsapp_service.QUEUE_KEY)
+    calls = _fake_bridge(monkeypatch, lambda kw: _Res(429, {"error": "fast"}))
+    reply = _send(reply=True)
+    assert reply["rate_limited"] and "rate limit" in reply["error"] and not store.get_json(whatsapp_service.QUEUE_KEY)
+    assert _send(_cleared=True)["rate_limited"]
+    assert _send()["queued"] and len(store.get_json(whatsapp_service.QUEUE_KEY)) == 1   # we started it: held, not lost
+    assert calls["other"] == 0
+
+
+def test_dashboard_send_respects_opt_out_and_reports_failure(client, base, monkeypatch):
+    aid = _agent_id(base)
+    lead = CRMService(aid).create({"phone": "9833300002", "name": "Quiet"})
+    whatsapp_service.mark_opt_out(aid, lead["id"])
+    out = asyncio.run(whatsapp_service.send_whatsapp_message(to="9833300002", text="hi", agent_id=aid, via="dashboard"))
+    assert out["refused"] and "asked not to be messaged" in out["error"]
+    res = client.post(f"{base}/whatsapp/send", json={"to": "9833300002", "text": "hi"})
+    assert res.status_code == 409 and "asked not to be messaged" in res.json()["detail"]
+
+    async def failing(**kw):
+        return {"ok": False, "error": "WhatsApp account not connected."}
+    monkeypatch.setattr(whatsapp_service, "send_whatsapp_message", failing)
+    res = client.post(f"{base}/whatsapp/send", json={"to": "9833300003", "text": "hi"})
+    assert res.status_code == 502 and "not connected" in res.json()["detail"]
+
+
+# ---------------- reply bookkeeping ----------------
+
+def test_a_failed_llm_or_send_leaves_the_burst_unanswered(base, monkeypatch):
+    from app.core import store
+    aid = _agent_id(base)
+    lead = CRMService(aid).create({"phone": "9833300010", "name": "Asha"})
+    with get_db() as db:
+        db.add(WhatsAppMessage(agent_id=aid, lead_id=lead["id"], phone="919833300010", direction="in", text="price?"))
+    key = f"wa:answered:{aid}:{lead['id']}"
+    store.delete(key)
+
+    def llm_down(*a, **k):
+        raise RuntimeError("llm down")
+    monkeypatch.setattr(agent, "respond", llm_down)
+    with pytest.raises(RuntimeError):
+        whatsapp_agent._reply(aid, lead["id"], "919833300010")
+    assert store.get_json(key) is None
+
+    monkeypatch.setattr(agent, "respond", lambda *a, **k: {"reply": "It is 50 lakh", "action": "none", "crm_update": {}, "qualification": None, "intent": None})
+    monkeypatch.setattr(whatsapp_service, "send_whatsapp_message_sync", lambda **kw: {"ok": False, "error": "bridge down"})
+    assert whatsapp_agent._reply(aid, lead["id"], "919833300010") is False
+    assert store.get_json(key) is None
+
+    monkeypatch.setattr(whatsapp_service, "send_whatsapp_message_sync", lambda **kw: {"ok": True})
+    assert whatsapp_agent._reply(aid, lead["id"], "919833300010") is True
+    assert store.get_json(key) is not None
+
+
+def test_a_lock_is_released_only_by_its_owner():
+    from app.core import store
+    assert store.acquire_lock("t-lock", "a", 60)
+    assert not store.release_lock("t-lock", "b") and not store.acquire_lock("t-lock", "b", 60)
+    assert store.release_lock("t-lock", "a") and store.acquire_lock("t-lock", "b", 60)
+    store.release_lock("t-lock", "b")
+
+
+# ---------------- senders without a number (@lid) ----------------
+
+def test_a_lid_sender_gets_a_numberless_lead_matched_by_chat_id(client, base):
+    aid = _agent_id(base)
+    body = {"agent_id": aid, "chat_id": "2345678901234@lid", "lid": True, "name": "Hidden", "text": "hello", "message_id": "m-lid1"}
+    assert client.post("/api/whatsapp/inbound", json=body).json() == {"ok": True}
+    client.post("/api/whatsapp/inbound", json={**body, "text": "again", "message_id": "m-lid2"})
+    with get_db() as db:
+        rows = db.execute(select(WhatsAppMessage.lead_id, WhatsAppMessage.chat_id, WhatsAppMessage.phone)
+                          .where(WhatsAppMessage.wa_message_id.in_(["m-lid1", "m-lid2"]))).all()
+    assert len({r.lead_id for r in rows}) == 1 and rows[0].lead_id and rows[0].chat_id == "2345678901234@lid"
+    assert rows[0].phone == "2345678901234@lid"      # replies are addressed to the chat id
+    lead = CRMService(aid).get(rows[0].lead_id)
+    assert lead["phone"] == "" and "whatsapp_lid" in lead["tags"]
+
+
+def test_a_lead_without_a_number_cannot_be_dialled(base):
+    from app.models.lead import Lead
+    from app.services.call_service import CallError, CallService
+    aid = _agent_id(base)
+    with get_db() as db:
+        row = Lead(agent_id=aid, phone="", source="whatsapp", status="New", language="en-IN", retry_count=0)
+        db.add(row)
+        db.flush()
+        lead_id = row.id
+    with pytest.raises(CallError, match="no number"):
+        CallService(aid).start(lead_id, trigger="manual", actor="team")

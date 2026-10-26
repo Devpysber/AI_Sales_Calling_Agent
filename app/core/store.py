@@ -149,5 +149,17 @@ def acquire_lock(name: str, owner: str, ttl: int) -> bool:
     return False
 
 
+def release_lock(name: str, owner: str) -> bool:
+    """Free the lock only while we still own it: after a TTL expiry another owner may have taken it."""
+    key = PREFIX + "lock:" + name
+    current = store.get(key)
+    if isinstance(current, bytes):
+        current = current.decode()
+    if current != owner:
+        return False
+    store.delete(key)
+    return True
+
+
 def rate_limited(bucket: str, limit: int, window: int) -> bool:
     return store.incr(PREFIX + "rl:" + bucket, window) > limit

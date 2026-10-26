@@ -381,6 +381,8 @@ class CallService:
             raise CallError("Lead not found.")
         if lead["do_not_call"]:
             raise CallError("This lead is marked Do Not Call.")
+        if not (lead.get("phone") or "").strip():  # a WhatsApp-only lead: phone_valid is not False for an empty number
+            raise CallError("This lead has no number, so it is not a complete phone number. Edit the lead and add one before calling.")
         if lead.get("phone_valid") is False:
             raise CallError(f"{lead['phone']} is not a complete phone number. Edit the lead and fix it before calling.")
         workspace = agents.require(self.agent_id)

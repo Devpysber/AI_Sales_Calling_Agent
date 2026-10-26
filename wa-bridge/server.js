@@ -82,11 +82,12 @@ async function onMessage(agentId, msg) {
         else if (MEDIA_TYPES.has(msg.type)) text = `[media: ${msg.type}]` + (msg.body ? ` ${msg.body}` : '');
         else return;
         if (!text || !text.trim()) return;
-        let digits = msg.from.replace(/\D/g, '');
+        // "@lid" ids are not phone numbers: only an "@c.us" id, or a number the contact resolves, is sent as `from`.
+        let digits = msg.from.endsWith('@c.us') ? msg.from.replace(/\D/g, '') : '';
         let name = msg._data?.notifyName || '';
         try {
             const contact = await msg.getContact();
-            // "@lid" ids are not phone numbers: the contact carries the real one.
+            // the contact carries the real number of an "@lid" sender, when WhatsApp knows it
             if (contact?.number) digits = String(contact.number).replace(/\D/g, '');
             name = contact?.pushname || name;
         } catch (_) { /* contact lookup is best effort */ }
@@ -94,7 +95,8 @@ async function onMessage(agentId, msg) {
         sleep(800 + Math.random() * 1200).then(() => msg.getChat()).then((chat) => chat.sendSeen()).catch(() => {});
         await forwardInbound({
             agent_id: Number(agentId),
-            from: digits,
+            chat_id: msg.from,
+            ...(digits ? { from: digits } : { lid: true }),
             name,
             text,
             message_id: msg.id?._serialized || '',
@@ -109,9 +111,6 @@ function getClient(agentId) {
     if (sessions[agentId]) {
         return sessions[agentId];
     }
-
-    const authPath = path.join(__dirname, '.wwebjs_auth', `session_agent_${agentId}`);
-    fs.mkdirSync(authPath, { recursive: true });
 
     const client = new Client({
         authStrategy: new LocalAuth({
@@ -277,9 +276,12 @@ app.post('/api/wa/:agentId/send', async (req, res) => {
     }
 
     try {
-        let clean = to.replace(/\D/g, '');
-        if (clean.length === 10) clean = '91' + clean;
-        const chatId = `${clean}@c.us`;
+        let chatId = to; // a full JID (an "@lid" sender) is used as-is
+        if (!to.includes('@')) {
+            let clean = to.replace(/\D/g, '');
+            if (clean.length === 10) clean = '91' + clean;
+            chatId = `${clean}@c.us`;
+        }
 
         if (!(await takeSendSlot(agentId))) {
             return res.status(429).json({ ok: false, error: `Sending too fast (limit ${MAX_SENDS_PER_MIN}/min). Try again shortly.` });

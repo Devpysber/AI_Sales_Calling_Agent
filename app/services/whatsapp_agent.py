@@ -30,6 +30,7 @@ HISTORY_MESSAGES = 20
 QUIET_MINUTES = 30           # a chat this idle gets summarised onto the lead
 SUMMARY_PER_RUN = 5          # chats summarised per scheduler run (cost cap)
 ANSWERED_TTL = 7 * 86400
+RETRY_SECONDS = 20           # one delayed retry of a reply that failed (LLM error, bridge hiccup)
 
 
 def _now() -> datetime:
@@ -72,59 +73,69 @@ async def handle_inbound(agent_id: int, lead_id: int, phone: str) -> None:
     await asyncio.sleep(DEBOUNCE_SECONDS)
     if store.get_json(key) != token:
         return  # a newer message arrived: its own task answers the whole burst
-    try:
-        await asyncio.to_thread(reply_to_burst, agent_id, lead_id, phone)
-    except Exception:
-        log.exception("WhatsApp reply failed for lead %s", lead_id)
+    for attempt in range(2):
+        try:
+            if await asyncio.to_thread(reply_to_burst, agent_id, lead_id, phone):
+                return
+        except Exception:
+            log.exception("WhatsApp reply failed for lead %s", lead_id)
+        if attempt == 0:
+            await asyncio.sleep(RETRY_SECONDS)
 
 
-def reply_to_burst(agent_id: int, lead_id: int, phone: str) -> None:
+def reply_to_burst(agent_id: int, lead_id: int, phone: str) -> bool:
+    """True when the burst is dealt with (replied, or deliberately left); False when it should be tried again."""
     lock = f"wa:reply:{agent_id}:{lead_id}"
     owner = uuid.uuid4().hex
     for _ in range(30):  # a reply still being written for the previous burst: wait for it
-        if store.acquire_lock(lock, owner, 90):
+        if store.acquire_lock(lock, owner, 180):
             break
         time.sleep(1)
     else:
-        return
+        return False
     try:
-        _reply(agent_id, lead_id, phone)
+        return _reply(agent_id, lead_id, phone)
     finally:
-        store.delete(f"lock:{lock}")
+        store.release_lock(lock, owner)  # not a plain delete: after a TTL expiry the lock may be someone else's
 
 
-def _reply(agent_id: int, lead_id: int, phone: str) -> None:
+def _reply(agent_id: int, lead_id: int, phone: str) -> bool:
     if agents.is_paused(agent_id) or not agents.get_automation(agent_id).get("whatsapp_auto_reply", True):
-        return
+        return True
     crm = CRMService(agent_id)
     lead = crm.get(lead_id)
     if not lead or whatsapp_service.is_opted_out(lead):
-        return
+        return True
     answered_key = f"wa:answered:{agent_id}:{lead_id}"
     rows = _rows(agent_id, lead_id)
     human_cutoff = _now() - timedelta(minutes=HUMAN_QUIET_MINUTES)
     if any(r.direction == "out" and r.provider == "dashboard" and r.created_at and r.created_at >= human_cutoff for r in rows):
-        return  # a person is in this chat
+        return True  # a person is in this chat
     history_rows, burst = unanswered(rows, store.get_json(answered_key))
     if not burst:
-        return
-    store.set_json(answered_key, burst[-1].id, ttl=ANSWERED_TTL)
+        return True
     customer_text = "\n".join(r.text for r in burst)[:1500]
 
-    if any(whatsapp_service.STOP_RE.search(r.text) for r in burst):
+    if any(whatsapp_service.is_stop_request(r.text) for r in burst):
         # They asked us to stop: no reply, and nothing is ever sent to them on WhatsApp again.
         whatsapp_service.mark_opt_out(agent_id, lead_id)
-        return
+        store.set_json(answered_key, burst[-1].id, ttl=ANSWERED_TTL)
+        return True
 
     history = [{"role": "assistant" if r.direction == "out" else "customer", "text": r.text} for r in history_rows]
     result = agent.respond(agent_id, history, customer_text, lead, channel="whatsapp")
     reply = result["reply"]
-    apply_turn_signals(crm, lead_id, result)
     if reply:
         sent = whatsapp_service.send_whatsapp_message_sync(to=phone, text=reply, agent_id=agent_id, lead_id=lead_id, reply=True)
         if not sent.get("ok"):
             log.warning("WhatsApp reply to lead %s not sent: %s", lead_id, sent.get("error"))
+            if not sent.get("refused"):
+                return False  # left unanswered; signals and actions wait for the retry so they run once
+    # Marked answered only now: an LLM error or a failed send used to swallow the burst for good.
+    store.set_json(answered_key, burst[-1].id, ttl=ANSWERED_TTL)
+    apply_turn_signals(crm, lead_id, result)
     _act(agent_id, lead_id, lead, result.get("action", "none"), customer_text)
+    return True
 
 
 def _act(agent_id: int, lead_id: int, lead: dict, action: str, customer_text: str) -> None:
