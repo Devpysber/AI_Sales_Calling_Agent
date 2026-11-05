@@ -697,7 +697,7 @@ class CallService:
         lead = (self.crm.get(lead_id) or {}) if lead_id else {}
         
         who = lead.get("name") or lead.get("phone")
-        if not who:
+        if not who and call_id:
             from app.services import team_service
             with get_db() as db:
                 call_obj = db.get(Call, call_id)
@@ -804,14 +804,15 @@ class CallService:
             log.exception("Post-call summary for call %s failed", call_id)
             raise
 
-    def _mark_summary_failed(self, call_id: int, lead_id: int | None, err: Exception):
-        with get_db() as db:
-            call = db.get(Call, call_id)
-            if call is not None:
-                attempts = int((re.search(r"summary_pending:(\d+)", call.error or "") or [None, "0"])[1]) + 1
-                call.error = f"summary_pending:{attempts} {str(err)[:200]}"
-                if not call.outcome:
-                    call.outcome = "summary_pending"
+    def _mark_summary_failed(self, call_id: int | None, lead_id: int | None, err: Exception):
+        if call_id:
+            with get_db() as db:
+                call = db.get(Call, call_id)
+                if call is not None:
+                    attempts = int((re.search(r"summary_pending:(\d+)", call.error or "") or [None, "0"])[1]) + 1
+                    call.error = f"summary_pending:{attempts} {str(err)[:200]}"
+                    if not call.outcome:
+                        call.outcome = "summary_pending"
         events.record("call.summary_failed", "Summary not generated", str(err)[:200], agent_id=self.agent_id,
                       lead_id=lead_id, call_id=call_id, actor="system")
         if _is_credit_error(err):
@@ -843,15 +844,9 @@ class CallService:
             call = db.get(Call, call_id)
             if call is not None and call.summary:
                 return
-        asked_dnc = self._live_dnc(lead_id, history)
-        try:
-            s = agent.summarize(history)
-        except Exception as e:
-            log.warning("Summary failed for call %s: %s", call_id, e)
-            self._mark_summary_failed(call_id, lead_id, e)
+        s = self.apply_outcome(call_id, lead_id, history)
+        if s is None:
             return
-        if asked_dnc:
-            s["outcome"] = "do_not_call"
         qualification = s.get("qualification") if s.get("qualification") in ("Hot", "Warm", "Cold") else None
         self._set(call_id, summary=s.get("summary") or "(no summary text)", qualification=qualification,
                   sentiment=s.get("sentiment"), outcome=s.get("outcome"))
@@ -859,6 +854,26 @@ class CallService:
             call = db.get(Call, call_id)
             if call is not None and (call.error or "").startswith("summary_pending"):
                 call.error = None
+
+    def apply_outcome(self, call_id: int | None, lead_id: int | None, history: list[dict]) -> dict | None:
+        """
+        Shared post-conversation outcome logic for calls and WhatsApp chats: summarise, update the lead's
+        CRM record (status, requirements, notes, callback/meeting, language, DNC) and hand anything the
+        caller asked the team to do to a human. call_id is a Call row id for calls, None for a chat (every
+        event recorded below then carries no call_id, which is correct: there is no Call row to point at).
+        Returns the summarize() dict (mutated with outcome="do_not_call" where that applied), or None when
+        summarizing failed (already recorded via _mark_summary_failed).
+        """
+        asked_dnc = self._live_dnc(lead_id, history)
+        try:
+            s = agent.summarize(history)
+        except Exception as e:
+            log.warning("Summary failed for call %s: %s", call_id, e)
+            self._mark_summary_failed(call_id, lead_id, e)
+            return None
+        if asked_dnc:
+            s["outcome"] = "do_not_call"
+        qualification = s.get("qualification") if s.get("qualification") in ("Hot", "Warm", "Cold") else None
         self._team_handover(call_id, lead_id, s)
         if lead_id:
             updates = {"summary": s["summary"]} if s.get("summary") else {}
@@ -1030,6 +1045,7 @@ class CallService:
                                 log.error("Failed to send post-call email to %s: %s", recipient, err)
             if callback_at:
                 events.record("callback.scheduled", f"Callback scheduled for {callback_at}", lead_id=lead_id, call_id=call_id, actor="ai")
+        return s
 
     def _urgent_team_alert(self, lead_id: int, original_call_id: int, team_action: str):
         from app.services.plivo_service import PlivoService
@@ -1242,8 +1258,6 @@ class CallService:
                 query = query.where(Call.status == status)
             if direction:
                 query = query.where(Call.direction == direction)
-            else:
-                query = query.where(Call.direction.is_distinct_from("whatsapp"))
             if search and search.strip():
                 from app.services.crm_service import search_terms
                 like, phone_like = search_terms(search)
@@ -1310,9 +1324,9 @@ class CallService:
         start_utc = today_utc - timedelta(days=days - 1)
         with get_db() as db:
             calls = db.execute(self._scoped(select(Call.created_at, Call.status, Call.duration, Call.outcome))
-                               .where(Call.created_at >= start_utc, Call.direction.is_distinct_from("whatsapp"))).all()
+                               .where(Call.created_at >= start_utc)).all()
             latency = db.scalar(self._scoped(select(func.avg(Call.avg_latency_ms)))
-                                .where(Call.created_at >= today_utc - timedelta(days=7), Call.direction.is_distinct_from("whatsapp")))
+                                .where(Call.created_at >= today_utc - timedelta(days=7)))
             active = db.scalar(self._scoped(select(func.count(Call.id))).where(Call.status.in_(ACTIVE))) or 0
         series = {}
         for d in range(days):

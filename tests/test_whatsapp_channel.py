@@ -2,7 +2,6 @@
 
 import hashlib
 import hmac
-import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -11,7 +10,7 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from app.core.database import get_db
 from app.main import app
-from app.models.call import Call
+from app.models.channel import Conversation, Message
 from app.services import agent as agent_svc
 from app.services import call_service, whatsapp_service as wa
 
@@ -45,16 +44,27 @@ def fakes(monkeypatch):
         sent.append((to, text))
         return {"ok": True}
 
+    # Run the post-chat outcome synchronously and record it, instead of on the background thread pool.
+    def submit_now(conv_id, agent_id, lead_id, history):
+        summaries.append(conv_id)
+        wa._apply_chat_outcome(conv_id, agent_id, lead_id, history)
+
     monkeypatch.setattr(agent_svc, "respond", respond)
     monkeypatch.setattr(wa, "send_whatsapp_message", send)
-    monkeypatch.setattr(call_service.CallService, "_submit_summary", lambda self, cid, lid, h: summaries.append(cid))
+    monkeypatch.setattr(wa, "_submit_chat_summary", submit_now)
+    monkeypatch.setattr(call_service.CallService, "apply_outcome", lambda self, cid, lid, h: {"summary": "ok"})
     return sent, summaries, state
 
 
 def _chats(agent_id):
     with get_db() as db:
-        return [(c.id, c.status, json.loads(c.transcript), c.duration) for c in
-                db.query(Call).filter(Call.agent_id == agent_id, Call.direction == "whatsapp").order_by(Call.id)]
+        out = []
+        for c in db.query(Conversation).filter(Conversation.agent_id == agent_id, Conversation.channel == "whatsapp").order_by(Conversation.id):
+            msgs = db.query(Message).filter(Message.conversation_id == c.id).order_by(Message.id).all()
+            turns = [{"role": "customer" if m.sender_type == "customer" else "assistant", "text": m.text,
+                      "wamid": m.external_id} for m in msgs]
+            out.append((c.id, c.status, turns, c.lead_id))
+        return out
 
 
 def test_signature(monkeypatch):
@@ -96,25 +106,20 @@ def test_inbound_creates_chat_dedupes_and_closes(agent_id, fakes):
     sent, summaries, state = fakes
     [m] = wa.parse_webhook(_payload(wamid="wamid.A", wa_id="919811100002"))
     wa.handle_inbound(m)
-    wa.handle_inbound(m)  # Meta retry
+    wa.handle_inbound(m)  # Meta retry: deduped via the unique constraint on (agent_id, external_id)
     chats = _chats(agent_id)
-    assert len(chats) == 1 and chats[0][1] == "Chat"
+    assert len(chats) == 1 and chats[0][1] == "open"
     assert [t["role"] for t in chats[0][2]] == ["customer", "assistant"]
     assert chats[0][2][0]["wamid"] == "wamid.A"
     assert sent == [("+919811100002", "echo: Hi, price?")]
-    assert not call_service.CallService(agent_id).has_active(_lead_id(agent_id))
+    assert not call_service.CallService(agent_id).has_active(chats[0][3])
 
     state["end"] = True
     [m2] = wa.parse_webhook(_payload(wamid="wamid.B", text="thanks bye", wa_id="919811100002"))
     wa.handle_inbound(m2)
     chats = _chats(agent_id)
-    assert len(chats) == 1 and chats[0][1] == "Completed" and len(chats[0][2]) == 4
+    assert len(chats) == 1 and chats[0][1] == "closed" and len(chats[0][2]) == 4
     assert summaries == [chats[0][0]]
-
-
-def _lead_id(agent_id):
-    with get_db() as db:
-        return db.query(Call).filter(Call.agent_id == agent_id).first().lead_id
 
 
 def test_non_text_gets_fixed_reply(agent_id, fakes):
@@ -129,16 +134,12 @@ def test_close_idle_chats(agent_id, fakes, monkeypatch):
     [m] = wa.parse_webhook(_payload(wamid="wamid.D", wa_id="919811100004"))
     wa.handle_inbound(m)
     assert wa.close_idle_chats() == 0
-    old = (datetime.now(timezone.utc) - timedelta(minutes=90)).isoformat(timespec="seconds")
+    old = (datetime.now(timezone.utc) - timedelta(minutes=90)).replace(tzinfo=None)
+    cid = next(c for c in _chats(agent_id) if c[2] and c[2][0].get("wamid") == "wamid.D")[0]
     with get_db() as db:
-        call = db.query(Call).filter(Call.agent_id == agent_id, Call.status == "Chat", Call.from_number == "+919811100004").one()
-        turns = json.loads(call.transcript)
-        for t in turns:
-            t["at"] = old
-        call.transcript = json.dumps(turns)
-        cid = call.id
+        db.get(Conversation, cid).last_message_at = old
     assert wa.close_idle_chats() == 1
-    assert summaries == [cid] and next(c for c in _chats(agent_id) if c[0] == cid)[1] == "Completed"
+    assert summaries == [cid] and next(c for c in _chats(agent_id) if c[0] == cid)[1] == "closed"
 
 
 def _msg(**kw):

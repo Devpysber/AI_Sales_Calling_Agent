@@ -131,7 +131,7 @@ def report(agent_id: int, days: int = 30) -> dict:
             select(Call.created_at, Call.status, Call.duration, Call.outcome, Call.qualification, Call.sentiment,
                    Call.trigger, Call.hangup_cause, Call.error, Call.avg_latency_ms,
                    Call.tts_chars, Call.stt_seconds, Call.llm_requests, Call.llm_input_tokens, Call.llm_output_tokens)
-            .where(Call.agent_id == agent_id, Call.created_at >= prev_start, Call.direction.is_distinct_from("whatsapp"))
+            .where(Call.agent_id == agent_id, Call.created_at >= prev_start)
         ).all()
         by_status = dict(db.execute(select(Lead.status, func.count()).where(mine).group_by(Lead.status)).all())
         sources = db.execute(

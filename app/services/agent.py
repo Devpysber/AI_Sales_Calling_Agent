@@ -470,6 +470,19 @@ def past_conversations(agent_id: int, lead: dict, limit: int = 3) -> str:
             when = (created + timedelta(hours=5, minutes=30)).strftime("%d %b %H:%M") if created else "earlier"
             tag = ", ".join(x for x in (direction, (outcome or "").replace("_", " ")) if x)
             lines.append(f"- {when} ({tag}, {duration or 0}s): {summary}")
+        # A live call should know about prior WhatsApp chats with this lead too, capped small (2 chats,
+        # 200 chars of summary each) so this doesn't eat into the voice prompt's token budget.
+        from app.models.channel import Conversation
+        with get_db() as db:
+            chats = db.execute(
+                select(Conversation.created_at, Conversation.summary)
+                .where(Conversation.agent_id == agent_id, Conversation.lead_id == lead_id,
+                       Conversation.channel == "whatsapp", Conversation.summary.is_not(None))
+                .order_by(Conversation.id.desc()).limit(2)
+            ).all()
+        for created, summary in chats:
+            when = (created + timedelta(hours=5, minutes=30)).strftime("%d %b %H:%M") if created else "earlier"
+            lines.append(f"- {when} (whatsapp): {(summary or '')[:200]}")
         return "\n".join(lines)
     return _cached(("calls", agent_id, lead_id), build)
 

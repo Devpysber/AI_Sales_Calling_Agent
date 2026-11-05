@@ -9,20 +9,19 @@ Supports:
 import asyncio
 import hashlib
 import hmac
-import json
 import logging
 import re
 import threading
-from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.agent import Agent
-from app.models.call import Call
+from app.models.channel import Conversation, Message
 from app.services import events
 
 log = logging.getLogger(__name__)
@@ -158,8 +157,6 @@ NON_TEXT_REPLY = ("Sorry, I can only read text messages here. Please type your m
 MEDIA_TYPES = ("audio", "voice", "image", "document", "video")
 MAX_MEDIA_BYTES = 16 * 1024 * 1024
 _warned_secret = False
-_seen: "OrderedDict[str, None]" = OrderedDict()
-_seen_lock = threading.Lock()
 _locks: dict[tuple, threading.RLock] = {}
 _locks_guard = threading.Lock()
 
@@ -232,26 +229,57 @@ def resolve_agent(phone_number_id: str | None, display_phone_number: str | None)
     return settings.whatsapp_agent_id or None
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-def _open_chat(agent_id: int, lead_id: int) -> tuple[int, list[dict], str] | None:
+def _open_chat(agent_id: int, lead_id: int) -> int:
+    """An open WhatsApp Conversation for this lead, creating one when none is open."""
     with get_db() as db:
-        call = db.scalars(select(Call).where(Call.agent_id == agent_id, Call.lead_id == lead_id, Call.status == "Chat")
-                          .order_by(Call.id.desc())).first()
-        return (call.id, json.loads(call.transcript or "[]"), call.trigger) if call else None
+        conv = db.scalars(select(Conversation).where(Conversation.agent_id == agent_id, Conversation.lead_id == lead_id,
+                          Conversation.channel == "whatsapp", Conversation.status == "open")
+                          .order_by(Conversation.id.desc())).first()
+        if conv:
+            return conv.id
+        conv = Conversation(agent_id=agent_id, lead_id=lead_id, channel="whatsapp", status="open", ai_paused=False)
+        db.add(conv)
+        db.flush()
+        return conv.id
 
 
-def _save_turns(call_id: int, turns: list[dict]):
+def _history(conv_id: int) -> list[dict]:
+    """[{role, text}] the agent expects: customer turns stay "customer", AI/human replies are "assistant"."""
     with get_db() as db:
-        db.get(Call, call_id).transcript = json.dumps(turns, ensure_ascii=False)
+        msgs = db.scalars(select(Message).where(Message.conversation_id == conv_id).order_by(Message.id)).all()
+        return [{"role": "customer" if m.sender_type == "customer" else "assistant", "text": m.text or ""} for m in msgs]
 
 
-def _send(to: str, text: str, agent_id: int, lead_id: int, call_id: int, phone_number_id: str | None = None) -> dict:
+def _add_message(conv_id: int, agent_id: int, direction: str, sender_type: str, text: str, *, type_: str = "text",
+                  external_id: str | None = None, sender_name: str | None = None) -> bool:
+    """Record one turn. Returns False (no-op) when external_id is a duplicate (DB unique constraint)."""
+    now = _now().replace(tzinfo=None)
+    with get_db() as db:
+        msg = Message(conversation_id=conv_id, agent_id=agent_id, direction=direction, sender_type=sender_type,
+                      sender_name=sender_name, type=type_, text=text, external_id=external_id,
+                      status="received" if direction == "in" else "sent")
+        db.add(msg)
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            return False
+        conv = db.get(Conversation, conv_id)
+        if conv is not None:
+            conv.last_message_at = now
+            if direction == "in":
+                conv.last_customer_at = now
+    return True
+
+
+def _send(to: str, text: str, agent_id: int, lead_id: int, phone_number_id: str | None = None) -> dict:
     # Chat replies always leave through Meta, from the number the customer messaged.
     pid = phone_number_id or _profile_phone_id(agent_id) or settings.whatsapp_phone_number_id or None
-    return asyncio.run(send_whatsapp_message(to, text, agent_id=agent_id, lead_id=lead_id, call_id=call_id, phone_number_id=pid))
+    return asyncio.run(send_whatsapp_message(to, text, agent_id=agent_id, lead_id=lead_id, phone_number_id=pid))
 
 
 def download_media(media_id: str, token: str) -> tuple[bytes, str]:
@@ -295,35 +323,32 @@ def handle_inbound(msg: dict) -> None:
             log.exception("WhatsApp inbound handling failed for %s", wa_id)
 
 
+def _lead_phone(lead_id: int | None) -> str:
+    if not lead_id:
+        return ""
+    from app.models.lead import Lead
+    with get_db() as db:
+        return db.scalar(select(Lead.phone).where(Lead.id == lead_id)) or ""
+
+
 def _handle_locked(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> None:
     from app.services import agent as agent_svc
     from app.services.crm_service import CRMService
 
     if wamid:
-        with _seen_lock:
-            if wamid in _seen:
+        # Persisted dedupe (the unique constraint on agent_id+external_id is the real guard; this just
+        # skips the media download / LLM round trip Meta's own retries would otherwise pay for twice).
+        with get_db() as db:
+            if db.scalar(select(Message.id).where(Message.agent_id == agent_id, Message.external_id == wamid)) is not None:
                 return
-            _seen[wamid] = None
-            while len(_seen) > 5000:
-                _seen.popitem(last=False)
     phone = "+" + wa_id
     crm = CRMService(agent_id)
     lead = crm.find_by_phone(phone) or crm.create(
         {"phone": phone, "name": msg.get("name") or "WhatsApp contact", "source": "WhatsApp"}, actor="system")
     lead_id = lead["id"]
-    chat = _open_chat(agent_id, lead_id)
-    if chat is None:
-        with get_db() as db:
-            call = Call(agent_id=agent_id, lead_id=lead_id, session_id=f"wa-{agent_id}-{wa_id}-{int(datetime.now().timestamp())}",
-                        direction="whatsapp", trigger="whatsapp", from_number=phone, to_number=msg.get("display_phone_number"),
-                        status="Chat", transcript="[]", answered_at=datetime.utcnow())
-            db.add(call)
-            db.flush()
-            call_id, turns, trigger = call.id, [], "whatsapp"
-    else:
-        call_id, turns, trigger = chat
-    if wamid and any(t.get("wamid") == wamid for t in turns):
-        return
+    conv_id = _open_chat(agent_id, lead_id)
+    with get_db() as db:
+        paused = bool(db.scalar(select(Conversation.ai_paused).where(Conversation.id == conv_id)))
     kind = msg.get("type") or ""
     if kind == "reaction":
         return
@@ -339,18 +364,20 @@ def _handle_locked(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> N
     elif not text and kind in ("image", "document", "video"):
         say = f"[customer sent {'an' if kind == 'image' else 'a'} {kind}{': ' + msg['filename'] if msg.get('filename') else ''}]"
         shown = say
-    turns.append({"role": "customer", "text": shown or f"[{kind or 'message'}]", "at": _now_iso(),
-                  **({"wamid": wamid} if wamid else {})})
-    _save_turns(call_id, turns)
+    media_type = kind if kind in MEDIA_TYPES else "text"
+    added = _add_message(conv_id, agent_id, "in", "customer", shown or f"[{kind or 'message'}]",
+                          type_=media_type, external_id=wamid, sender_name=msg.get("name") or None)
+    if not added:
+        return  # a duplicate wamid raced us past the precheck above
     events.record("whatsapp.received", f"WhatsApp from {phone}", (shown or kind)[:120],
-                  agent_id=agent_id, lead_id=lead_id, call_id=call_id, actor="customer")
-    if lead.get("do_not_call") or trigger == "whatsapp_human":
+                  agent_id=agent_id, lead_id=lead_id, actor="customer")
+    if lead.get("do_not_call") or paused:
         return
     end_call = False
     if not say:
         reply = NON_TEXT_REPLY
     else:
-        history = [{"role": "assistant" if t["role"] == "human" else t["role"], "text": t["text"]} for t in turns[:-1]]
+        history = _history(conv_id)[:-1]  # everything before the turn just added
         try:
             res = agent_svc.respond(agent_id, history, say.removeprefix("🎤 "), lead, use_embeddings=True, guidance=CHAT_GUIDANCE)
         except Exception:
@@ -359,85 +386,94 @@ def _handle_locked(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> N
         reply, end_call = (res.get("reply") or "").strip(), bool(res.get("end_call"))
         if not reply:
             return
-    out = _send(phone, reply, agent_id, lead_id, call_id, msg.get("phone_number_id"))
+    out = _send(phone, reply, agent_id, lead_id, msg.get("phone_number_id"))
     if not out.get("ok"):
         log.warning("WhatsApp reply to %s not sent: %s", phone, out.get("error"))
-    turns.append({"role": "assistant", "text": reply, "at": _now_iso()})
-    _save_turns(call_id, turns)
+    _add_message(conv_id, agent_id, "out", "ai", reply)
     if end_call:
-        close_chat(call_id)
+        close_chat(conv_id)
 
 
-def close_chat(call_id: int) -> bool:
+def _apply_chat_outcome(conv_id: int, agent_id: int, lead_id: int | None, history: list[dict]) -> None:
+    from app.services.call_service import CallService
+    s = CallService(agent_id).apply_outcome(None, lead_id, history)
+    if s is not None:
+        with get_db() as db:
+            conv = db.get(Conversation, conv_id)
+            if conv is not None:
+                conv.summary = s.get("summary") or "(no summary text)"
+
+
+def _submit_chat_summary(conv_id: int, agent_id: int, lead_id: int | None, history: list[dict]) -> None:
+    from app.services.call_service import _turn_pool
+
+    def _done(f):
+        if f.exception() is not None:
+            log.error("Post-chat summary for conversation %s crashed: %r", conv_id, f.exception())
+    _turn_pool.submit(_apply_chat_outcome, conv_id, agent_id, lead_id, history).add_done_callback(_done)
+
+
+def close_chat(conv_id: int) -> bool:
     with get_db() as db:
-        call = db.get(Call, call_id)
-        if call is None or call.status != "Chat":
+        conv = db.get(Conversation, conv_id)
+        if conv is None or conv.status != "open":
             return False
-        agent_id, wa_id = call.agent_id, re.sub(r"\D", "", call.from_number or "")
+        agent_id, lead_id = conv.agent_id, conv.lead_id
+    wa_id = re.sub(r"\D", "", _lead_phone(lead_id))
     with _lock_for(agent_id or 0, wa_id):
         with get_db() as db:
-            call = db.get(Call, call_id)
-            if call is None or call.status != "Chat":
+            conv = db.get(Conversation, conv_id)
+            if conv is None or conv.status != "open":
                 return False
-            lead_id = call.lead_id
-            turns = json.loads(call.transcript or "[]")
-            stamps = []
-            for t in turns:
-                try:
-                    stamps.append(datetime.fromisoformat(t["at"]))
-                except (KeyError, ValueError):
-                    pass
-            call.status = "Completed"
-            call.ended_at = datetime.utcnow()
-            call.duration = int((max(stamps) - min(stamps)).total_seconds()) if len(stamps) > 1 else 0
-        if any(t.get("role") == "customer" for t in turns):
-            from app.services.call_service import CallService
-            CallService(agent_id)._submit_summary(call_id, lead_id, [{**t, "role": "assistant"} if t.get("role") == "human" else t for t in turns])
+            lead_id = conv.lead_id
+            has_customer = db.scalar(select(Message.id).where(Message.conversation_id == conv_id,
+                                      Message.sender_type == "customer")) is not None
+            conv.status = "closed"
+            conv.closed_at = _now().replace(tzinfo=None)
+        if has_customer:
+            _submit_chat_summary(conv_id, agent_id, lead_id, _history(conv_id))
     return True
 
 
 def close_idle_chats() -> int:
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=settings.whatsapp_idle_minutes)
+    cutoff = _now() - timedelta(minutes=settings.whatsapp_idle_minutes)
     with get_db() as db:
-        rows = [(c.id, c.transcript, c.created_at) for c in db.scalars(select(Call).where(Call.status == "Chat"))]
+        rows = [(c.id, c.last_message_at, c.created_at)
+                for c in db.scalars(select(Conversation).where(Conversation.channel == "whatsapp", Conversation.status == "open"))]
     closed = 0
-    for call_id, transcript, created in rows:
-        try:
-            last = datetime.fromisoformat(json.loads(transcript or "[]")[-1]["at"])
-        except (IndexError, KeyError, ValueError):
-            last = created
+    for conv_id, last_message_at, created in rows:
+        last = last_message_at or created
         if last is not None and last.tzinfo is None:
             last = last.replace(tzinfo=timezone.utc)
-        if last is not None and last < cutoff and close_chat(call_id):
+        if last is not None and last < cutoff and close_chat(conv_id):
             closed += 1
     return closed
 
 
-def human_reply(call_id: int, text: str, by: str) -> dict:
+def human_reply(conv_id: int, text: str, by: str) -> dict:
     """A teammate answers from the inbox: send via Meta, record the turn, pause the AI for this chat."""
     with get_db() as db:
-        call = db.get(Call, call_id)
-        if call is None or call.direction != "whatsapp":
+        conv = db.get(Conversation, conv_id)
+        if conv is None or conv.channel != "whatsapp":
             raise LookupError("Chat not found.")
-        agent_id, lead_id, phone, status = call.agent_id, call.lead_id, call.from_number, call.status
-    if status != "Chat":
+        agent_id, lead_id, status = conv.agent_id, conv.lead_id, conv.status
+    if status != "open":
         raise ValueError("This chat is closed.")
+    phone = _lead_phone(lead_id)
     with _lock_for(agent_id or 0, re.sub(r"\D", "", phone or "")):
-        out = _send(phone, text, agent_id, lead_id, call_id)
+        out = _send(phone, text, agent_id, lead_id)
         if not out.get("ok"):
             raise ValueError(out.get("error") or "WhatsApp send failed")
+        _add_message(conv_id, agent_id, "out", "human", text, sender_name=by)
         with get_db() as db:
-            call = db.get(Call, call_id)
-            turns = json.loads(call.transcript or "[]")
-            turns.append({"role": "human", "text": text, "at": _now_iso(), "by": by})
-            call.transcript = json.dumps(turns, ensure_ascii=False)
-            call.trigger = "whatsapp_human"
+            conv = db.get(Conversation, conv_id)
+            conv.ai_paused = True
     return {"ok": True}
 
 
-def set_ai_paused(call_id: int, paused: bool) -> None:
+def set_ai_paused(conv_id: int, paused: bool) -> None:
     with get_db() as db:
-        call = db.get(Call, call_id)
-        if call is None or call.direction != "whatsapp":
+        conv = db.get(Conversation, conv_id)
+        if conv is None or conv.channel != "whatsapp":
             raise LookupError("Chat not found.")
-        call.trigger = "whatsapp_human" if paused else "whatsapp"
+        conv.ai_paused = paused
