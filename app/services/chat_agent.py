@@ -15,6 +15,9 @@ from app.services import llm
 from app.services import tool_registry
 from app.services.agent_tools import execute_tool
 from app.services.whatsapp_service import CHAT_GUIDANCE
+from app.services.instagram_service import CHAT_GUIDANCE as INSTAGRAM_CHAT_GUIDANCE
+
+CHAT_GUIDANCE_BY_CHANNEL = {"whatsapp": CHAT_GUIDANCE, "instagram": INSTAGRAM_CHAT_GUIDANCE}
 
 log = logging.getLogger(__name__)
 
@@ -195,7 +198,7 @@ def respond(agent_id: int, conversation_id: int, history: list[dict], customer_t
     "tools_used"} — the subset of agent.respond()'s shape whatsapp_service's call site actually reads.
     """
     messages, _ = agent_svc.build_messages(agent_id, history, customer_text, lead, use_embeddings=True)
-    messages[0]["content"] += "\n\n" + CHAT_GUIDANCE
+    messages[0]["content"] += "\n\n" + CHAT_GUIDANCE_BY_CHANNEL.get(channel, CHAT_GUIDANCE)
     lead_id = lead.get("id")
     tools = tool_registry.tools_for_agent(agent_id, channel)
     if llm.tools_via_openrouter():

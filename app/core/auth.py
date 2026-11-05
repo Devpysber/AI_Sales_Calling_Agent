@@ -24,7 +24,7 @@ from app.core.logging import get_logger
 log = get_logger(__name__)
 COOKIE = "va_session"
 TTL = 12 * 3600
-PUBLIC_API = ("/api/plivo/", "/api/media/", "/api/health", "/api/auth/login", "/api/public/", "/api/whatsapp/", "/api/auth/signup",
+PUBLIC_API = ("/api/plivo/", "/api/media/", "/api/health", "/api/auth/login", "/api/public/", "/api/whatsapp/", "/api/instagram/", "/api/auth/signup",
               "/api/auth/verify", "/api/auth/resend", "/api/auth/forgot", "/api/auth/reset", "/api/auth/invitation",
               "/api/auth/accept-invite")
 # Signed-in accounts whose role may only read: every write outside their own account is refused.

@@ -149,6 +149,12 @@ class Settings(BaseSettings):
     whatsapp_agent_id: int = Field(0, alias="WHATSAPP_AGENT_ID")  # fallback agent for inbound chats
     whatsapp_idle_minutes: int = Field(30, alias="WHATSAPP_IDLE_MINUTES")
 
+    instagram_token: str = Field("", alias="INSTAGRAM_TOKEN")  # Page access token for the IG professional account
+    instagram_page_id: str = Field("", alias="INSTAGRAM_PAGE_ID")  # connected Facebook Page id (IG Messaging goes via the Page)
+    instagram_verify_token: str = Field("", alias="INSTAGRAM_VERIFY_TOKEN")
+    instagram_app_secret: str = Field("", alias="INSTAGRAM_APP_SECRET")
+    instagram_agent_id: int = Field(0, alias="INSTAGRAM_AGENT_ID")  # fallback agent for inbound chats
+
     # ---------------- Email ----------------
     # Email: Resend (preferred) or SMTP
     resend_api_key: str = Field("", alias="RESEND_API_KEY")

@@ -16,7 +16,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import accounts, agents, calls, crm, intake, knowledge, leads, plivo, system, tools, whatsapp
+from app.api import accounts, agents, calls, crm, instagram, intake, knowledge, leads, plivo, system, tools, whatsapp
 from app.core import auth, store
 from app.core.config import settings
 from app.core.database import run_migrations
@@ -77,8 +77,10 @@ async def lifespan(app: FastAPI):
     queue_stop = None
     if isinstance(store.store, store.RedisStore):
         from app.services.whatsapp_service import queue_worker_loop
+        from app.services.instagram_service import queue_worker_loop as ig_queue_worker_loop
         queue_stop = threading.Event()
         asyncio.create_task(asyncio.to_thread(queue_worker_loop, queue_stop))
+        asyncio.create_task(asyncio.to_thread(ig_queue_worker_loop, queue_stop))
     log.info("%s %s started (%s)", settings.app_name, settings.app_version, settings.environment)
     
     # Uploads and coverage analyses run on daemon threads; a restart mid-way left them "processing" /
@@ -163,12 +165,13 @@ async def request_context(request: Request, call_next):
 
 
 
-for module in (auth, accounts, agents, leads, calls, knowledge, system, plivo, intake, crm, whatsapp, tools):
+for module in (auth, accounts, agents, leads, calls, knowledge, system, plivo, intake, crm, whatsapp, instagram, tools):
     app.include_router(module.router)
 app.include_router(accounts.public)
 app.include_router(intake.public)
 app.include_router(crm.public)
 app.include_router(whatsapp.public)
+app.include_router(instagram.public)
 
 
 # ---------------- SPA (single-container / local mode; nginx serves it in production) ----------------
