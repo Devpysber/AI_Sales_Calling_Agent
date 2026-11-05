@@ -10,6 +10,7 @@ from app.core.auth import actor
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.channel import Conversation, Message
+from app.models.crm import MessageTemplate
 from app.models.lead import Lead
 from app.services import whatsapp_service as wa
 
@@ -109,3 +110,62 @@ def resume(chat_id: int, agent_id: int = Depends(workspace)):
         _chat(db, agent_id, chat_id)
     wa.set_ai_paused(chat_id, False)
     return {"ok": True}
+
+
+# ---------------- WhatsApp message templates (Meta-approved, for the 24h window) ----------------
+
+class TemplateIn(BaseModel):
+    name: str
+    whatsapp_template_name: str
+    whatsapp_template_language: str = "en_US"
+    body: str = ""
+    is_meta_approved: bool = True
+
+
+class TemplateSend(BaseModel):
+    lead_id: int | None = None
+    phone: str | None = None
+    variables: list[str] = Field(default_factory=list)
+
+
+@router.get("/templates")
+def list_templates(agent_id: int = Depends(workspace)):
+    with get_db() as db:
+        rows = db.query(MessageTemplate).filter(MessageTemplate.agent_id == agent_id,
+                                                 MessageTemplate.channel == "whatsapp").order_by(MessageTemplate.id).all()
+        return [r.to_dict() for r in rows]
+
+
+@router.post("/templates")
+def create_template(body: TemplateIn, agent_id: int = Depends(workspace)):
+    with get_db() as db:
+        row = MessageTemplate(agent_id=agent_id, name=body.name, channel="whatsapp", body=body.body,
+                              whatsapp_template_name=body.whatsapp_template_name,
+                              whatsapp_template_language=body.whatsapp_template_language,
+                              is_meta_approved=body.is_meta_approved)
+        db.add(row)
+        db.flush()
+        return row.to_dict()
+
+
+@router.post("/templates/{template_id}/send")
+def send_template(template_id: int, body: TemplateSend, agent_id: int = Depends(workspace)):
+    with get_db() as db:
+        row = db.query(MessageTemplate).filter(MessageTemplate.agent_id == agent_id,
+                                                MessageTemplate.id == template_id,
+                                                MessageTemplate.channel == "whatsapp").first()
+        if not row:
+            raise HTTPException(404, "Template not found.")
+        template_name, language = row.whatsapp_template_name, row.whatsapp_template_language
+    phone = body.phone
+    if not phone and body.lead_id:
+        with get_db() as db:
+            phone = db.scalar(select(Lead.phone).where(Lead.id == body.lead_id))
+    if not phone:
+        raise HTTPException(400, "A lead_id with a phone number, or a phone, is required.")
+    import asyncio
+    result = asyncio.run(wa.send_whatsapp_template(phone, template_name, language, body.variables,
+                                                    agent_id=agent_id, lead_id=body.lead_id))
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "WhatsApp template send failed")
+    return result

@@ -64,6 +64,36 @@ def _save(campaign_id: int, **values):
             setattr(row, key, value)
 
 
+def _send_whatsapp_lead(campaign: dict, lead: Lead) -> dict | None:
+    """Outside the 24h window, use an agent-configured WhatsApp template automatically; else skip the
+    lead and log why (returns None for skip, a send result dict otherwise)."""
+    from sqlalchemy import select as _select
+
+    from app.models.channel import Conversation
+    from app.models.crm import MessageTemplate
+    from app.services.whatsapp_service import is_within_free_form_window, send_whatsapp_message, send_whatsapp_template
+
+    agent_id = campaign["agent_id"]
+    with get_db() as db:
+        conv = db.scalars(_select(Conversation).where(Conversation.agent_id == agent_id, Conversation.lead_id == lead.id,
+                          Conversation.channel == "whatsapp").order_by(Conversation.id.desc())).first()
+        within_window = conv is not None and is_within_free_form_window(conv)
+    if within_window:
+        return asyncio.run(send_whatsapp_message(lead.phone, render(campaign.get("message") or "", _ctx(lead)),
+                                                  agent_id=agent_id, lead_id=lead.id))
+    with get_db() as db:
+        tmpl = db.query(MessageTemplate).filter(MessageTemplate.agent_id == agent_id,
+                                                MessageTemplate.channel == "whatsapp",
+                                                MessageTemplate.is_meta_approved.is_(True)).order_by(MessageTemplate.id).first()
+        tmpl_name, tmpl_lang = (tmpl.whatsapp_template_name, tmpl.whatsapp_template_language) if tmpl else (None, None)
+    if not tmpl_name:
+        log.warning("Campaign %s skipping lead %s: outside 24h window and no WhatsApp template configured",
+                   campaign["id"], lead.id)
+        return None
+    return asyncio.run(send_whatsapp_template(lead.phone, tmpl_name, tmpl_lang or "en_US", [],
+                                              agent_id=agent_id, lead_id=lead.id))
+
+
 def _send(campaign: dict, leads: list[Lead]):
     stats = {"targeted": len(leads), "sent": 0, "failed": 0, "skipped": 0}
     from app.services.notification_service import email_sent, send_email
@@ -74,10 +104,11 @@ def _send(campaign: dict, leads: list[Lead]):
                                     lead_id=lead.id, agent_id=campaign["agent_id"], actor="user")
                 stats["sent" if email_sent(status) else "failed"] += 1
             else:
-                from app.services.whatsapp_service import send_whatsapp_message
-                result = asyncio.run(send_whatsapp_message(lead.phone, render(campaign.get("message") or "", _ctx(lead)),
-                                                           agent_id=campaign["agent_id"], lead_id=lead.id))
-                stats["sent" if (result or {}).get("ok") else "failed"] += 1
+                result = _send_whatsapp_lead(campaign, lead)
+                if result is None:
+                    stats["skipped"] += 1
+                else:
+                    stats["sent" if result.get("ok") else "failed"] += 1
         except Exception as e:  # noqa: BLE001
             log.warning("Campaign %s to lead %s failed: %s", campaign["id"], lead.id, e)
             stats["failed"] += 1

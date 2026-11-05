@@ -178,4 +178,8 @@ class MessageTemplate(_Dict, Base):
     channel: Mapped[str] = mapped_column(String(16), default="email")
     subject: Mapped[str | None] = mapped_column(String(255))
     body: Mapped[str] = mapped_column(Text)
+    # Meta-approved WhatsApp template fields (only relevant when channel == "whatsapp"):
+    whatsapp_template_name: Mapped[str | None] = mapped_column(String(120))
+    whatsapp_template_language: Mapped[str | None] = mapped_column(String(16))
+    is_meta_approved: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

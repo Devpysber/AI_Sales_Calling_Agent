@@ -408,10 +408,88 @@ def _add_message(conv_id: int, agent_id: int, direction: str, sender_type: str, 
     return True
 
 
-def _send(to: str, text: str, agent_id: int, lead_id: int, phone_number_id: str | None = None) -> dict:
+FREE_FORM_WINDOW = timedelta(hours=24)
+
+
+def is_within_free_form_window(conversation: Conversation) -> bool:
+    """Meta's 24-hour customer-care window: free-form text is only allowed within 24h of the customer's
+    own last message. No last_customer_at at all means the customer has never messaged us (an
+    outbound-initiated conversation) -- that's always outside the window, not inside it."""
+    last = getattr(conversation, "last_customer_at", None)
+    if last is None:
+        return False
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return _now() - last < FREE_FORM_WINDOW
+
+
+class OutsideWindowError(ValueError):
+    """Raised when a plain-text WhatsApp send is attempted outside the 24-hour free-form window."""
+
+
+def _send(to: str, text: str, agent_id: int, lead_id: int, phone_number_id: str | None = None,
+          conv_id: int | None = None) -> dict:
     # Chat replies always leave through Meta, from the number the customer messaged.
+    if conv_id is not None:
+        with get_db() as db:
+            conv = db.get(Conversation, conv_id)
+            if conv is not None and not is_within_free_form_window(conv):
+                raise OutsideWindowError(
+                    "This conversation is outside the 24-hour window — send an approved template instead.")
     pid = phone_number_id or _profile_phone_id(agent_id) or settings.whatsapp_phone_number_id or None
     return asyncio.run(send_whatsapp_message(to, text, agent_id=agent_id, lead_id=lead_id, phone_number_id=pid))
+
+
+async def send_whatsapp_template(
+    to: str,
+    template_name: str,
+    language: str,
+    variables: list[str] | None = None,
+    agent_id: int | None = None,
+    lead_id: int | None = None,
+    phone_number_id: str | None = None,
+) -> dict:
+    """Send a pre-approved Meta WhatsApp template message. Exempt from the 24-hour free-form window
+    check -- that's the whole point of templates. Reuses the same httpx/token/phone-id plumbing as
+    send_whatsapp_message's direct-Meta path (no Composio equivalent for templates)."""
+    recipient = clean_phone(to)
+    if not recipient:
+        return {"ok": False, "error": "Invalid phone number"}
+    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    phone_number_id = phone_number_id or _profile_phone_id(agent_id) or getattr(settings, "whatsapp_phone_number_id", "")
+    if not (whatsapp_token and phone_number_id):
+        return {"ok": False, "error": "WhatsApp credentials not configured"}
+    components = []
+    if variables:
+        components.append({"type": "body", "parameters": [{"type": "text", "text": str(v)} for v in variables]})
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": recipient,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": language},
+            **({"components": components} if components else {}),
+        },
+    }
+    try:
+        url = f"https://graph.facebook.com/v19.0/{phone_number_id}/messages"
+        headers = {"Authorization": f"Bearer {whatsapp_token}", "Content-Type": "application/json"}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            if res.status_code in (200, 201):
+                events.record(
+                    "whatsapp.sent",
+                    f"WhatsApp template '{template_name}' dispatched to +{recipient}",
+                    "",
+                    agent_id=agent_id,
+                    lead_id=lead_id,
+                    actor="ai",
+                )
+                return {"ok": True, "provider": "meta", "data": res.json()}
+            return {"ok": False, "error": f"Meta HTTP {res.status_code}: {res.text}"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
 
 
 def _meta_post(payload: dict, agent_id: int | None, lead_id: int | None, phone_number_id: str | None = None) -> dict:
@@ -609,7 +687,11 @@ def _reply_turn(agent_id: int, ctx: dict, say: str, drop_last: int = 1) -> None:
         reply, end_call = (res.get("reply") or "").strip(), bool(res.get("end_call"))
         if not reply:
             return
-    out = _send(phone, reply, agent_id, lead_id, msg.get("phone_number_id"))
+    try:
+        out = _send(phone, reply, agent_id, lead_id, msg.get("phone_number_id"), conv_id=conv_id)
+    except OutsideWindowError as e:
+        log.warning("WhatsApp reply to %s not sent: %s", phone, e)
+        return
     if not out.get("ok"):
         log.warning("WhatsApp reply to %s not sent: %s", phone, out.get("error"))
     _add_message(conv_id, agent_id, "out", "ai", reply)
@@ -691,7 +773,10 @@ def human_reply(conv_id: int, text: str, by: str) -> dict:
         raise ValueError("This chat is closed.")
     phone = _lead_phone(lead_id)
     with _lock_for(agent_id or 0, re.sub(r"\D", "", phone or "")):
-        out = _send(phone, text, agent_id, lead_id)
+        try:
+            out = _send(phone, text, agent_id, lead_id, conv_id=conv_id)
+        except OutsideWindowError as e:
+            raise ValueError(str(e))
         if not out.get("ok"):
             raise ValueError(out.get("error") or "WhatsApp send failed")
         _add_message(conv_id, agent_id, "out", "human", text, sender_name=by)
