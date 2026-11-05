@@ -12,7 +12,7 @@ from app.core.database import get_db
 from app.main import app
 from app.models.channel import Conversation, Message
 from app.services import agent as agent_svc
-from app.services import call_service, whatsapp_service as wa
+from app.services import call_service, chat_agent, whatsapp_service as wa
 
 
 def _payload(wamid="wamid.1", text="Hi, price?", wa_id="919811100001", kind="text"):
@@ -36,8 +36,8 @@ def fakes(monkeypatch):
     sent, summaries = [], []
     state = {"end": False}
 
-    def respond(agent_id, history, text, lead, **kw):
-        assert kw.get("guidance") == wa.CHAT_GUIDANCE
+    def respond(agent_id, conversation_id, history, text, lead, **kw):
+        assert kw.get("channel", "whatsapp") == "whatsapp"
         return {"reply": f"echo: {text}", "end_call": state["end"]}
 
     async def send(to, text, agent_id=None, lead_id=None, call_id=None, phone_number_id=None):
@@ -49,7 +49,7 @@ def fakes(monkeypatch):
         summaries.append(conv_id)
         wa._apply_chat_outcome(conv_id, agent_id, lead_id, history)
 
-    monkeypatch.setattr(agent_svc, "respond", respond)
+    monkeypatch.setattr(chat_agent, "respond", respond)
     monkeypatch.setattr(wa, "send_whatsapp_message", send)
     monkeypatch.setattr(wa, "_submit_chat_summary", submit_now)
     monkeypatch.setattr(call_service.CallService, "apply_outcome", lambda self, cid, lid, h: {"summary": "ok"})
@@ -151,7 +151,7 @@ def _msg(**kw):
 def test_audio_is_transcribed(agent_id, fakes, monkeypatch):
     sent, _, _ = fakes
     told = []
-    monkeypatch.setattr(agent_svc, "respond", lambda aid, h, t, lead, **kw: told.append(t) or {"reply": "ok", "end_call": False})
+    monkeypatch.setattr(chat_agent, "respond", lambda aid, cid, h, t, lead, **kw: told.append(t) or {"reply": "ok", "end_call": False})
     monkeypatch.setattr(wa, "download_media", lambda mid, tok: (b"x", "audio/ogg"))
     monkeypatch.setattr(wa, "transcribe_audio", lambda d, m: "kitna price hai")
     wa.handle_inbound(_msg(wamid="a1", type="audio", media_id="m1", **{"from": "919811100011"}))
@@ -167,7 +167,7 @@ def test_audio_is_transcribed(agent_id, fakes, monkeypatch):
 def test_image_with_and_without_caption_and_reaction(agent_id, fakes, monkeypatch):
     sent, _, _ = fakes
     told = []
-    monkeypatch.setattr(agent_svc, "respond", lambda aid, h, t, lead, **kw: told.append(t) or {"reply": "ok", "end_call": False})
+    monkeypatch.setattr(chat_agent, "respond", lambda aid, cid, h, t, lead, **kw: told.append(t) or {"reply": "ok", "end_call": False})
     wa.handle_inbound(_msg(wamid="i1", type="image", media_id="m", **{"from": "919811100013"}))
     wa.handle_inbound(_msg(wamid="i2", type="image", media_id="m", caption="this one?", text="this one?", **{"from": "919811100014"}))
     assert told == ["[customer sent an image]", "this one?"]
@@ -203,7 +203,7 @@ def test_human_reply_pauses_ai_and_resume(agent_id, fakes, client, base, monkeyp
     assert detail["ai_paused"] and detail["transcript"][-1]["role"] == "human"
     assert any(i["id"] == chat[0] for i in client.get(f"{base}/whatsapp/chats").json()["items"])
     calls = []
-    monkeypatch.setattr(agent_svc, "respond", lambda *a, **k: calls.append(1) or {"reply": "x", "end_call": False})
+    monkeypatch.setattr(chat_agent, "respond", lambda *a, **k: calls.append(1) or {"reply": "x", "end_call": False})
     wa.handle_inbound(_msg(wamid="h2", text="still there?", **{"from": "919811100020"}))
     assert not calls
     assert client.get(url).json()["transcript"][-1]["text"] == "still there?"

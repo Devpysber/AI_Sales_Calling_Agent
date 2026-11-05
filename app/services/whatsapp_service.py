@@ -332,7 +332,7 @@ def _lead_phone(lead_id: int | None) -> str:
 
 
 def _handle_locked(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> None:
-    from app.services import agent as agent_svc
+    from app.services import chat_agent
     from app.services.crm_service import CRMService
 
     if wamid:
@@ -379,7 +379,7 @@ def _handle_locked(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> N
     else:
         history = _history(conv_id)[:-1]  # everything before the turn just added
         try:
-            res = agent_svc.respond(agent_id, history, say.removeprefix("🎤 "), lead, use_embeddings=True, guidance=CHAT_GUIDANCE)
+            res = chat_agent.respond(agent_id, conv_id, history, say.removeprefix("🎤 "), lead, channel="whatsapp")
         except Exception:
             log.exception("WhatsApp reply generation failed for %s", phone)
             return

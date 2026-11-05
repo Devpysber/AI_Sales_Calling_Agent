@@ -367,6 +367,69 @@ def schedule_callback_tool(lead_id, date_time: str, agent_id: int, lead: str | N
     except Exception as e:
         return f"Failed to schedule callback: {str(e)}"
 
+def search_knowledge_tool(question: str, agent_id: int) -> str:
+    """Search this business's own knowledge base for an answer to the customer's question."""
+    from app.services import rag
+    try:
+        hits = rag.search(agent_id, question or "", top_k=3)
+    except Exception as e:
+        return f"Failed to search knowledge: {e}"
+    if not hits:
+        return "No matching knowledge found."
+    return "\n".join(f"- {h.get('title', '')}: {str(h.get('text', ''))[:300]}" for h in hits)
+
+
+def get_my_details_tool(lead_id, agent_id: int) -> str:
+    """Read-only: the customer's own saved name, phone, city and requirements. Never the full CRM record."""
+    if not lead_id:
+        return "No details on file yet."
+    crm = CRMService(agent_id)
+    try:
+        lead = crm.get(int(lead_id))
+    except (TypeError, ValueError):
+        lead = None
+    if not lead:
+        return "No details on file yet."
+    fields = {k: lead.get(k) for k in ("name", "phone", "city", "requirement", "requirements") if lead.get(k)}
+    return json.dumps(fields, ensure_ascii=False) if fields else "No details on file yet."
+
+
+def handoff_to_human_tool(lead_id, agent_id: int, conversation_id, reason: str = "") -> str:
+    """Pause the AI on this chat and hand it to a human teammate."""
+    if not conversation_id:
+        return "Failed: no active conversation to hand off."
+    from app.core.database import get_db
+    from app.models.channel import Conversation
+    try:
+        with get_db() as db:
+            conv = db.get(Conversation, int(conversation_id))
+            if conv is None:
+                return "Failed: conversation not found."
+            conv.ai_paused = True
+    except Exception as e:
+        return f"Failed to hand off: {e}"
+    from app.services import events
+    events.record("chat.handoff", f"Chat handed off to a human ({reason or 'customer request'})", reason or "",
+                  agent_id=agent_id, lead_id=lead_id, actor="ai")
+    return "A team member will take it from here."
+
+
+def create_support_ticket_tool(lead_id, agent_id: int, title: str, description: str = "") -> str:
+    """Log a support/complaint ticket (a CRM Task) for the team to action."""
+    from app.core.database import get_db
+    from app.models.crm import Task
+    try:
+        with get_db() as db:
+            task = Task(agent_id=agent_id, title=(title or "Support ticket")[:255], description=description or "",
+                        kind="todo", priority="medium", status="open", lead_id=lead_id, created_by="ai")
+            db.add(task)
+            db.flush()
+            tid = task.id
+    except Exception as e:
+        return f"Failed to create ticket: {e}"
+    return f"Support ticket #{tid} created."
+
+
 def get_agent_config_tool(target_agent_id: int) -> str:
     """Get the configuration of any agent (Admin only)."""
     from app.services.agents import get_profile
@@ -1497,6 +1560,33 @@ ADMIN_TOOLS = [
     }
 ]
 
+# A deliberately small, customer-safe slice (6 tools): everything a chat customer may trigger without
+# ever touching another lead's record, another agent, or an internal/admin action.
+CUSTOMER_TOOLS = [
+    {"type": "function", "function": {"name": "search_knowledge", "description":
+        "Search this business's knowledge base to answer the customer's question (prices, hours, policies, products).",
+        "parameters": {"type": "object", "properties": {"question": {"type": "string"}}, "required": ["question"]}}},
+    {"type": "function", "function": {"name": "schedule_callback", "description":
+        "Schedule a callback at a time the customer just agreed to.",
+        "parameters": {"type": "object", "properties": {"date_time": {"type": "string", "description": "YYYY-MM-DD HH:MM, IST"}},
+                       "required": ["date_time"]}}},
+    {"type": "function", "function": {"name": "set_meeting", "description":
+        "Book or move a meeting/visit the customer just agreed to.",
+        "parameters": {"type": "object", "properties": {"date_time": {"type": "string", "description": "YYYY-MM-DD HH:MM, IST"}},
+                       "required": ["date_time"]}}},
+    {"type": "function", "function": {"name": "get_my_details", "description":
+        "Look up the customer's own saved name, phone, city and requirements (nothing else).",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "handoff_to_human", "description":
+        "Pause the AI and hand this chat to a human teammate: the customer asked for a person, or the "
+        "request is out of scope.",
+        "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "create_support_ticket", "description":
+        "Log a support or complaint ticket for the team to action.",
+        "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "description": {"type": "string"}},
+                       "required": ["title"]}}},
+]
+
 # Tools whose dispatch already honours an `agent` argument ("Hairscope ka auto dial band karo"). The
 # argument was read at dispatch but declared in no schema, so the model had no way to send it and every
 # cross-agent instruction quietly acted on the desk that answered the phone.
@@ -1511,6 +1601,8 @@ _AGENT_ARG = {"type": "string", "description": "Another agent by id, name or com
 
 def get_tools_for_role(role: str) -> list[dict]:
     """The tools this caller may use. Only an admin is offered the cross-agent argument."""
+    if role == "customer":
+        return CUSTOMER_TOOLS
     if role != "admin":
         return TOOLS
     widened = []
@@ -1526,7 +1618,8 @@ def get_tools_for_role(role: str) -> list[dict]:
     return widened + ADMIN_TOOLS
 
 def _tool_schemas() -> dict:
-    return {t["function"]["name"]: t["function"].get("parameters", {}).get("properties", {}) for t in TOOLS + ADMIN_TOOLS}
+    return {t["function"]["name"]: t["function"].get("parameters", {}).get("properties", {})
+            for t in TOOLS + ADMIN_TOOLS + CUSTOMER_TOOLS}
 
 
 def resolve_tool_name(name: str) -> str:
@@ -1588,6 +1681,13 @@ def execute_tool(name: str, arguments: str, agent_id: int, role: str = "team") -
         return "Failed to parse arguments."
     name = resolve_tool_name(name)
     args = normalize_args(name, args)
+    if role == "customer":
+        # Defense in depth: never trust the model's own tool name, even though the tool list it was
+        # offered was already restricted to CUSTOMER_TOOLS. A spoofed role or a model that invents a
+        # team/admin tool name must still be rejected here, at execution time.
+        allowed = {t["function"]["name"] for t in CUSTOMER_TOOLS}
+        if name not in allowed:
+            return f"Access Denied or Unknown tool: {name}"
     try:
         result = _dispatch(name, args, agent_id, role)
     except Exception as e:
@@ -1628,6 +1728,14 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
         return send_sms_tool(args.get("to"), args.get("message"), agent_id, role)
     elif name == "book_calendar_event":
         return book_calendar_event_tool(args.get("email"), args.get("date_time"), args.get("duration_minutes", 30), agent_id)
+    elif name == "search_knowledge":
+        return search_knowledge_tool(args.get("question") or args.get("query") or "", agent_id)
+    elif name == "get_my_details":
+        return get_my_details_tool(args.get("lead_id"), agent_id)
+    elif name == "handoff_to_human":
+        return handoff_to_human_tool(args.get("lead_id"), agent_id, args.get("conversation_id"), args.get("reason") or "")
+    elif name == "create_support_ticket":
+        return create_support_ticket_tool(args.get("lead_id"), agent_id, args.get("title") or "Support ticket", args.get("description") or "")
     # Own-agent actions a colleague needs on a call; an admin naming another agent ("Hairscope ka") works on that one.
     target = agent_id
     if role == "admin" and args.get("agent"):
