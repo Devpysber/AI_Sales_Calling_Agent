@@ -60,14 +60,6 @@ export default function AgentSettings() {
   }, [id, agentName, agentDescription, agentColor, agentPhone])
 
   // The shell reads the agent list from the app-wide cache (a different QueryClient); the event refreshes it there.
-  const [waId, setWaId] = useState('')
-  const savedWaId = String((profileQ.data?.profile as Record<string, unknown> | undefined)?.whatsapp_phone_number_id ?? '')
-  useEffect(() => { if (profileQ.isSuccess) setWaId(savedWaId) }, [profileQ.isSuccess, savedWaId])
-  const saveWa = useMutation({
-    mutationFn: () => api(`${base}/profile`, { method: 'PUT', json: { whatsapp_phone_number_id: waId.trim() } }),
-    onSuccess: () => { toast.success('WhatsApp number saved'); qc.invalidateQueries({ queryKey: ['agent-profile', id] }) },
-    onError: (e) => toast.error(e.message),
-  })
   const refresh = () => window.dispatchEvent(new CustomEvent('agents:changed'))
 
   const save = useMutation({
@@ -140,15 +132,10 @@ export default function AgentSettings() {
       </Card>
 
       <Card>
-        <CardHeader title="WhatsApp" description="The Meta WhatsApp Business number this agent chats from." />
-        <form className="space-y-5 p-4 sm:p-5" onSubmit={(e) => { e.preventDefault(); if (waId.trim() !== savedWaId && !saveWa.isPending) saveWa.mutate() }}>
-          <Field label="WhatsApp phone number ID" hint="From Meta WhatsApp Manager → API setup. Leave empty to use the server default.">
-            <Input value={waId} onChange={(e) => setWaId(e.target.value)} inputMode="numeric" autoComplete="off" disabled={saveWa.isPending} />
-          </Field>
-          <div className="-mx-4 flex justify-end border-t border-border px-4 pt-3 sm:-mx-5 sm:px-5">
-            <Button type="submit" variant="primary" disabled={waId.trim() === savedWaId} loading={saveWa.isPending}>Save</Button>
-          </div>
-        </form>
+        <CardHeader title="Channels" description="WhatsApp and Instagram connection settings moved to the Channels tab." />
+        <div className="flex justify-end p-4 sm:p-5">
+          <Link to={path('/channels')}><Button type="button">Open Channels</Button></Link>
+        </div>
       </Card>
 
       <div className="grid gap-3 sm:grid-cols-3">

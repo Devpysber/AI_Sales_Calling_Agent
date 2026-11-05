@@ -104,6 +104,7 @@ PROFILE_DEFAULTS = {
     # Call routing: a human number to hand callers to
     "transfer_number": "",
     "whatsapp_phone_number_id": "",    # Meta phone number ID this agent chats from; empty = server default
+    "instagram_account_id": "",        # Instagram-connected Page/IG account ID shown on the Channels tab (display only today; routing is still env-based, see instagram_service.resolve_agent)
     "team_members": [],
     "inbound_mode": "ai",              # ai | forward (ring the transfer number directly)
     "transfer_on_request": True,       # AI hands over when the caller asks for a person
