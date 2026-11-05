@@ -404,6 +404,9 @@ def create(data: dict, actor: str = "admin", created_by: str | None = None) -> d
     events.record("agent.created", f"Agent created: {result['name']}", agent_id=result["id"], actor=actor)
     if result.get("phone_number"):
         _wire_own_number(result["id"], result["phone_number"], actor)
+    with contextlib.suppress(Exception):
+        from app.services.tool_registry import ensure_builtin_defaults
+        ensure_builtin_defaults(result["id"])
     return result
 
 

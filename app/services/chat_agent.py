@@ -12,25 +12,46 @@ import time
 
 from app.services import agent as agent_svc
 from app.services import llm
-from app.services.agent_tools import CUSTOMER_TOOLS, execute_tool
+from app.services import tool_registry
+from app.services.agent_tools import execute_tool
 from app.services.whatsapp_service import CHAT_GUIDANCE
 
 log = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 4
-_SAFE_NAMES = {t["function"]["name"] for t in CUSTOMER_TOOLS}
+# Builtin CUSTOMER_TOOLS are all read/write (nothing moves money), so only risk="money" gates today —
+# gating "write" too is left to a business's own custom tools (set risk="write" there) per the PRD note
+# that write *may* warrant it; the 6 defaults keep their existing no-gate behaviour (Day-3 tests rely on it).
+_CONFIRM_RISKS = ("money",)
 
 
-def _log_tool_run(agent_id: int, conversation_id: int | None, name: str, args: dict, result: str, status: str, duration_ms: int) -> None:
+def _log_tool_run(agent_id: int, conversation_id: int | None, name: str, args: dict, result: str, status: str,
+                   duration_ms: int, message_id: int | None = None) -> None:
     from app.core.database import get_db
     from app.models.channel import ToolRun
     try:
         with get_db() as db:
-            db.add(ToolRun(agent_id=agent_id, conversation_id=conversation_id, tool_name=name,
+            db.add(ToolRun(agent_id=agent_id, conversation_id=conversation_id, message_id=message_id, tool_name=name,
                             arguments_json=json.dumps(args, ensure_ascii=False, default=str),
                             result=str(result)[:4000], status=status, duration_ms=duration_ms))
     except Exception:
         log.exception("tool_runs logging failed for %s", name)
+
+
+def _pending_confirm(agent_id: int, conversation_id: int | None, name: str) -> bool:
+    """True if this tool/conversation already has a pending confirmation ToolRun (so this call is the
+    customer's confirmation, not the first ask) — clears it so the next ask starts fresh."""
+    from app.core.database import get_db
+    from app.models.channel import ToolRun
+    with get_db() as db:
+        row = (db.query(ToolRun)
+               .filter(ToolRun.agent_id == agent_id, ToolRun.conversation_id == conversation_id,
+                       ToolRun.tool_name == name, ToolRun.status == "pending_confirm")
+               .order_by(ToolRun.id.desc()).first())
+        if row:
+            row.status = "confirmed"
+            return True
+    return False
 
 
 def _run_tool(name: str, args: dict, agent_id: int, conversation_id: int | None, lead_id) -> tuple[str, str]:
@@ -41,27 +62,46 @@ def _run_tool(name: str, args: dict, agent_id: int, conversation_id: int | None,
     safe_args["conversation_id"] = conversation_id
     started = time.perf_counter()
     status = "ok"
-    if name not in _SAFE_NAMES:
+
+    definition = tool_registry.get_definition(agent_id, name)
+    if not definition or not definition.get("enabled"):
         result = f"Access Denied or Unknown tool: {name}"
         status = "denied"
-    else:
-        try:
+        _log_tool_run(agent_id, conversation_id, name, safe_args, result, status, 0)
+        return result, status
+
+    # Confirmation gate: risk="money"/"write" tools don't execute on the first ask — the agent asks the
+    # customer to confirm in natural language, and only runs on the next turn once confirmed.
+    if definition.get("risk") in _CONFIRM_RISKS and not _pending_confirm(agent_id, conversation_id, name):
+        result = ("Before I do that, please confirm: should I go ahead with "
+                   f"{name.replace('_', ' ')} ({json.dumps(safe_args, ensure_ascii=False, default=str)})? Reply yes to proceed.")
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        _log_tool_run(agent_id, conversation_id, name, safe_args, result, "pending_confirm", duration_ms)
+        return result, "pending_confirm"
+
+    try:
+        if definition["type"] == "http":
+            context = {"lead_id": lead_id}
+            outcome = tool_registry.run_http_tool(definition, safe_args, context)
+            result = outcome["result"] if outcome["ok"] else (outcome["error"] or "Tool failed.")
+            status = "ok" if outcome["ok"] else "error"
+        else:
             result = execute_tool(name, json.dumps(safe_args, ensure_ascii=False, default=str), agent_id, role="customer")
             if isinstance(result, str) and result.lower().startswith(("failed", "access denied", "tool ", "error")):
                 status = "error"
-        except Exception as e:  # noqa: BLE001
-            result = f"Tool {name} failed: {e}"
-            status = "error"
+    except Exception as e:  # noqa: BLE001
+        result = f"Tool {name} failed: {e}"
+        status = "error"
     duration_ms = int((time.perf_counter() - started) * 1000)
     _log_tool_run(agent_id, conversation_id, name, safe_args, result, status, duration_ms)
     return result, status
 
 
-def _collect_tool_calls(messages: list[dict], max_tokens: int = 300) -> tuple[list[dict], str]:
+def _collect_tool_calls(messages: list[dict], tools: list[dict], max_tokens: int = 300) -> tuple[list[dict], str]:
     """One native-tool-calling round: (tool_calls, text)."""
     tool_calls: list[dict] = []
     text_parts: list[str] = []
-    for delta in llm.stream(messages, max_tokens=max_tokens, temperature=0.4, tools=CUSTOMER_TOOLS):
+    for delta in llm.stream(messages, max_tokens=max_tokens, temperature=0.4, tools=tools):
         if isinstance(delta, dict) and "tool_calls" in delta:
             for tc in delta["tool_calls"]:
                 idx = tc.get("index", 0)
@@ -80,10 +120,10 @@ def _collect_tool_calls(messages: list[dict], max_tokens: int = 300) -> tuple[li
     return tool_calls, "".join(text_parts).strip()
 
 
-def _native_loop(messages: list[dict], agent_id: int, conversation_id: int | None, lead_id) -> dict:
+def _native_loop(messages: list[dict], tools: list[dict], agent_id: int, conversation_id: int | None, lead_id) -> dict:
     tools_used: list[dict] = []
     for round_n in range(MAX_TOOL_ROUNDS):
-        tool_calls, text = _collect_tool_calls(messages)
+        tool_calls, text = _collect_tool_calls(messages, tools)
         if not tool_calls:
             return {"reply": text, "end_call": False, "tools_used": tools_used}
         for i, tc in enumerate(tool_calls):
@@ -106,11 +146,11 @@ def _native_loop(messages: list[dict], agent_id: int, conversation_id: int | Non
     return {"reply": (result.text or "").strip(), "end_call": False, "tools_used": tools_used}
 
 
-def _json_fallback(messages: list[dict], agent_id: int, conversation_id: int | None, lead_id) -> dict:
+def _json_fallback(messages: list[dict], tools: list[dict], agent_id: int, conversation_id: int | None, lead_id) -> dict:
     """The same tool loop, driven through a JSON turn when native tool-calling isn't available."""
     catalogue = "\n".join(
         f'- {t["function"]["name"]}: {t["function"]["description"]} Arguments: '
-        f'{json.dumps(t["function"].get("parameters", {}).get("properties", {}))}' for t in CUSTOMER_TOOLS)
+        f'{json.dumps(t["function"].get("parameters", {}).get("properties", {}))}' for t in tools)
     instruction = (
         "\n\n# Tools (answer as JSON only)\n"
         "You can run one tool per turn. Respond with ONLY this JSON object, nothing else:\n"
@@ -157,6 +197,7 @@ def respond(agent_id: int, conversation_id: int, history: list[dict], customer_t
     messages, _ = agent_svc.build_messages(agent_id, history, customer_text, lead, use_embeddings=True)
     messages[0]["content"] += "\n\n" + CHAT_GUIDANCE
     lead_id = lead.get("id")
+    tools = tool_registry.tools_for_agent(agent_id, channel)
     if llm.tools_via_openrouter():
-        return _native_loop(messages, agent_id, conversation_id, lead_id)
-    return _json_fallback(messages, agent_id, conversation_id, lead_id)
+        return _native_loop(messages, tools, agent_id, conversation_id, lead_id)
+    return _json_fallback(messages, tools, agent_id, conversation_id, lead_id)

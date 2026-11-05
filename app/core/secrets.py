@@ -50,6 +50,29 @@ def get_secret_from_db(key: str):
     secrets = get_all_secrets_from_db()
     return secrets.get(key)
 
+
+def encrypt_value(value: str) -> str | None:
+    """Encrypt an arbitrary string for storage in a *_encrypted column (e.g. ToolDefinition.secret_encrypted)."""
+    if not value:
+        return None
+    cipher = _get_cipher()
+    if not cipher:
+        raise ValueError("SECRET_KEY must be set in .env to encrypt secrets.")
+    return cipher.encrypt(value.encode()).decode()
+
+
+def decrypt_value(value: str | None) -> str | None:
+    """Decrypt a value stored by encrypt_value(); returns None if value/cipher is missing or decryption fails."""
+    if not value:
+        return None
+    cipher = _get_cipher()
+    if not cipher:
+        return None
+    try:
+        return cipher.decrypt(value.encode()).decode()
+    except Exception:
+        return None
+
 def set_secrets_in_db(new_secrets: dict):
     global _cache
     with SessionLocal() as db:
