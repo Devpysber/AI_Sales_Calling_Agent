@@ -29,20 +29,39 @@ _BUILTIN_RISK = {
     "get_my_details": "read",
     "handoff_to_human": "write",
     "create_support_ticket": "write",
+    "reschedule_meeting": "write",
+    "cancel_meeting": "write",
+    "update_lead_requirement": "write",
+    "check_my_order_or_deal_status": "read",
+    "send_brochure": "write",
+    "request_document_from_customer": "write",
+    "send_quick_replies": "write",
+    "send_options_list": "write",
+    "share_location": "read",
+    "send_payment_link": "money",
+    "check_ticket_status": "read",
+    "escalate_urgent": "write",
+    "set_language_preference": "write",
+    "opt_out": "write",
 }
 
 
 def ensure_builtin_defaults(agent_id: int) -> None:
-    """Idempotently seed this agent's 6 builtin ToolDefinition rows, if it has none yet."""
+    """Additively seed every builtin ToolDefinition name in CUSTOMER_TOOLS this agent doesn't have yet.
+
+    Idempotent for names already present (never re-seeds/duplicates them), but still picks up any new
+    CUSTOMER_TOOLS name added later - an agent created back when there were only 6 builtins gets the
+    rest added here too, instead of being stuck on the original set.
+    """
     from app.core.database import get_db
     from app.models.channel import ToolDefinition
 
     with get_db() as db:
-        existing = db.query(ToolDefinition.id).filter(ToolDefinition.agent_id == agent_id).first()
-        if existing:
-            return
+        existing = {row[0] for row in db.query(ToolDefinition.name).filter(ToolDefinition.agent_id == agent_id)}
         for tool in CUSTOMER_TOOLS:
             name = tool["function"]["name"]
+            if name in existing:
+                continue
             db.add(ToolDefinition(
                 agent_id=agent_id, name=name, description=tool["function"].get("description", ""),
                 type="builtin", risk=_BUILTIN_RISK.get(name, "read"), enabled=True,

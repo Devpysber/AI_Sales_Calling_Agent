@@ -159,6 +159,14 @@ def parse_webhook(payload: dict) -> list[dict]:
 
 
 def resolve_agent(page_id: str | None) -> int | None:
+    """Profile-based first (mirrors whatsapp_service._profile_phone_id / resolve_agent): the agent whose
+    profile `instagram_account_id` matches the inbound page id, so multiple agents can each own their own
+    connected Instagram account. Falls back to the single-tenant env vars for anyone who hasn't set it."""
+    if page_id:
+        from app.services import agents
+        for aid in agents.ids():
+            if str((agents.get_profile(aid) or {}).get("instagram_account_id") or "").strip() == str(page_id):
+                return aid
     if page_id and settings.instagram_page_id and str(page_id) == str(settings.instagram_page_id):
         return settings.instagram_agent_id or None
     return settings.instagram_agent_id or None

@@ -104,6 +104,18 @@ def test_parse_webhook_attachment_fallback():
     assert m["text"] == "[attachment]"
 
 
+def test_resolve_agent_profile_based_priority(agent_id, monkeypatch):
+    """A profile-set instagram_account_id must win over the env-based instagram_agent_id fallback."""
+    from app.services import agents as agent_svc
+    other_agent = agent_id + 1  # not necessarily a real row; env fallback must not match it below
+    agent_svc.update_profile(agent_id, {"instagram_account_id": "PAGE-OWNED"}, actor="admin")
+    monkeypatch.setattr(settings, "instagram_agent_id", other_agent)
+    monkeypatch.setattr(settings, "instagram_page_id", None)
+    assert ig.resolve_agent("PAGE-OWNED") == agent_id
+    # Unmatched page id still falls back to the env agent, same as before this change.
+    assert ig.resolve_agent("SOME-OTHER-PAGE") == other_agent
+
+
 def test_inbound_creates_phoneless_lead_and_chat(agent_id, fakes):
     sent, summaries, state = fakes
     [m] = ig.parse_webhook(_payload(mid="mid.A", sender="17800000002"))

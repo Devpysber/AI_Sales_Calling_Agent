@@ -414,6 +414,69 @@ def _send(to: str, text: str, agent_id: int, lead_id: int, phone_number_id: str 
     return asyncio.run(send_whatsapp_message(to, text, agent_id=agent_id, lead_id=lead_id, phone_number_id=pid))
 
 
+def _meta_post(payload: dict, agent_id: int | None, lead_id: int | None, phone_number_id: str | None = None) -> dict:
+    """Shared sync POST to the Meta Graph /messages endpoint for message types beyond plain text
+    (document, interactive, location). Composio has no equivalent action for these, so they always go
+    through the direct Meta token/phone-number-id path, same credentials as send_whatsapp_message."""
+    token = settings.whatsapp_token
+    pid = phone_number_id or _profile_phone_id(agent_id) or settings.whatsapp_phone_number_id
+    if not (token and pid):
+        return {"ok": False, "error": "WhatsApp credentials not configured"}
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            res = client.post(f"https://graph.facebook.com/v19.0/{pid}/messages",
+                              headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                              json=payload)
+        if res.status_code in (200, 201):
+            events.record("whatsapp.sent", f"WhatsApp {payload.get('type')} dispatched", "",
+                          agent_id=agent_id, lead_id=lead_id, actor="ai")
+            return {"ok": True, "data": res.json()}
+        return {"ok": False, "error": f"Meta HTTP {res.status_code}: {res.text}"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
+def send_whatsapp_document(to: str, agent_id: int | None, lead_id: int | None, link: str, filename: str | None = None,
+                           caption: str | None = None, phone_number_id: str | None = None) -> dict:
+    doc = {"link": link}
+    if filename:
+        doc["filename"] = filename
+    if caption:
+        doc["caption"] = caption
+    payload = {"messaging_product": "whatsapp", "to": clean_phone(to), "type": "document", "document": doc}
+    return _meta_post(payload, agent_id, lead_id, phone_number_id)
+
+
+def send_whatsapp_buttons(to: str, agent_id: int | None, lead_id: int | None, body: str, buttons: list[str],
+                          phone_number_id: str | None = None) -> dict:
+    """Up to 3 quick-reply buttons (Meta's interactive "button" message)."""
+    btns = [{"type": "reply", "reply": {"id": f"opt_{i}", "title": str(b)[:20]}} for i, b in enumerate(buttons[:3])]
+    interactive = {"type": "button", "body": {"text": (body or "")[:1024]}, "action": {"buttons": btns}}
+    payload = {"messaging_product": "whatsapp", "to": clean_phone(to), "type": "interactive", "interactive": interactive}
+    return _meta_post(payload, agent_id, lead_id, phone_number_id)
+
+
+def send_whatsapp_list(to: str, agent_id: int | None, lead_id: int | None, body: str, button_label: str,
+                       options: list[str], phone_number_id: str | None = None) -> dict:
+    """An interactive "list" message, for more than 3 options."""
+    rows = [{"id": f"opt_{i}", "title": str(o)[:24]} for i, o in enumerate(options[:10])]
+    interactive = {"type": "list", "body": {"text": (body or "")[:1024]},
+                   "action": {"button": (button_label or "Choose")[:20], "sections": [{"title": "Options", "rows": rows}]}}
+    payload = {"messaging_product": "whatsapp", "to": clean_phone(to), "type": "interactive", "interactive": interactive}
+    return _meta_post(payload, agent_id, lead_id, phone_number_id)
+
+
+def send_whatsapp_location(to: str, agent_id: int | None, lead_id: int | None, latitude: float, longitude: float,
+                           name: str = "", address: str = "", phone_number_id: str | None = None) -> dict:
+    loc = {"latitude": latitude, "longitude": longitude}
+    if name:
+        loc["name"] = name
+    if address:
+        loc["address"] = address
+    payload = {"messaging_product": "whatsapp", "to": clean_phone(to), "type": "location", "location": loc}
+    return _meta_post(payload, agent_id, lead_id, phone_number_id)
+
+
 def download_media(media_id: str, token: str) -> tuple[bytes, str]:
     headers = {"Authorization": f"Bearer {token}"}
     with httpx.Client(timeout=10.0) as client:

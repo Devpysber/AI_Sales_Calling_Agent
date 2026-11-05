@@ -21,13 +21,34 @@ def _agent(client):
 
 
 def test_ensure_builtin_defaults_idempotent(client):
+    from app.services.agent_tools import CUSTOMER_TOOLS
     agent_id = _agent(client)
     tool_registry.ensure_builtin_defaults(agent_id)
     tool_registry.ensure_builtin_defaults(agent_id)
     with get_db() as db:
         rows = db.query(ToolDefinition).filter(ToolDefinition.agent_id == agent_id).all()
-    assert len(rows) == 6
+    all_names = {t["function"]["name"] for t in CUSTOMER_TOOLS}
+    assert {r.name for r in rows} == all_names
+    assert len(rows) == len(all_names)
     assert {r.type for r in rows} == {"builtin"}
+
+
+def test_ensure_builtin_defaults_adds_new_tools_to_existing_agent(client):
+    """An agent seeded back when there were only 6 builtins must pick up every later-added CUSTOMER_TOOLS
+    name additively, without re-seeding or duplicating the ones it already has."""
+    from app.services.agent_tools import CUSTOMER_TOOLS
+    agent_id = _agent(client)
+    with get_db() as db:
+        db.query(ToolDefinition).filter(ToolDefinition.agent_id == agent_id).delete()
+        db.add(ToolDefinition(agent_id=agent_id, name="search_knowledge", description="old", type="builtin",
+                              risk="read", enabled=True))
+    tool_registry.ensure_builtin_defaults(agent_id)
+    with get_db() as db:
+        rows = db.query(ToolDefinition).filter(ToolDefinition.agent_id == agent_id).all()
+    all_names = {t["function"]["name"] for t in CUSTOMER_TOOLS}
+    assert {r.name for r in rows} == all_names
+    assert len(rows) == len(all_names)  # no duplicate search_knowledge row
+    assert next(r for r in rows if r.name == "search_knowledge").description == "old"  # untouched, not re-seeded
 
 
 def test_tools_for_agent_excludes_disabled_and_wrong_channel(client):
