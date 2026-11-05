@@ -36,7 +36,9 @@ async def inbound(request: Request, background: BackgroundTasks):
     except ValueError:
         return {"ok": True}
     for msg in wa.parse_webhook(payload):
-        background.add_task(wa.handle_inbound, msg)  # sync function: Starlette runs it in a worker thread
+        # enqueue_inbound: RPUSH to the durable Redis queue when configured, else process inline
+        # (sync function: Starlette runs it in a worker thread either way).
+        background.add_task(wa.enqueue_inbound, msg)
     return {"ok": True}
 
 

@@ -4,6 +4,7 @@ frontend build exists) the dashboard SPA.
 """
 
 import asyncio
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -16,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import accounts, agents, calls, crm, intake, knowledge, leads, plivo, system, tools, whatsapp
-from app.core import auth
+from app.core import auth, store
 from app.core.config import settings
 from app.core.database import run_migrations
 from app.core.logging import get_logger, setup_logging
@@ -69,6 +70,15 @@ async def lifespan(app: FastAPI):
     if settings.run_scheduler:
         from app.services.scheduler import scheduler_loop
         task = asyncio.create_task(scheduler_loop())
+    # WhatsApp inbound queue consumer: runs here too (not just in the dedicated `app.worker` process)
+    # so a single-container deploy (docker-compose.yml) still consumes the Redis queue; when no
+    # dedicated worker exists this is the only consumer. Several processes/replicas may run this
+    # concurrently -- that's the intended scale-out story (BLPOP + per-contact Redis lock).
+    queue_stop = None
+    if isinstance(store.store, store.RedisStore):
+        from app.services.whatsapp_service import queue_worker_loop
+        queue_stop = threading.Event()
+        asyncio.create_task(asyncio.to_thread(queue_worker_loop, queue_stop))
     log.info("%s %s started (%s)", settings.app_name, settings.app_version, settings.environment)
     
     # Uploads and coverage analyses run on daemon threads; a restart mid-way left them "processing" /
@@ -122,6 +132,8 @@ async def lifespan(app: FastAPI):
     yield
     if task:
         task.cancel()
+    if queue_stop:
+        queue_stop.set()
 
 
 app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan,

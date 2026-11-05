@@ -2,7 +2,8 @@
 #
 #   nginx (load balancer, static dashboard, rate limits)
 #     └── api × N   (stateless FastAPI/gunicorn; call state in Redis)
-#   worker          (scheduler: auto-dial, retries, reminders — Redis leader lock)
+#   worker          (scheduler: auto-dial, retries, reminders — Redis leader lock;
+#                    also consumes the WhatsApp inbound queue — per-contact Redis lock keeps replies ordered)
 #   migrate         (one-off job per deploy)
 #   postgres, redis
 #

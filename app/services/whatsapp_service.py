@@ -9,15 +9,20 @@ Supports:
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
+import os
 import re
+import socket
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from app.core import store
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.agent import Agent
@@ -25,6 +30,133 @@ from app.models.channel import Conversation, Message
 from app.services import events
 
 log = logging.getLogger(__name__)
+
+# ---------------- Durable inbound queue (Redis list, consumed by queue_worker_loop) ----------------
+# Design: one global Redis LIST (not a queue-per-contact) + the existing per-(agent,wa_id) Redis lock
+# (store.acquire_lock) enforces ordering at processing time. Simpler than per-contact queues and reuses
+# infra that already exists (acquire_lock); a contact whose lock is briefly held just gets re-enqueued.
+# Delivery is at-least-once (plain BLPOP, no RPOPLPUSH/ack list): if a worker crashes after BLPOP but
+# before finishing, that one message is lost from the queue, but Day 1's unique (agent_id, external_id)
+# constraint plus Meta's own webhook retries are the backstop — simplest option that still can't double-send
+# under normal operation (crash mid-send would just mean Meta retries the delivery itself).
+QUEUE_KEY = "va:whatsapp:inbound"
+BURST_WINDOW_SECONDS = 5  # merge customer messages arriving within this window into one agent turn
+BURST_POLL_SECONDS = 1
+LOCK_TTL_SECONDS = 30
+LOCK_ACQUIRE_ATTEMPTS = 3
+LOCK_ACQUIRE_WAIT = 0.3
+OWNER = f"{socket.gethostname()}:{os.getpid()}"
+
+
+def _queue_enabled() -> bool:
+    """True when the shared store is real Redis (see app.core.store._make_store) -- reusing that same
+    fallback condition rather than inventing new config: no REDIS_URL means single-process dev, where
+    inline synchronous processing is both sufficient and simpler."""
+    return isinstance(store.store, store.RedisStore)
+
+
+def enqueue_inbound(msg: dict) -> None:
+    """Webhook entry point: durable+ordered via Redis when configured, inline otherwise (dev fallback)."""
+    if _queue_enabled():
+        store.store.client.rpush(QUEUE_KEY, json.dumps(msg))
+    else:
+        handle_inbound(msg)
+
+
+def _lock_name(agent_id: int, wa_id: str) -> str:
+    return f"whatsapp:{agent_id}:{wa_id}"
+
+
+def _acquire_with_retry(name: str) -> bool:
+    for _ in range(LOCK_ACQUIRE_ATTEMPTS):
+        if store.acquire_lock(name, OWNER, LOCK_TTL_SECONDS):
+            return True
+        time.sleep(LOCK_ACQUIRE_WAIT)
+    return False
+
+
+def _requeue_front(msg: dict) -> None:
+    """Put a message back at the head (not the tail) of the queue: it was already the next one due for
+    this contact, so losing a lock race must not let it be overtaken by a later, unrelated message."""
+    store.store.client.lpush(QUEUE_KEY, json.dumps(msg))
+
+
+def _contact_key(msg: dict) -> tuple:
+    return (msg.get("phone_number_id"), msg.get("from"))
+
+
+def _drain_same_contact(key: tuple, max_items: int = 20) -> list[dict]:
+    """Non-blocking: pop whatever is already queued, keep same-contact messages for the batch, and put
+    everything else straight back at the head of the queue so other contacts' ordering is undisturbed."""
+    client = store.store.client
+    batch, others = [], []
+    for _ in range(max_items):
+        raw = client.lpop(QUEUE_KEY)
+        if raw is None:
+            break
+        other = json.loads(raw)
+        if _contact_key(other) == key:
+            batch.append(other)
+        else:
+            others.append(raw)
+    if others:
+        client.lpush(QUEUE_KEY, *reversed(others))
+    return batch
+
+
+def queue_worker_loop(stop_event: threading.Event | None = None) -> None:
+    """Consumer loop for `python -m app.worker` / `app.chat_worker`: BLPOP, lock the contact, process
+    (merging a short burst of messages into one agent turn), release."""
+    client = store.store.client
+    while stop_event is None or not stop_event.is_set():
+        item = client.blpop(QUEUE_KEY, timeout=5)
+        if item is None:
+            continue
+        _, raw = item
+        try:
+            msg = json.loads(raw)
+        except Exception:
+            log.exception("WhatsApp queue: unreadable message, dropping")
+            continue
+        try:
+            _process_from_queue(msg)
+        except Exception:
+            log.exception("WhatsApp queue: failed to process message")
+
+
+def _process_from_queue(msg: dict) -> None:
+    wa_id = msg.get("from")
+    if not wa_id:
+        return
+    agent_id = resolve_agent(msg.get("phone_number_id"), msg.get("display_phone_number"))
+    if not agent_id:
+        log.warning("WhatsApp message from %s: no agent resolved (set WHATSAPP_AGENT_ID)", wa_id)
+        return
+    name = _lock_name(agent_id, wa_id)
+    if not _acquire_with_retry(name):
+        # Someone else is mid-turn for this contact; don't block the whole worker on it, requeue at the
+        # front for another pass (ours or another worker's) rather than let a later message cut ahead.
+        _requeue_front(msg)
+        return
+    try:
+        key = _contact_key(msg)
+        batch = [msg] + _drain_same_contact(key)
+        client = store.store.client
+        item = client.blpop(QUEUE_KEY, timeout=BURST_POLL_SECONDS)
+        if item is not None:
+            _, raw = item
+            extra = json.loads(raw)
+            if _contact_key(extra) == key:
+                batch.append(extra)
+                batch.extend(_drain_same_contact(key))
+            else:
+                client.lpush(QUEUE_KEY, raw)
+        try:
+            _handle_batch(batch, agent_id, wa_id)
+        except Exception:
+            log.exception("WhatsApp inbound handling failed for %s", wa_id)
+    finally:
+        store.delete("lock:" + name)
 
 def is_whatsapp_configured() -> bool:
     return bool(getattr(settings, "composio_api_key", None) or getattr(settings, "whatsapp_token", None))
@@ -308,7 +440,8 @@ def transcribe_audio(data: bytes, mime: str) -> str:
 
 
 def handle_inbound(msg: dict) -> None:
-    """Process one inbound message (blocking; run in a worker thread)."""
+    """Process one inbound message (blocking; run in a worker thread). Used directly by the no-Redis
+    dev fallback (enqueue_inbound) and by tests; the Redis queue path goes through _process_from_queue."""
     wa_id = msg.get("from")
     if not wa_id:
         return
@@ -323,6 +456,22 @@ def handle_inbound(msg: dict) -> None:
             log.exception("WhatsApp inbound handling failed for %s", wa_id)
 
 
+def _handle_batch(batch: list[dict], agent_id: int, wa_id: str) -> None:
+    """Record every message in the burst as its own Message row, but generate/send only one reply for
+    the merged batch (one chat_agent.respond() + one outbound send)."""
+    contexts, added = [], 0
+    for m in batch:
+        ctx, did_add = _record_turn(m, agent_id, m.get("wamid"), wa_id)
+        if did_add:
+            added += 1
+        if ctx is not None:
+            contexts.append(ctx)
+    if not contexts:
+        return
+    combined_say = "\n".join(c["say"] for c in contexts if c["say"])
+    _reply_turn(agent_id, contexts[-1], combined_say, drop_last=added)
+
+
 def _lead_phone(lead_id: int | None) -> str:
     if not lead_id:
         return ""
@@ -331,8 +480,11 @@ def _lead_phone(lead_id: int | None) -> str:
         return db.scalar(select(Lead.phone).where(Lead.id == lead_id)) or ""
 
 
-def _handle_locked(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> None:
-    from app.services import chat_agent
+def _record_turn(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> tuple[dict | None, bool]:
+    """Persist one inbound message as its own Message row (always, for the transcript/audit trail).
+    Returns (ctx, added): `ctx` is the reply context (None when there's nothing further to do for this
+    particular message -- dedupe/reaction/do-not-call/paused), `added` is whether a Message row was
+    actually written (used by batch callers to size the history cutoff for the merged reply)."""
     from app.services.crm_service import CRMService
 
     if wamid:
@@ -340,7 +492,7 @@ def _handle_locked(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> N
         # skips the media download / LLM round trip Meta's own retries would otherwise pay for twice).
         with get_db() as db:
             if db.scalar(select(Message.id).where(Message.agent_id == agent_id, Message.external_id == wamid)) is not None:
-                return
+                return None, False
     phone = "+" + wa_id
     crm = CRMService(agent_id)
     lead = crm.find_by_phone(phone) or crm.create(
@@ -351,7 +503,7 @@ def _handle_locked(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> N
         paused = bool(db.scalar(select(Conversation.ai_paused).where(Conversation.id == conv_id)))
     kind = msg.get("type") or ""
     if kind == "reaction":
-        return
+        return None, False
     text = (msg.get("text") or "").strip()
     shown, say = text, text  # what the transcript shows / what the agent is told
     if not text and kind in ("audio", "voice") and msg.get("media_id"):
@@ -368,16 +520,24 @@ def _handle_locked(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> N
     added = _add_message(conv_id, agent_id, "in", "customer", shown or f"[{kind or 'message'}]",
                           type_=media_type, external_id=wamid, sender_name=msg.get("name") or None)
     if not added:
-        return  # a duplicate wamid raced us past the precheck above
+        return None, False  # a duplicate wamid raced us past the precheck above
     events.record("whatsapp.received", f"WhatsApp from {phone}", (shown or kind)[:120],
                   agent_id=agent_id, lead_id=lead_id, actor="customer")
     if lead.get("do_not_call") or paused:
-        return
+        return None, True
+    return {"conv_id": conv_id, "lead": lead, "lead_id": lead_id, "phone": phone, "say": say, "msg": msg}, True
+
+
+def _reply_turn(agent_id: int, ctx: dict, say: str, drop_last: int = 1) -> None:
+    """Generate (and send) one reply -- for a single message or a burst-merged batch alike."""
+    from app.services import chat_agent
+
+    conv_id, lead, lead_id, phone, msg = ctx["conv_id"], ctx["lead"], ctx["lead_id"], ctx["phone"], ctx["msg"]
     end_call = False
     if not say:
         reply = NON_TEXT_REPLY
     else:
-        history = _history(conv_id)[:-1]  # everything before the turn just added
+        history = _history(conv_id)[:-drop_last] if drop_last else _history(conv_id)  # before the turn(s) just added
         try:
             res = chat_agent.respond(agent_id, conv_id, history, say.removeprefix("🎤 "), lead, channel="whatsapp")
         except Exception:
@@ -392,6 +552,13 @@ def _handle_locked(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> N
     _add_message(conv_id, agent_id, "out", "ai", reply)
     if end_call:
         close_chat(conv_id)
+
+
+def _handle_locked(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> None:
+    ctx, _ = _record_turn(msg, agent_id, wamid, wa_id)
+    if ctx is None:
+        return
+    _reply_turn(agent_id, ctx, ctx["say"])
 
 
 def _apply_chat_outcome(conv_id: int, agent_id: int, lead_id: int | None, history: list[dict]) -> None:
