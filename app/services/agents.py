@@ -103,6 +103,7 @@ PROFILE_DEFAULTS = {
     "max_call_minutes": 5,
     # Call routing: a human number to hand callers to
     "transfer_number": "",
+    "whatsapp_phone_number_id": "",    # Meta phone number ID this agent chats from; empty = server default
     "team_members": [],
     "inbound_mode": "ai",              # ai | forward (ring the transfer number directly)
     "transfer_on_request": True,       # AI hands over when the caller asks for a person

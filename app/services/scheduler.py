@@ -289,6 +289,9 @@ def _due(agent_id: int, cfg: dict) -> list[str]:
     return due
 
 
+_last_chat_sweep = 0.0
+
+
 def tick():
     for agent_id in agents.ids(active_only=True):
         # Renew the lock between agents, and stop if another instance has taken it: a slow tick that
@@ -313,6 +316,12 @@ def tick():
                    data={"agent_id": agent_id, "job": None})
             continue
     CallService().expire_stale()
+    global _last_chat_sweep
+    if time.time() - _last_chat_sweep >= 300:  # idle WhatsApp chats close (and are summarised) every ~5 minutes
+        _last_chat_sweep = time.time()
+        with contextlib.suppress(Exception):
+            from app.services.whatsapp_service import close_idle_chats
+            close_idle_chats()
     from app.services.heal_service import SCHEDULER_TICK_KEY
     store.set_json(SCHEDULER_TICK_KEY, time.time())
 

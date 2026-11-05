@@ -1240,6 +1240,8 @@ class CallService:
                 query = query.where(Call.status == status)
             if direction:
                 query = query.where(Call.direction == direction)
+            else:
+                query = query.where(Call.direction.is_distinct_from("whatsapp"))
             if search and search.strip():
                 from app.services.crm_service import search_terms
                 like, phone_like = search_terms(search)
@@ -1306,9 +1308,9 @@ class CallService:
         start_utc = today_utc - timedelta(days=days - 1)
         with get_db() as db:
             calls = db.execute(self._scoped(select(Call.created_at, Call.status, Call.duration, Call.outcome))
-                               .where(Call.created_at >= start_utc)).all()
+                               .where(Call.created_at >= start_utc, Call.direction.is_distinct_from("whatsapp"))).all()
             latency = db.scalar(self._scoped(select(func.avg(Call.avg_latency_ms)))
-                                .where(Call.created_at >= today_utc - timedelta(days=7)))
+                                .where(Call.created_at >= today_utc - timedelta(days=7), Call.direction.is_distinct_from("whatsapp")))
             active = db.scalar(self._scoped(select(func.count(Call.id))).where(Call.status.in_(ACTIVE))) or 0
         series = {}
         for d in range(days):

@@ -992,7 +992,7 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
             log.warning("Prompt still over budget after trimming: %s chars (budget %s)", size(), budget)
     messages = [{"role": "system", "content": system}]
     for turn in window:
-        messages.append({"role": "assistant" if turn["role"] == "assistant" else "user", "content": turn["text"]})
+        messages.append({"role": "assistant" if turn["role"] in ("assistant", "human") else "user", "content": turn["text"]})
     messages.append({"role": "user", "content": customer_text})
     return messages, knowledge
 
@@ -1406,7 +1406,7 @@ def compact_history(history: list[dict], prior: str | None = None, since: int = 
     older = history[since:-MAX_HISTORY_TURNS]
     if not older:
         return prior or ""
-    transcript = "\n".join(f"{'Agent' if t['role'] == 'assistant' else 'Customer'}: {t['text']}" for t in older)
+    transcript = "\n".join(f"{'Agent' if t['role'] in ('assistant', 'human') else 'Customer'}: {t['text']}" for t in older)
     user = (f"Previous summary:\n{prior}\n\n" if prior else "") + f"Call so far:\n{transcript}"
     result = llm.complete([{"role": "system", "content": COMPACT_PROMPT}, {"role": "user", "content": user}],
                           max_tokens=160, temperature=0.1, providers=settings.summary_llm_providers, timeout=12)
@@ -1414,7 +1414,7 @@ def compact_history(history: list[dict], prior: str | None = None, since: int = 
 
 
 def summarize(history: list[dict]) -> dict:
-    transcript = "\n".join(f"{'Agent' if t['role'] == 'assistant' else 'Customer'}: {t['text']}" for t in history)
+    transcript = "\n".join(f"{'Agent' if t['role'] in ('assistant', 'human') else 'Customer'}: {t['text']}" for t in history)
     messages = [{"role": "system", "content": SUMMARY_PROMPT.format(today=datetime.now(IST).strftime("%A %d %B %Y, %H:%M"))},
                 {"role": "user", "content": transcript}]
     providers = settings.summary_llm_providers

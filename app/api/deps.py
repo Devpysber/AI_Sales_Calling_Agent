@@ -13,7 +13,7 @@ def workspace(request: Request, agent_id: int = Path(..., ge=1)) -> int:
         raise HTTPException(404, "Agent not found.")
         
     user = getattr(request.state, "user", "")
-    if user != "admin" and user != "api":
+    if user not in ("admin", "api", "member"):  # member: a signed-in account; its role gates writes, not workspaces
         if user == "team":
             payload = getattr(request.state, "token_payload", {})
             # A member always reaches the workspaces they made: with no passcode set (the default) the
@@ -25,3 +25,15 @@ def workspace(request: Request, agent_id: int = Path(..., ge=1)) -> int:
             raise HTTPException(403, "You do not have access to this agent workspace.")
             
     return agent_id
+
+
+def require_roles(*roles: str):
+    """Dependency: the signed-in account holds one of these roles (the admin login and API token always pass)."""
+    def check(request: Request):
+        account = getattr(request.state, "account", None)
+        user = getattr(request.state, "user", "")
+        if account is None and user in ("admin", "api"):
+            return
+        if account is None or (account.role not in roles and account.role not in ("super_admin", "org_admin")):
+            raise HTTPException(403, "Your role does not allow this.")
+    return check
