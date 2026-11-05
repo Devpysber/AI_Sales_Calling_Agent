@@ -149,6 +149,66 @@ def test_run_http_tool_blocks_redirect_to_private_range():
         server.shutdown()
 
 
+def test_template_host_is_fixed_rejects_placeholder_in_host():
+    # Host/scheme must be fixed by the tool author; placeholders there would let a customer's chat
+    # message (via the model's chosen tool arguments) choose which host the server connects to.
+    assert tool_registry.template_host_is_fixed("https://api.example.com/v1/{order_id}") is True
+    assert tool_registry.template_host_is_fixed("https://api.example.com/v1?id={order_id}") is True
+    assert tool_registry.template_host_is_fixed("https://{host}/api") is False
+    assert tool_registry.template_host_is_fixed("https://{sub}.example.com/api") is False
+    assert tool_registry.template_host_is_fixed("http://evil.test{suffix}/api") is False
+
+
+def test_run_http_tool_rejects_templated_host():
+    definition = {"config": {"url": "http://{host}/path", "method": "GET", "auth_type": "none"},
+                  "timeout_seconds": 5, "secret_encrypted": None}
+    result = tool_registry.run_http_tool(definition, {"host": "example.com"}, {})
+    assert result["ok"] is False
+    assert "host" in result["error"].lower()
+
+
+def test_create_tool_api_rejects_templated_host(client):
+    agent_id = _agent(client)
+    resp = client.post(f"/api/agents/{agent_id}/tools", json={
+        "name": "bad_tool", "description": "x", "url": "https://{host}/x", "method": "GET",
+    })
+    assert resp.status_code == 400, resp.text
+
+
+def test_patch_tool_api_rejects_templated_host(client):
+    agent_id = _agent(client)
+    created = client.post(f"/api/agents/{agent_id}/tools", json={
+        "name": "ok_tool", "description": "x", "url": "https://example.com/x", "method": "GET",
+    }).json()
+    resp = client.patch(f"/api/agents/{agent_id}/tools/{created['id']}", json={"url": "https://{host}/x"})
+    assert resp.status_code == 400, resp.text
+
+
+def test_dns_resolution_is_pinned_against_rebinding():
+    """Simulates the DNS-rebinding TOCTOU: the host resolves to a public IP at check time, then to a
+    private/loopback IP a moment later. The pin must force the actual connection to use the IP that was
+    validated, not whatever a later (hostile) resolution would return.
+    """
+    import socket as socket_mod
+
+    pinned_ip = tool_registry._resolve_pinned_ip("127.0.0.1")  # loopback -> rejected, sanity check first
+    assert pinned_ip is None
+
+    # Now prove the pin itself: open the context pinning "attacker.test" to a known-safe literal, and
+    # confirm getaddrinfo for that exact name returns ONLY the pinned IP, regardless of what the real
+    # resolver would say (it would normally raise, since "attacker.test" doesn't exist).
+    with tool_registry._pinned_dns("attacker.test", "93.184.216.34"):
+        infos = socket_mod.getaddrinfo("attacker.test", 443)
+    assert infos[0][4][0] == "93.184.216.34"
+    # Outside the context, the pin must not leak into later resolution.
+    try:
+        socket_mod.getaddrinfo("attacker.test", 443)
+        raised = False
+    except socket_mod.gaierror:
+        raised = True
+    assert raised, "DNS pin must not persist after the context manager exits"
+
+
 def test_money_risk_tool_withholds_first_execution_then_runs_on_confirm(client):
     agent_id = _agent(client)
     lead = CRMService(agent_id).create({"phone": "9811100077", "name": "Payer"}, actor="system")

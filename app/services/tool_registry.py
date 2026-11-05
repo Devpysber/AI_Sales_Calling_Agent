@@ -6,10 +6,13 @@ schema isn't duplicated across two places. Custom tools (type="http") carry thei
 `parameters_json`/`description` since there is no other source for it.
 """
 
+import contextlib
 import ipaddress
 import json
 import logging
+import re
 import socket
+import threading
 import time
 from urllib.parse import urlsplit
 
@@ -157,6 +160,73 @@ def _is_private_host(host: str) -> bool:
     return False
 
 
+def _resolve_pinned_ip(host: str) -> str | None:
+    """Resolve `host` once and return a single safe IP literal to connect to, or None if the host is
+    unresolvable or any of its answers land in a private/loopback/link-local range (same "any bad answer
+    disqualifies the whole host" rule _is_private_host used). Pinning this IP and connecting to it later
+    (rather than re-resolving at connect time) closes the DNS-rebinding/TOCTOU window: an attacker who
+    controls DNS for the host cannot swap in a private/metadata IP between the check and the real request.
+    """
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return None
+    first_public: str | None = None
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if any(ip in net for net in _PRIVATE_NETS) or ip.is_loopback or ip.is_link_local or ip.is_private:
+            return None
+        if first_public is None:
+            first_public = addr
+    return first_public
+
+
+_DNS_PIN_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _pinned_dns(hostname: str, ip: str):
+    """Force every `socket.getaddrinfo(hostname, ...)` call made while this context is open to resolve to
+    the single, already-validated `ip` — so the connection httpx makes is guaranteed to reach the host we
+    actually checked, not whatever DNS answers at that later moment. Process-wide and lock-serialized
+    (simple and correct over clever: a custom httpx transport/resolver would avoid the lock but is far more
+    fragile across httpx/httpcore versions) — an outbound custom-tool call is not latency-critical enough
+    for this short, rare serialization to matter.
+    """
+    with _DNS_PIN_LOCK:
+        original = socket.getaddrinfo
+
+        def _patched(host, port=None, *args, **kwargs):
+            if host == hostname:
+                family = socket.AF_INET6 if ":" in ip else socket.AF_INET
+                return [(family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (ip, port or 0))]
+            return original(host, port, *args, **kwargs)
+
+        socket.getaddrinfo = _patched
+        try:
+            yield
+        finally:
+            socket.getaddrinfo = original
+
+
+_AUTHORITY_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://([^/]*)")
+
+
+def template_host_is_fixed(template: str) -> bool:
+    """A tool's URL template may only use {placeholder} substitution in the path/query/body — never in the
+    scheme or host. Otherwise the model (shaped by whatever the customer typed in chat) could choose which
+    host the platform's own server connects to, with only the private-IP guard as a backstop. Returns False
+    (host is NOT fixed, i.e. reject the template) if a `{` appears in the scheme+authority portion.
+    """
+    match = _AUTHORITY_RE.match(template or "")
+    authority = match.group(1) if match else (template or "")
+    return "{" not in authority
+
+
 def _substitute(template: str, arguments: dict, context: dict) -> str:
     tokens = {**{k: v for k, v in arguments.items() if isinstance(v, (str, int, float))},
               "lead_phone": context.get("lead_phone", ""), "lead_name": context.get("lead_name", "")}
@@ -171,21 +241,28 @@ def run_http_tool(definition: dict, arguments: dict, context: dict | None = None
     reserved {lead_phone}/{lead_name} template tokens; the model's own `arguments` can never override them
     (they are applied after, and only via the template substitution, never as raw argument keys).
 
-    SSRF guard: the target host (and every redirect hop) is resolved and rejected if it lands on a private/
-    loopback/link-local range. Redirects are not auto-followed (follow_redirects=False); any 3xx response
-    is treated as a failed/blocked hop rather than chased.
+    SSRF guard: the tool's scheme+host must be fixed by the tool's author (no {placeholder} there — only
+    path/query/body may be templated from arguments), the target host is resolved to a single IP and
+    validated against private/loopback/link-local ranges, and the actual connection is pinned to that same
+    validated IP rather than re-resolved at request time (closes the DNS-rebinding/TOCTOU window). Redirects
+    are not auto-followed (follow_redirects=False); any 3xx response is treated as a failed/blocked hop
+    rather than chased.
     """
     context = context or {}
     config = definition.get("config") or {}
     url_template = config.get("url", "")
     method = (config.get("method") or "GET").upper()
     timeout = definition.get("timeout_seconds") or 10
+
+    if not template_host_is_fixed(url_template):
+        return {"ok": False, "result": "", "error": "Tool URL may not template the host (misconfigured tool)."}
     url = _substitute(url_template, arguments or {}, context)
 
     parsed = urlsplit(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         return {"ok": False, "result": "", "error": "Invalid tool URL."}
-    if _is_private_host(parsed.hostname):
+    pinned_ip = _resolve_pinned_ip(parsed.hostname)
+    if pinned_ip is None:
         return {"ok": False, "result": "", "error": "Target host is not allowed (private/loopback range)."}
 
     headers = {}
@@ -203,8 +280,9 @@ def run_http_tool(definition: dict, arguments: dict, context: dict | None = None
         kwargs["json"] = arguments or {}
 
     try:
-        with httpx.Client(follow_redirects=False) as client:
-            resp = client.request(method, url, **kwargs)
+        with _pinned_dns(parsed.hostname, pinned_ip):
+            with httpx.Client(follow_redirects=False) as client:
+                resp = client.request(method, url, **kwargs)
     except httpx.TimeoutException:
         return {"ok": False, "result": "", "error": "Tool request timed out."}
     except httpx.HTTPError as e:

@@ -10,6 +10,7 @@ from app.api.deps import workspace
 from app.core.database import get_db
 from app.models.channel import ToolDefinition
 from app.services import tool_registry
+from app.services.tool_registry import template_host_is_fixed
 
 router = APIRouter(prefix="/api/agents/{agent_id}/tools", tags=["tools"])
 
@@ -52,6 +53,9 @@ def list_tools(agent_id: int = Depends(workspace)):
 
 @router.post("")
 def create_tool(body: ToolIn, agent_id: int = Depends(workspace)):
+    if not template_host_is_fixed(body.url):
+        raise HTTPException(400, "The tool URL's host/scheme may not contain a {placeholder} — only the "
+                                  "path, query, or body may be templated from the tool's arguments.")
     config = {"url": body.url, "method": body.method.upper(), "auth_type": body.auth_type,
               "auth_header": body.auth_header}
     with get_db() as db:
@@ -93,6 +97,10 @@ def patch_tool(tool_id: int, body: ToolPatch, agent_id: int = Depends(workspace)
         if row.type == "http":
             config = json.loads(row.config_json) if row.config_json else {}
             if body.url is not None:
+                if not template_host_is_fixed(body.url):
+                    raise HTTPException(400, "The tool URL's host/scheme may not contain a {placeholder} "
+                                              "— only the path, query, or body may be templated from the "
+                                              "tool's arguments.")
                 config["url"] = body.url
             if body.method is not None:
                 config["method"] = body.method.upper()
