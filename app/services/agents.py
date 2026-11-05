@@ -116,6 +116,7 @@ PROFILE_DEFAULTS = {
     "record_calls": False,
     "detect_voicemail": False,
     "agent_password": "",
+    "industry_pack": "",               # key of the last-applied industry pack (industry_packs.py), if any
 }
 
 DEFAULTS = {"profile": PROFILE_DEFAULTS, "automation": AUTOMATION_DEFAULTS}

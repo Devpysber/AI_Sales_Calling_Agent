@@ -9,10 +9,11 @@ from pydantic import BaseModel, Field
 from app.api.deps import workspace
 from app.core.database import get_db
 from app.models.channel import ToolDefinition
-from app.services import tool_registry
+from app.services import industry_packs, tool_registry
 from app.services.tool_registry import template_host_is_fixed
 
 router = APIRouter(prefix="/api/agents/{agent_id}/tools", tags=["tools"])
+packs_router = APIRouter(prefix="/api/agents/{agent_id}/industry-packs", tags=["tools"])
 
 
 class ToolIn(BaseModel):
@@ -143,3 +144,16 @@ def test_tool(tool_id: int, body: ToolTest, agent_id: int = Depends(workspace)):
         raise HTTPException(400, "Only custom HTTP tools can be test-run.")
     context = {"lead_phone": "+10000000000", "lead_name": "Test Lead"}
     return tool_registry.run_http_tool(definition, body.arguments, context)
+
+
+@packs_router.get("")
+def list_industry_packs(agent_id: int = Depends(workspace)):
+    return industry_packs.list_packs()
+
+
+@packs_router.post("/{key}/apply")
+def apply_industry_pack(key: str, agent_id: int = Depends(workspace)):
+    try:
+        return industry_packs.apply_industry_pack(agent_id, key)
+    except industry_packs.IndustryPackNotFound:
+        raise HTTPException(404, "Unknown industry pack.")

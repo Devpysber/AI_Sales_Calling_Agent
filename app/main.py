@@ -167,6 +167,7 @@ async def request_context(request: Request, call_next):
 
 for module in (auth, accounts, agents, leads, calls, knowledge, system, plivo, intake, crm, whatsapp, instagram, tools):
     app.include_router(module.router)
+app.include_router(tools.packs_router)
 app.include_router(accounts.public)
 app.include_router(intake.public)
 app.include_router(crm.public)
