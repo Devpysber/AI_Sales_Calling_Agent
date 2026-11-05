@@ -43,6 +43,8 @@ def audience(agent_id: int, segment: dict | None, channel: str) -> list[Lead]:
         leads = list(db.scalars(_audience_query(agent_id, segment or {}).limit(MAX_AUDIENCE)))
     if channel == "email":
         return [l for l in leads if l.email]
+    if channel == "whatsapp":
+        return [l for l in leads if l.phone]
     return [l for l in leads if not (channel == "call" and l.do_not_call)]
 
 
