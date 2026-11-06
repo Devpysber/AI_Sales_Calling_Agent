@@ -669,6 +669,27 @@ def _record_turn(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> tup
     return {"conv_id": conv_id, "lead": lead, "lead_id": lead_id, "phone": phone, "say": say, "msg": msg}, True
 
 
+_SEND_RETRY_ATTEMPTS = 3
+_SEND_RETRY_BACKOFF_SECONDS = [1, 3]  # delays between attempts 1->2 and 2->3
+
+
+def _send_with_retry(phone: str, reply: str, agent_id: int, lead_id: int,
+                      phone_number_id: str | None, conv_id: int | None) -> dict:
+    """Bounded retry with backoff for the outbound send only, scoped to transient failures.
+    OutsideWindowError is a permanent policy block and is re-raised immediately (no retry).
+    Note: this blocks the calling worker thread for up to ~4s worst case (1s + 3s backoff) --
+    an accepted tradeoff since the contact's lock is already held during the send today anyway."""
+    last_error = None
+    for attempt in range(_SEND_RETRY_ATTEMPTS):
+        out = _send(phone, reply, agent_id, lead_id, phone_number_id, conv_id=conv_id)
+        if out.get("ok"):
+            return out
+        last_error = out.get("error")
+        if attempt < _SEND_RETRY_ATTEMPTS - 1:
+            time.sleep(_SEND_RETRY_BACKOFF_SECONDS[attempt])
+    return {"ok": False, "error": last_error}
+
+
 def _reply_turn(agent_id: int, ctx: dict, say: str, drop_last: int = 1) -> None:
     """Generate (and send) one reply -- for a single message or a burst-merged batch alike."""
     from app.services import chat_agent
@@ -688,12 +709,13 @@ def _reply_turn(agent_id: int, ctx: dict, say: str, drop_last: int = 1) -> None:
         if not reply:
             return
     try:
-        out = _send(phone, reply, agent_id, lead_id, msg.get("phone_number_id"), conv_id=conv_id)
+        out = _send_with_retry(phone, reply, agent_id, lead_id, msg.get("phone_number_id"), conv_id)
     except OutsideWindowError as e:
         log.warning("WhatsApp reply to %s not sent: %s", phone, e)
         return
     if not out.get("ok"):
         log.warning("WhatsApp reply to %s not sent: %s", phone, out.get("error"))
+        return
     _add_message(conv_id, agent_id, "out", "ai", reply)
     if end_call:
         close_chat(conv_id)
