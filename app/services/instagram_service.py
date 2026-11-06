@@ -247,9 +247,10 @@ async def send_instagram_message(to: str, text: str, agent_id: int | None = None
 
 
 async def send_instagram_quick_replies(to: str, agent_id: int | None, lead_id: int | None, text: str,
-                                       options: list[str]) -> dict:
-    """Up to 3 tappable quick-reply buttons (Meta Instagram Messaging's quick_replies array), mirroring
-    whatsapp_service.send_whatsapp_buttons."""
+                                       options: list[str], max_options: int = 3) -> dict:
+    """Up to `max_options` tappable quick-reply buttons (Meta Instagram Messaging's quick_replies array),
+    mirroring whatsapp_service.send_whatsapp_buttons. Meta caps quick_replies at 13 per message, so
+    max_options is clamped to that ceiling regardless of what the caller passes."""
     token = settings.instagram_token
     page_id = settings.instagram_page_id
     if not (token and page_id):
@@ -257,8 +258,9 @@ async def send_instagram_quick_replies(to: str, agent_id: int | None, lead_id: i
                       text[:120], agent_id=agent_id, lead_id=lead_id, actor="system")
         return {"ok": False, "error": "Instagram credentials not configured"}
     url = f"https://graph.facebook.com/v19.0/{page_id}/messages"
+    cap = min(max_options, 13)
     quick_replies = [{"content_type": "text", "title": str(o)[:20], "payload": f"opt_{i}"}
-                     for i, o in enumerate(options[:3])]
+                     for i, o in enumerate(options[:cap])]
     payload = {"recipient": {"id": to}, "message": {"text": text[:1000], "quick_replies": quick_replies}}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:

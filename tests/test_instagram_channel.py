@@ -270,6 +270,32 @@ def test_send_instagram_quick_replies_posts_quick_replies_payload(monkeypatch):
     assert qrs[0] == {"content_type": "text", "title": "A", "payload": "opt_0"}
 
 
+def test_send_instagram_quick_replies_max_options_clamped_to_13(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    class Res:
+        status_code = 200
+        text = ""
+        def json(self): return {}
+
+    class Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, **k):
+            captured["json"] = k.get("json")
+            return Res()
+
+    captured = {}
+    monkeypatch.setattr(ig, "settings", SimpleNamespace(instagram_token="t", instagram_page_id="PAGE-1"))
+    monkeypatch.setattr(ig.httpx, "AsyncClient", Client)
+    opts = [f"opt{i}" for i in range(20)]
+    out = asyncio.run(ig.send_instagram_quick_replies("17800000001", None, None, "Pick", opts, max_options=99))
+    assert out["ok"] is True
+    assert len(captured["json"]["message"]["quick_replies"]) == 13
+
+
 def test_quick_replies_tool_routes_to_instagram(agent_id, monkeypatch):
     from app.services import agent_tools
     from app.services.crm_service import CRMService
@@ -293,3 +319,34 @@ def test_quick_replies_tool_routes_to_instagram(agent_id, monkeypatch):
     out = agent_tools.send_quick_replies_tool(agent_id, lead["id"], conv_id, "Choose:", ["A", "B"])
     assert out == "Sent."
     assert calls == [("ig-qr", "Choose:", ["A", "B"])]
+
+
+def test_options_list_tool_routes_to_instagram(agent_id, monkeypatch):
+    from app.services import agent_tools
+    from app.services.crm_service import CRMService
+
+    crm = CRMService(agent_id)
+    lead = crm.create({"phone": None, "name": "IG list"}, actor="system", allow_no_phone=True)
+    with get_db() as db:
+        db.add(ContactIdentity(agent_id=agent_id, lead_id=lead["id"], channel="instagram", external_id="ig-list"))
+        conv = Conversation(agent_id=agent_id, lead_id=lead["id"], channel="instagram", status="open")
+        db.add(conv)
+        db.flush()
+        conv_id = conv.id
+
+    calls = []
+
+    async def fake_send(to, agent_id, lead_id, text, options, max_options=3):
+        calls.append((to, text, options, max_options))
+        return {"ok": True}
+
+    monkeypatch.setattr(ig, "send_instagram_quick_replies", fake_send)
+    opts = [f"opt{i}" for i in range(12)]
+    out = agent_tools.send_options_list_tool(agent_id, lead["id"], conv_id, "Choose:", opts, button_label="Pick")
+    assert out == "Sent."
+    assert len(calls) == 1
+    to, text, sent_opts, max_options = calls[0]
+    assert to == "ig-list"
+    assert text == "Choose:"
+    assert len(sent_opts) == 10  # capped at 10 before reaching send_instagram_quick_replies
+    assert max_options == 10

@@ -573,19 +573,30 @@ def send_quick_replies_tool(agent_id: int, lead_id, conversation_id, body: str, 
 
 
 def send_options_list_tool(agent_id: int, lead_id, conversation_id, body: str, options: list[str], button_label: str = "Choose") -> str:
-    """WhatsApp-only: an interactive list (more than 3 options). Instagram has no equivalent message type here."""
-    if _conversation_channel(conversation_id) != "whatsapp":
+    """An interactive list of up to 10 options, on WhatsApp (native list type) or Instagram (same
+    quick_replies array as send_quick_replies_tool, just with more entries). Other channels get the
+    options said as plain text instead."""
+    channel = _conversation_channel(conversation_id)
+    if channel not in ("whatsapp", "instagram"):
         return "An options list is only available on WhatsApp today; say the options as plain text instead."
     if not lead_id:
         return "Failed: no lead on file yet."
     opts = [str(o).strip() for o in (options or []) if str(o).strip()][:10]
     if not opts:
         return "Failed: give at least one option."
-    phone = (CRMService(agent_id).get(int(lead_id)) or {}).get("phone")
-    if not phone:
-        return "Failed: no phone number on file for this lead."
-    from app.services.whatsapp_service import send_whatsapp_list
-    outcome = send_whatsapp_list(phone, agent_id, lead_id, body or "Please choose:", button_label, opts)
+    if channel == "whatsapp":
+        phone = (CRMService(agent_id).get(int(lead_id)) or {}).get("phone")
+        if not phone:
+            return "Failed: no phone number on file for this lead."
+        from app.services.whatsapp_service import send_whatsapp_list
+        outcome = send_whatsapp_list(phone, agent_id, lead_id, body or "Please choose:", button_label, opts)
+        return "Sent." if outcome.get("ok") else f"Failed to send the list: {outcome.get('error')}"
+    from app.services.instagram_service import send_instagram_quick_replies, _lead_ig_id
+    ig_id = _lead_ig_id(agent_id, int(lead_id))
+    if not ig_id:
+        return "Failed: no Instagram contact on file for this lead."
+    import asyncio
+    outcome = asyncio.run(send_instagram_quick_replies(ig_id, agent_id, lead_id, body or "Please choose:", opts, max_options=10))
     return "Sent." if outcome.get("ok") else f"Failed to send the list: {outcome.get('error')}"
 
 
