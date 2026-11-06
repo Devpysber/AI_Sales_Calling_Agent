@@ -25,7 +25,7 @@ class ToolIn(BaseModel):
     auth_type: str = "none"  # none | bearer | api_key
     auth_header: str = "X-API-Key"
     secret: str | None = None
-    timeout_seconds: int = 10
+    timeout_seconds: int = Field(10, ge=1, le=30)
     risk: str = "read"  # read | write | money
     channels: list[str] | None = None
 
@@ -38,7 +38,7 @@ class ToolPatch(BaseModel):
     auth_type: str | None = None
     auth_header: str | None = None
     secret: str | None = None
-    timeout_seconds: int | None = None
+    timeout_seconds: int | None = Field(None, ge=1, le=30)
     risk: str | None = None
     channels: list[str] | None = None
     enabled: bool | None = None
