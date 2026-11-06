@@ -141,6 +141,21 @@ class Settings(BaseSettings):
     plivo_phone_number: str = Field("", alias="PLIVO_PHONE_NUMBER")
     plivo_validate_signature: bool = Field(True, alias="PLIVO_VALIDATE_SIGNATURE")
 
+    # ---------------- WhatsApp (Meta Cloud API) ----------------
+    whatsapp_token: str = Field("", alias="WHATSAPP_TOKEN")
+    whatsapp_phone_number_id: str = Field("", alias="WHATSAPP_PHONE_NUMBER_ID")
+    whatsapp_verify_token: str = Field("", alias="WHATSAPP_VERIFY_TOKEN")
+    whatsapp_app_secret: str = Field("", alias="WHATSAPP_APP_SECRET")
+    whatsapp_agent_id: int = Field(0, alias="WHATSAPP_AGENT_ID")  # fallback agent for inbound chats
+    whatsapp_idle_minutes: int = Field(30, alias="WHATSAPP_IDLE_MINUTES")
+
+    instagram_token: str = Field("", alias="INSTAGRAM_TOKEN")  # Page access token for the IG professional account
+    instagram_page_id: str = Field("", alias="INSTAGRAM_PAGE_ID")  # connected Facebook Page id (IG Messaging goes via the Page)
+    instagram_verify_token: str = Field("", alias="INSTAGRAM_VERIFY_TOKEN")
+    instagram_app_secret: str = Field("", alias="INSTAGRAM_APP_SECRET")
+    instagram_agent_id: int = Field(0, alias="INSTAGRAM_AGENT_ID")  # fallback agent for inbound chats
+    instagram_idle_minutes: int = Field(30, alias="INSTAGRAM_IDLE_MINUTES")
+
     # ---------------- Email ----------------
     # Email: Resend (preferred) or SMTP
     resend_api_key: str = Field("", alias="RESEND_API_KEY")

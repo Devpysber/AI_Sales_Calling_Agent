@@ -10,6 +10,7 @@ from sqlalchemy import Integer, func, select
 
 from app.core.database import get_db
 from app.models.call import Call
+from app.models.channel import Conversation, Message, ToolRun
 from app.models.lead import Lead
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -117,6 +118,103 @@ def usage(rows) -> dict:
         "llm_billing": "tokens" if by_tokens else "requests",
         "token_calls": token_calls,
         "budget": {"tts_chars": settings.tts_chars_per_call, "target_minutes": settings.call_target_minutes},
+    }
+
+
+def channel_report(agent_id: int, days: int = 14) -> dict:
+    """Per-channel (voice/whatsapp/instagram/...) volume, first-response time, resolution rate and tool usage.
+
+    Volume/resolution/tool aggregates are grouped SQL (func.count/func.sum), same style as report(); only the
+    first-response time needs a second pass in Python per conversation (min "customer" message time vs the
+    first "ai"/"human" reply after it) since that comparison isn't cheaply expressible as a single aggregate -
+    it still pulls just (conversation_id, sender_type, created_at) for the window, not full message bodies.
+    """
+    today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (today - timedelta(days=days - 1) - OFFSET).replace(tzinfo=None)
+
+    with get_db() as db:
+        call_rows = db.execute(
+            select(Call.status, Call.duration).where(Call.agent_id == agent_id, Call.created_at >= start)
+        ).all()
+        conv_rows = db.execute(
+            select(Conversation.channel, Conversation.status, func.count())
+            .where(Conversation.agent_id == agent_id, Conversation.created_at >= start)
+            .group_by(Conversation.channel, Conversation.status)
+        ).all()
+        tool_rows = db.execute(
+            select(ToolRun.tool_name, ToolRun.status, func.count())
+            .where(ToolRun.agent_id == agent_id, ToolRun.created_at >= start)
+            .group_by(ToolRun.tool_name, ToolRun.status)
+        ).all()
+        msg_rows = db.execute(
+            select(Message.conversation_id, Message.sender_type, Message.created_at)
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .where(Conversation.agent_id == agent_id, Message.created_at >= start)
+            .order_by(Message.conversation_id, Message.created_at)
+        ).all()
+        conv_channel_rows = db.execute(
+            select(Conversation.id, Conversation.channel).where(Conversation.agent_id == agent_id, Conversation.created_at >= start)
+        ).all()
+
+    channels: dict[str, dict] = {}
+
+    def bucket(name: str) -> dict:
+        return channels.setdefault(name, {"channel": name, "conversations": 0, "open": 0, "closed": 0,
+                                           "resolution_rate": None, "avg_first_response_seconds": None})
+
+    voice = bucket("voice")
+    voice["conversations"] = len(call_rows)
+    voice["closed"] = sum(1 for r in call_rows if r.status in (ANSWERED,) + UNREACHED)
+    voice["open"] = voice["conversations"] - voice["closed"]
+    voice["resolution_rate"] = round(100 * voice["closed"] / voice["conversations"], 1) if voice["conversations"] else None
+
+    for channel, status, count in conv_rows:
+        b = bucket(channel)
+        b["conversations"] += count
+        if status == "closed":
+            b["closed"] += count
+        else:
+            b["open"] += count
+    for b in channels.values():
+        if b is voice:
+            continue
+        b["resolution_rate"] = round(100 * b["closed"] / b["conversations"], 1) if b["conversations"] else None
+
+    # First response time per conversation: first "customer" message vs the first ai/human reply after it.
+    by_conv: dict[int, list] = defaultdict(list)
+    for conv_id, sender_type, created_at in msg_rows:
+        by_conv[conv_id].append((sender_type, created_at))
+    conv_channel = dict(conv_channel_rows)
+    frt_by_channel: dict[str, list] = defaultdict(list)
+    for conv_id, msgs in by_conv.items():
+        first_customer = next((t for st, t in msgs if st == "customer"), None)
+        if not first_customer:
+            continue
+        first_reply = next((t for st, t in msgs if st in ("ai", "human") and t > first_customer), None)
+        if not first_reply:
+            continue
+        ch = conv_channel.get(conv_id)
+        if ch:
+            frt_by_channel[ch].append((first_reply - first_customer).total_seconds())
+
+    for ch, secs in frt_by_channel.items():
+        bucket(ch)["avg_first_response_seconds"] = round(sum(secs) / len(secs)) if secs else None
+
+    tools: dict[str, dict] = {}
+    for tool_name, status, count in tool_rows:
+        t = tools.setdefault(tool_name, {"tool_name": tool_name, "calls": 0, "ok": 0, "error": 0, "success_rate": None})
+        t["calls"] += count
+        if status == "ok":
+            t["ok"] += count
+        else:
+            t["error"] += count
+    for t in tools.values():
+        t["success_rate"] = round(100 * t["ok"] / t["calls"], 1) if t["calls"] else None
+
+    return {
+        "days": days,
+        "channels": sorted(channels.values(), key=lambda c: -c["conversations"]),
+        "tools": sorted(tools.values(), key=lambda t: -t["calls"]),
     }
 
 

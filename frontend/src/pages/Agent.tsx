@@ -255,6 +255,23 @@ function ProfileEditor({ section, draft, setDraft, data }: {
     onError: (e) => toast.error('Could not draft the playbook', { description: e.message }),
   })
 
+  // Industry packs: a one-click preset that enables the subset of existing builtin tools relevant to a
+  // vertical and appends a short playbook snippet. It does not add any new capability.
+  const packs = useQuery({
+    queryKey: [base, 'industry-packs'],
+    queryFn: () => api<{ key: string; label: string; description: string; enabled_tools: string[]; playbook_snippet: string }[]>(`${base}/industry-packs`),
+    enabled: section === 'playbook',
+  })
+  const applyPack = useMutation({
+    mutationFn: (key: string) => api<{ pack: string; enabled_tools: string[]; playbook_snippet: string }>(`${base}/industry-packs/${key}/apply`, { method: 'POST' }),
+    onSuccess: (result) => {
+      setDraft((d) => (d ? { ...d, instructions: `${d.instructions ? d.instructions + '\n\n' : ''}${result.playbook_snippet}` } : d))
+      toast.success('Industry pack applied', {
+        description: `Enabled ${result.enabled_tools.length} tool${result.enabled_tools.length === 1 ? '' : 's'} on the Tools tab and added playbook text below — read it through, then Save.`,
+      })
+    },
+    onError: (e) => toast.error('Could not apply the industry pack', { description: e.message }),
+  })
 
   // What this agent calls the person on the line: patient, guest, student, customer…
   const caller = (draft.customer_noun || 'customer').trim()
@@ -324,6 +341,36 @@ function ProfileEditor({ section, draft, setDraft, data }: {
             {suggest.isPending ? 'Reading your documents…' : 'Draft from knowledge base'}
           </Button>
         </Card>
+        {!!packs.data?.length && (
+          <Card className="p-4">
+            <div className="text-sm font-medium">Industry pack</div>
+            <p className="mt-1 text-sm text-muted">
+              A one-click preset for this business type: it turns on the tools that vertical needs on the Tools
+              tab (turning off the rest) and adds a short playbook steer below. It does not add any new
+              capability beyond what the agent already has.
+            </p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+              {packs.data.map((p) => (
+                <div key={p.key} className="rounded-lg border border-border p-3 text-sm">
+                  <div className="font-medium">{p.label}</div>
+                  <p className="mt-1 text-xs text-muted">{p.description}</p>
+                  <Button
+                    className="mt-2 w-full" variant="secondary" disabled={applyPack.isPending}
+                    onClick={() => {
+                      if (window.confirm(
+                        `Apply the ${p.label} pack? This enables ${p.enabled_tools.length} tools on the Tools tab `
+                        + `(disabling the other builtin tools) and adds playbook text below. You can still `
+                        + `re-enable/disable tools and edit the text afterward.`
+                      )) applyPack.mutate(p.key)
+                    }}
+                  >
+                    Apply
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
         <Section title="Goal" description="What a successful call achieves. The agent steers every conversation toward this.">
           <div className="grid gap-4">
             <Field label="Call objective"><Counted rows={2} max={600} value={draft.objective} onChange={(e) => set('objective', e.target.value)} placeholder="Qualify the prospect's need for software development and book a discovery meeting." /></Field>

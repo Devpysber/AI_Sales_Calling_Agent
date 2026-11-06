@@ -1,7 +1,7 @@
 # Single-server production for a Hostinger KVM 2 (2 vCPU · 8 GB RAM · Ubuntu)
 #
 #   Caddy (HTTPS, automatic Let's Encrypt)  →  nginx (dashboard + rate limits)  →  api
-#   worker (scheduler) · postgres · redis · migrate (one-off per deploy)
+#   worker (scheduler + WhatsApp inbound queue consumer) · postgres · redis · migrate (one-off per deploy)
 #
 # First time:   sudo bash deploy/vps-setup.sh
 # Update:       bash deploy/update.sh

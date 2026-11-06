@@ -41,6 +41,9 @@ def record(type: str, title: str, detail: str | None = None, *, agent_id: int | 
                          actor=actor, data=json.dumps(data, ensure_ascii=False, default=str) if data else None))
     except Exception:
         log.exception("Failed to record event %s", type)
+        return
+    from app.services import rules
+    rules.dispatch(type, agent_id, lead_id, data)
 
 
 def list_events(agent_id: int | None, lead_id: int | None = None, call_id: int | None = None,

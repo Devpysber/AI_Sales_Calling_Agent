@@ -69,6 +69,10 @@ const SettingsPage = lazy(page(() => import('@/pages/Settings')))
 const ProfilePage = lazy(page(() => import('@/pages/Profile')))
 const Inbound = lazy(page(() => import('@/pages/Inbound')))
 const Emails = lazy(page(() => import('@/pages/Emails')))
+const WhatsApp = lazy(page(() => import('@/pages/WhatsApp')))
+const InstagramPage = lazy(page(() => import('@/pages/Instagram')))
+const Channels = lazy(page(() => import('@/pages/Channels')))
+const ToolsPage = lazy(page(() => import('@/pages/Tools')))
 
 const Loading = () => <div className="grid h-64 place-items-center"><Spinner className="size-6" /></div>
 
@@ -129,6 +133,10 @@ export default function App() {
           <Route path="calls" element={<Calls />} />
           <Route path="inbound" element={<Inbound />} />
           <Route path="emails" element={<Emails />} />
+          <Route path="whatsapp" element={<WhatsApp />} />
+          <Route path="instagram" element={<InstagramPage />} />
+          <Route path="channels" element={<Channels />} />
+          <Route path="tools" element={<ToolsPage />} />
           <Route path="activity" element={<ActivityPage />} />
           <Route path="agent" element={<Agent />} />
           <Route path="knowledge" element={<Knowledge />} />

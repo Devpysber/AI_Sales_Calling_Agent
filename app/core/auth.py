@@ -24,7 +24,11 @@ from app.core.logging import get_logger
 log = get_logger(__name__)
 COOKIE = "va_session"
 TTL = 12 * 3600
-PUBLIC_API = ("/api/plivo/", "/api/media/", "/api/health", "/api/auth/login", "/api/public/")
+PUBLIC_API = ("/api/plivo/", "/api/media/", "/api/health", "/api/auth/login", "/api/public/", "/api/whatsapp/", "/api/instagram/", "/api/auth/signup",
+              "/api/auth/verify", "/api/auth/resend", "/api/auth/forgot", "/api/auth/reset", "/api/auth/invitation",
+              "/api/auth/accept-invite")
+# Signed-in accounts whose role may only read: every write outside their own account is refused.
+READ_ONLY_ROLES = ("viewer",)
 
 if not settings.secret_key:
     log.warning("SECRET_KEY not set: sessions reset on restart and differ between replicas")
@@ -101,6 +105,15 @@ def current_user(request: Request) -> str | None:
             from app.services import team_service
             if not team_service.by_id(payload.get("team_id")):
                 return None
+        if payload.get("u") == "user":
+            # A role change or a disabled account takes effect on the next request, not at cookie expiry.
+            from app.services import accounts
+            user = accounts.get(payload.get("uid"))
+            if not user or user.status != "active":
+                return None
+            request.state.token_payload = payload
+            request.state.account = user
+            return "admin" if accounts.is_admin(user) else "member"
         request.state.token_payload = payload
         return payload["u"]
     return None
@@ -117,6 +130,10 @@ async def auth_middleware(request: Request, call_next):
         if not user:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
         request.state.user = user
+        account = getattr(request.state, "account", None)
+        if (account and account.role in READ_ONLY_ROLES and request.method not in ("GET", "HEAD")
+                and not path.startswith(("/api/auth/", "/api/accounts/me")) and not path.endswith(("/assistant/chat", "/campaigns/preview"))):
+            return JSONResponse({"detail": "Your role (Viewer) can view but not change data."}, status_code=403)
     return await call_next(request)
 
 
@@ -124,6 +141,12 @@ class Login(BaseModel):
     username: str = ""
     email: str = ""
     password: str
+    otp: str = ""
+
+
+def _set_session(request: Request, response: Response, payload: dict):
+    https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+    response.set_cookie(COOKIE, make_token(payload), max_age=TTL, httponly=True, samesite="lax", secure=https, path="/")
 
 def login_email() -> str:
     return (_profile().get("email") or settings.admin_email or "").strip().lower()
@@ -133,6 +156,17 @@ def login(body: Login, request: Request, response: Response):
     ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0].strip()
     if store.rate_limited(f"login:{ip}", limit=10, window=900):
         raise HTTPException(429, "Too many attempts. Try again in 15 minutes.")
+    identifier = (body.email or body.username).strip().lower()
+    from app.services import accounts
+    if identifier and accounts.by_email(identifier):
+        try:
+            user = accounts.authenticate(identifier, body.password, body.otp)
+        except accounts.AccountError as e:
+            raise HTTPException(401, str(e))
+        _set_session(request, response, {"u": "user", "uid": user.id, "role": user.role, "exp": int(time.time()) + TTL})
+        from app.services import events
+        events.record("user.login", f"{user.name or user.email} signed in", actor=user.email)
+        return {"user": "admin" if accounts.is_admin(user) else "member"}
     if not auth_enabled():
         raise HTTPException(400, "Login is disabled: set ADMIN_PASSWORD on the server.")
     identifier = (body.email or body.username).strip().lower()
@@ -184,6 +218,12 @@ def logout(response: Response):
 @router.get("/me")
 def me(request: Request):
     user = current_user(request)
+    account = getattr(request.state, "account", None)
+    if account:
+        from app.services import accounts
+        return {"user": user, "auth_enabled": True, "account_id": account.id, "display_name": account.name or account.email,
+                "email": account.email, "role": accounts.ROLE_LABELS.get(account.role, account.role), "role_key": account.role,
+                "mfa_enabled": account.mfa_enabled, "can_create_agent": user == "admin"}
     # If this is a team member session, look up their own record — not the admin profile
     if user == "team":
         payload = getattr(request.state, "token_payload", {})

@@ -367,6 +367,345 @@ def schedule_callback_tool(lead_id, date_time: str, agent_id: int, lead: str | N
     except Exception as e:
         return f"Failed to schedule callback: {str(e)}"
 
+def search_knowledge_tool(question: str, agent_id: int) -> str:
+    """Search this business's own knowledge base for an answer to the customer's question."""
+    from app.services import rag
+    try:
+        hits = rag.search(agent_id, question or "", top_k=3)
+    except Exception as e:
+        return f"Failed to search knowledge: {e}"
+    if not hits:
+        return "No matching knowledge found."
+    return "\n".join(f"- {h.get('title', '')}: {str(h.get('text', ''))[:300]}" for h in hits)
+
+
+def get_my_details_tool(lead_id, agent_id: int) -> str:
+    """Read-only: the customer's own saved name, phone, city and requirements. Never the full CRM record."""
+    if not lead_id:
+        return "No details on file yet."
+    crm = CRMService(agent_id)
+    try:
+        lead = crm.get(int(lead_id))
+    except (TypeError, ValueError):
+        lead = None
+    if not lead:
+        return "No details on file yet."
+    fields = {k: lead.get(k) for k in ("name", "phone", "city", "requirement", "requirements") if lead.get(k)}
+    return json.dumps(fields, ensure_ascii=False) if fields else "No details on file yet."
+
+
+def handoff_to_human_tool(lead_id, agent_id: int, conversation_id, reason: str = "") -> str:
+    """Pause the AI on this chat and hand it to a human teammate."""
+    if not conversation_id:
+        return "Failed: no active conversation to hand off."
+    from app.core.database import get_db
+    from app.models.channel import Conversation
+    try:
+        with get_db() as db:
+            conv = db.get(Conversation, int(conversation_id))
+            if conv is None:
+                return "Failed: conversation not found."
+            conv.ai_paused = True
+    except Exception as e:
+        return f"Failed to hand off: {e}"
+    from app.services import events
+    events.record("chat.handoff", f"Chat handed off to a human ({reason or 'customer request'})", reason or "",
+                  agent_id=agent_id, lead_id=lead_id, actor="ai")
+    return "A team member will take it from here."
+
+
+def create_support_ticket_tool(lead_id, agent_id: int, title: str, description: str = "") -> str:
+    """Log a support/complaint ticket (a CRM Task) for the team to action."""
+    from app.core.database import get_db
+    from app.models.crm import Task
+    try:
+        with get_db() as db:
+            task = Task(agent_id=agent_id, title=(title or "Support ticket")[:255], description=description or "",
+                        kind="todo", priority="medium", status="open", lead_id=lead_id, created_by="ai")
+            db.add(task)
+            db.flush()
+            tid = task.id
+    except Exception as e:
+        return f"Failed to create ticket: {e}"
+    return f"Support ticket #{tid} created."
+
+
+def _conversation_channel(conversation_id) -> str:
+    """"whatsapp" / "instagram" / "" for a chat Conversation id, used to gate channel-only tools
+    (rich WhatsApp replies have no Instagram equivalent today)."""
+    if not conversation_id:
+        return ""
+    from app.models.channel import Conversation
+    try:
+        with get_db() as db:
+            conv = db.get(Conversation, int(conversation_id))
+            return (conv.channel if conv else "") or ""
+    except Exception:
+        return ""
+
+
+def reschedule_meeting_tool(agent_id: int, lead_id, date_time: str) -> str:
+    """Move an already-booked meeting to a new time: same CRM-field mechanism as set_meeting_tool.
+    No external calendar is connected, so there is nothing else to move."""
+    if not lead_id:
+        return "Failed: no meeting on file yet."
+    from app.services.call_service import _valid_meeting
+    when = _valid_meeting(_to_ist_text(date_time))
+    if not when:
+        return f"Invalid meeting time '{date_time}': give a day and time in IST, not in the past."
+    CRMService(agent_id).update(int(lead_id), {"meeting_at": when, "status": "Meeting Booked"}, actor="customer",
+                                event_type="meeting.booked", title=f"Meeting rescheduled to {when}")
+    return f"Meeting moved to {when} IST."
+
+
+def cancel_meeting_tool(agent_id: int, lead_id, reason: str = "") -> str:
+    """Cancel a booked meeting. No external calendar is connected (book_calendar_event_tool never sent a
+    real invite either), so this is the CRM-side equivalent: clear the meeting field and move the lead
+    back to Follow Up."""
+    if not lead_id:
+        return "Failed: no meeting on file yet."
+    CRMService(agent_id).update(int(lead_id), {"meeting_at": "", "status": "Follow Up"}, actor="customer",
+                                title=f"Meeting cancelled{': ' + reason if reason else ''}")
+    return "Your meeting has been cancelled."
+
+
+def update_lead_requirement_tool(agent_id: int, lead_id, requirement: str | None = None, budget: str | None = None,
+                                  timeline: str | None = None, city: str | None = None) -> str:
+    """Customer-safe subset of update_lead_details_tool: requirement/budget/timeline/city only — never
+    status, qualification or score, which stay staff-only."""
+    if not lead_id:
+        return "Failed: no lead on file yet."
+    parts = [str(requirement).strip()] if requirement else []
+    if budget:
+        parts.append(f"Budget: {str(budget).strip()}")
+    if timeline:
+        parts.append(f"Timeline: {str(timeline).strip()}")
+    data = {}
+    if parts:
+        data["requirements"] = " | ".join(parts)[:500]
+    if city:
+        data["city"] = str(city).strip()[:80]
+    if not data:
+        return "Failed: say what to update - requirement, budget, timeline or city."
+    try:
+        CRMService(agent_id).update(int(lead_id), data, actor="customer", title="Requirement updated by customer")
+    except Exception as e:
+        return f"Failed to update: {e}"
+    return "Updated, thanks."
+
+
+def check_my_order_or_deal_status_tool(agent_id: int, lead_id) -> str:
+    """Read-only: the customer's own Deal(s) in the CRM pipeline - the closest thing this codebase has
+    today to an order/booking status."""
+    if not lead_id:
+        return "No order or deal on file yet."
+    from app.services import crm_records
+    try:
+        deals = crm_records.related(agent_id, int(lead_id)).get("deals") or []
+    except Exception as e:
+        return f"Failed to check status: {e}"
+    if not deals:
+        return "No order or deal on file for you yet."
+    return "\n".join(f"- {d.get('title')}: stage {d.get('stage')}"
+                     + (f", value {d.get('value')}" if d.get("value") else "")
+                     + (f", expected close {d.get('expected_close')}" if d.get("expected_close") else "")
+                     for d in deals)
+
+
+def send_brochure_tool(agent_id: int, lead_id, conversation_id, link: str, filename: str | None = None) -> str:
+    """Send a document (brochure/price list) over the channel's real send path. WhatsApp and Instagram
+    send it as an actual file message (reusing the same Meta Graph API send path as chat replies); other
+    channels get the link as plain text instead."""
+    if not lead_id:
+        return "Failed: no lead on file yet."
+    if not link:
+        return "Failed: no document link given."
+    crm = CRMService(agent_id)
+    channel = _conversation_channel(conversation_id)
+    phone = (crm.get(int(lead_id)) or {}).get("phone")
+    if channel == "whatsapp" and phone:
+        from app.services.whatsapp_service import send_whatsapp_document
+        outcome = send_whatsapp_document(phone, agent_id, lead_id, link, filename=filename)
+        if outcome.get("ok"):
+            return "Brochure sent."
+        return f"Failed to send brochure as a document, sending the link instead: {link}"
+    if channel == "instagram":
+        from app.services.instagram_service import send_instagram_document, _lead_ig_id
+        ig_id = _lead_ig_id(agent_id, int(lead_id))
+        if ig_id:
+            import asyncio
+            outcome = asyncio.run(send_instagram_document(ig_id, agent_id, lead_id, link))
+            if outcome.get("ok"):
+                return "Brochure sent."
+        return f"Failed to send brochure as a document, sending the link instead: {link}"
+    return f"Here is the document: {link}"
+
+
+def request_document_from_customer_tool(agent_id: int, lead_id, what: str | None = None) -> str:
+    """Prompt-only: tells the agent to ask the customer to send a file next, and logs a Task noting what
+    is expected. This is a light, ask-based nudge - there is no OCR or document-parsing capability
+    anywhere in this codebase, so nothing is read from whatever the customer sends back."""
+    from app.models.crm import Task
+    try:
+        with get_db() as db:
+            db.add(Task(agent_id=agent_id, title=f"Awaiting document from customer: {what or 'document'}"[:255],
+                        kind="follow_up", priority="medium", status="open", lead_id=lead_id, created_by="ai"))
+    except Exception as e:
+        return f"Failed to log request: {e}"
+    return f"Ask the customer to send their {what or 'document'} next; logged for the team to follow up."
+
+
+def send_quick_replies_tool(agent_id: int, lead_id, conversation_id, body: str, options: list[str]) -> str:
+    """Up to 3 tappable quick-reply buttons, on WhatsApp or Instagram. Other channels get the options
+    said as plain text instead."""
+    channel = _conversation_channel(conversation_id)
+    if channel not in ("whatsapp", "instagram"):
+        return "Quick-reply buttons are only available on WhatsApp or Instagram today; say the options as plain text instead."
+    if not lead_id:
+        return "Failed: no lead on file yet."
+    opts = [str(o).strip() for o in (options or []) if str(o).strip()][:3]
+    if not opts:
+        return "Failed: give up to 3 options."
+    if channel == "whatsapp":
+        phone = (CRMService(agent_id).get(int(lead_id)) or {}).get("phone")
+        if not phone:
+            return "Failed: no phone number on file for this lead."
+        from app.services.whatsapp_service import send_whatsapp_buttons
+        outcome = send_whatsapp_buttons(phone, agent_id, lead_id, body or "Please choose:", opts)
+        return "Sent." if outcome.get("ok") else f"Failed to send options: {outcome.get('error')}"
+    from app.services.instagram_service import send_instagram_quick_replies, _lead_ig_id
+    ig_id = _lead_ig_id(agent_id, int(lead_id))
+    if not ig_id:
+        return "Failed: no Instagram contact on file for this lead."
+    import asyncio
+    outcome = asyncio.run(send_instagram_quick_replies(ig_id, agent_id, lead_id, body or "Please choose:", opts))
+    return "Sent." if outcome.get("ok") else f"Failed to send options: {outcome.get('error')}"
+
+
+def send_options_list_tool(agent_id: int, lead_id, conversation_id, body: str, options: list[str], button_label: str = "Choose") -> str:
+    """An interactive list of up to 10 options, on WhatsApp (native list type) or Instagram (same
+    quick_replies array as send_quick_replies_tool, just with more entries). Other channels get the
+    options said as plain text instead."""
+    channel = _conversation_channel(conversation_id)
+    if channel not in ("whatsapp", "instagram"):
+        return "An options list is only available on WhatsApp or Instagram today; say the options as plain text instead."
+    if not lead_id:
+        return "Failed: no lead on file yet."
+    opts = [str(o).strip() for o in (options or []) if str(o).strip()][:10]
+    if not opts:
+        return "Failed: give at least one option."
+    if channel == "whatsapp":
+        phone = (CRMService(agent_id).get(int(lead_id)) or {}).get("phone")
+        if not phone:
+            return "Failed: no phone number on file for this lead."
+        from app.services.whatsapp_service import send_whatsapp_list
+        outcome = send_whatsapp_list(phone, agent_id, lead_id, body or "Please choose:", button_label, opts)
+        return "Sent." if outcome.get("ok") else f"Failed to send the list: {outcome.get('error')}"
+    from app.services.instagram_service import send_instagram_quick_replies, _lead_ig_id
+    ig_id = _lead_ig_id(agent_id, int(lead_id))
+    if not ig_id:
+        return "Failed: no Instagram contact on file for this lead."
+    import asyncio
+    outcome = asyncio.run(send_instagram_quick_replies(ig_id, agent_id, lead_id, body or "Please choose:", opts, max_options=10))
+    return "Sent." if outcome.get("ok") else f"Failed to send the list: {outcome.get('error')}"
+
+
+def share_location_tool(agent_id: int, lead_id, conversation_id, latitude: float, longitude: float,
+                        name: str = "", address: str = "") -> str:
+    """Share the business's own static location (the agent already knows it from its persona/knowledge,
+    never from the customer) as a real WhatsApp location message; other channels get the address as text.
+    No map/geocoding provider is connected - the coordinates must already be known."""
+    if _conversation_channel(conversation_id) == "whatsapp" and lead_id:
+        phone = (CRMService(agent_id).get(int(lead_id)) or {}).get("phone")
+        if phone and latitude and longitude:
+            from app.services.whatsapp_service import send_whatsapp_location
+            outcome = send_whatsapp_location(phone, agent_id, lead_id, latitude, longitude, name, address)
+            if outcome.get("ok"):
+                return "Location sent."
+    return f"{name or 'Our location'}{': ' + address if address else ''}".strip()
+
+
+def send_payment_link_tool(agent_id: int, lead_id, amount: str | None = None, purpose: str | None = None) -> str:
+    """Orchestrates a configured custom 'http' tool named 'payment_link' if this business has set one up
+    (a thin pass-through, not a hardcoded Razorpay/Stripe call); otherwise states plainly that no payment
+    provider is integrated here rather than fabricating a link. There is no real payment gateway built
+    into this codebase today."""
+    from app.services import tool_registry
+    defn = tool_registry.get_definition(agent_id, "payment_link")
+    if not defn or defn.get("type") != "http" or not defn.get("enabled"):
+        return ("Payment link not configured for this business. No payment provider is integrated here; "
+                "ask the team for payment options.")
+    try:
+        outcome = tool_registry.run_http_tool(defn, {"amount": amount, "purpose": purpose}, {"lead_id": lead_id})
+    except Exception as e:
+        return f"Failed to generate payment link: {e}"
+    return outcome["result"] if outcome.get("ok") else (outcome.get("error") or "Failed to generate payment link.")
+
+
+def check_ticket_status_tool(agent_id: int, lead_id) -> str:
+    """Read back the support ticket(s) (Tasks) logged by create_support_ticket_tool for this customer."""
+    if not lead_id:
+        return "No tickets on file yet."
+    from app.services import crm_records
+    tasks = crm_records.related(agent_id, int(lead_id)).get("tasks") or []
+    tickets = [t for t in tasks if t.get("kind") == "todo"]
+    if not tickets:
+        return "No support tickets on file for you."
+    return "\n".join(f"- #{t.get('id')} {t.get('title')}: {t.get('status')}" for t in tickets)
+
+
+def escalate_urgent_tool(agent_id: int, lead_id, conversation_id, reason: str = "") -> str:
+    """Same hand-off as handoff_to_human_tool, but marked urgent with an immediate team alert.
+
+    call_service._urgent_team_alert hard-requires a live call_id (it dials a colleague on a voice leg
+    tied to that call session), which does not exist in a chat context, so this is the chat equivalent:
+    pause the AI, log a high-priority Task, and SMS the first team transfer number right away."""
+    handoff_to_human_tool(lead_id, agent_id, conversation_id, reason or "urgent")
+    from app.models.crm import Task
+    try:
+        with get_db() as db:
+            db.add(Task(agent_id=agent_id, title=f"URGENT: {reason or 'customer needs help now'}"[:255],
+                        kind="todo", priority="high", status="open", lead_id=lead_id, created_by="ai"))
+    except Exception as e:
+        return f"Failed to escalate: {e}"
+    try:
+        from app.services import agents as agent_service, team_service
+        numbers = team_service.transfer_digits(agent_service.get_profile(agent_id), agent_id)
+        if numbers:
+            send_sms_tool("+" + numbers[0], f"Urgent chat escalation (lead {lead_id}): {reason or 'needs help now'}",
+                          agent_id, role="admin")
+    except Exception:
+        log.exception("escalate_urgent_tool: team alert failed")
+    return "This has been escalated to the team as urgent; someone will reach out shortly."
+
+
+def set_language_preference_tool(agent_id: int, lead_id, language: str) -> str:
+    """Save the customer's own preferred language on their lead record."""
+    if not lead_id:
+        return "Failed: no lead on file yet."
+    lang = str(language or "").strip()
+    if not lang:
+        return "Failed: say which language."
+    try:
+        CRMService(agent_id).update(int(lead_id), {"language": lang[:16]}, actor="customer")
+    except Exception as e:
+        return f"Failed to save language preference: {e}"
+    return f"Got it, I'll use {lang} from now on."
+
+
+def opt_out_tool(agent_id: int, lead_id, on: bool = True) -> str:
+    """Opt the customer out of further outbound contact. Reuses the shared do_not_call flag: it already
+    gates both voice auto-dialling and WhatsApp chat replies (see whatsapp_service's inbound handling,
+    which drops out of answering once do_not_call is set), so it is the correct field to reuse for chat."""
+    if not lead_id:
+        return "Failed: no lead on file yet."
+    try:
+        CRMService(agent_id).update(int(lead_id), {"do_not_call": bool(on)}, actor="customer")
+    except Exception as e:
+        return f"Failed to update preference: {e}"
+    return "You will not be contacted again." if on else "You can be contacted again."
+
+
 def get_agent_config_tool(target_agent_id: int) -> str:
     """Get the configuration of any agent (Admin only)."""
     from app.services.agents import get_profile
@@ -1497,6 +1836,85 @@ ADMIN_TOOLS = [
     }
 ]
 
+# A deliberately small, customer-safe slice (6 tools): everything a chat customer may trigger without
+# ever touching another lead's record, another agent, or an internal/admin action.
+CUSTOMER_TOOLS = [
+    {"type": "function", "function": {"name": "search_knowledge", "description":
+        "Search this business's knowledge base to answer the customer's question (prices, hours, policies, products).",
+        "parameters": {"type": "object", "properties": {"question": {"type": "string"}}, "required": ["question"]}}},
+    {"type": "function", "function": {"name": "schedule_callback", "description":
+        "Schedule a callback at a time the customer just agreed to.",
+        "parameters": {"type": "object", "properties": {"date_time": {"type": "string", "description": "YYYY-MM-DD HH:MM, IST"}},
+                       "required": ["date_time"]}}},
+    {"type": "function", "function": {"name": "set_meeting", "description":
+        "Book or move a meeting/visit the customer just agreed to.",
+        "parameters": {"type": "object", "properties": {"date_time": {"type": "string", "description": "YYYY-MM-DD HH:MM, IST"}},
+                       "required": ["date_time"]}}},
+    {"type": "function", "function": {"name": "get_my_details", "description":
+        "Look up the customer's own saved name, phone, city and requirements (nothing else).",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "handoff_to_human", "description":
+        "Pause the AI and hand this chat to a human teammate: the customer asked for a person, or the "
+        "request is out of scope.",
+        "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "create_support_ticket", "description":
+        "Log a support or complaint ticket for the team to action.",
+        "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "description": {"type": "string"}},
+                       "required": ["title"]}}},
+    {"type": "function", "function": {"name": "reschedule_meeting", "description":
+        "Move an already-booked meeting/visit to a new time.",
+        "parameters": {"type": "object", "properties": {"date_time": {"type": "string", "description": "YYYY-MM-DD HH:MM, IST"}},
+                       "required": ["date_time"]}}},
+    {"type": "function", "function": {"name": "cancel_meeting", "description":
+        "Cancel an already-booked meeting/visit.",
+        "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "update_lead_requirement", "description":
+        "Update the customer's own requirement, budget, timeline or city (never status or qualification).",
+        "parameters": {"type": "object", "properties": {
+            "requirement": {"type": "string"}, "budget": {"type": "string"}, "timeline": {"type": "string"}, "city": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "check_my_order_or_deal_status", "description":
+        "Check the status of the customer's own order/deal in the CRM pipeline.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "send_brochure", "description":
+        "Send a document (brochure, price list) to the customer over this chat channel.",
+        "parameters": {"type": "object", "properties": {"link": {"type": "string"}, "filename": {"type": "string"}},
+                       "required": ["link"]}}},
+    {"type": "function", "function": {"name": "request_document_from_customer", "description":
+        "Ask the customer to send a document/file next, and note for the team what is expected.",
+        "parameters": {"type": "object", "properties": {"what": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "send_quick_replies", "description":
+        "WhatsApp only: send up to 3 tappable quick-reply buttons for the customer to choose from.",
+        "parameters": {"type": "object", "properties": {
+            "body": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}},
+            "required": ["body", "options"]}}},
+    {"type": "function", "function": {"name": "send_options_list", "description":
+        "WhatsApp only: send an interactive list of options (more than 3) for the customer to choose from.",
+        "parameters": {"type": "object", "properties": {
+            "body": {"type": "string"}, "button_label": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}},
+            "required": ["body", "options"]}}},
+    {"type": "function", "function": {"name": "share_location", "description":
+        "Share this business's own static location/address (coordinates already known from the persona/knowledge).",
+        "parameters": {"type": "object", "properties": {
+            "latitude": {"type": "number"}, "longitude": {"type": "number"}, "name": {"type": "string"}, "address": {"type": "string"}},
+            "required": ["latitude", "longitude"]}}},
+    {"type": "function", "function": {"name": "send_payment_link", "description":
+        "Send a payment link for an amount, if this business has configured one.",
+        "parameters": {"type": "object", "properties": {"amount": {"type": "string"}, "purpose": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "check_ticket_status", "description":
+        "Check the status of a support ticket previously logged for this customer.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "escalate_urgent", "description":
+        "Escalate urgently to a human teammate right now (more urgent than handoff_to_human): the customer "
+        "has a time-critical problem.",
+        "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "set_language_preference", "description":
+        "Save the customer's preferred language for future replies.",
+        "parameters": {"type": "object", "properties": {"language": {"type": "string"}}, "required": ["language"]}}},
+    {"type": "function", "function": {"name": "opt_out", "description":
+        "Opt the customer out of further messages/calls, if they ask to stop being contacted.",
+        "parameters": {"type": "object", "properties": {}}}},
+]
+
 # Tools whose dispatch already honours an `agent` argument ("Hairscope ka auto dial band karo"). The
 # argument was read at dispatch but declared in no schema, so the model had no way to send it and every
 # cross-agent instruction quietly acted on the desk that answered the phone.
@@ -1511,6 +1929,8 @@ _AGENT_ARG = {"type": "string", "description": "Another agent by id, name or com
 
 def get_tools_for_role(role: str) -> list[dict]:
     """The tools this caller may use. Only an admin is offered the cross-agent argument."""
+    if role == "customer":
+        return CUSTOMER_TOOLS
     if role != "admin":
         return TOOLS
     widened = []
@@ -1526,7 +1946,8 @@ def get_tools_for_role(role: str) -> list[dict]:
     return widened + ADMIN_TOOLS
 
 def _tool_schemas() -> dict:
-    return {t["function"]["name"]: t["function"].get("parameters", {}).get("properties", {}) for t in TOOLS + ADMIN_TOOLS}
+    return {t["function"]["name"]: t["function"].get("parameters", {}).get("properties", {})
+            for t in TOOLS + ADMIN_TOOLS + CUSTOMER_TOOLS}
 
 
 def resolve_tool_name(name: str) -> str:
@@ -1588,6 +2009,13 @@ def execute_tool(name: str, arguments: str, agent_id: int, role: str = "team") -
         return "Failed to parse arguments."
     name = resolve_tool_name(name)
     args = normalize_args(name, args)
+    if role == "customer":
+        # Defense in depth: never trust the model's own tool name, even though the tool list it was
+        # offered was already restricted to CUSTOMER_TOOLS. A spoofed role or a model that invents a
+        # team/admin tool name must still be rejected here, at execution time.
+        allowed = {t["function"]["name"] for t in CUSTOMER_TOOLS}
+        if name not in allowed:
+            return f"Access Denied or Unknown tool: {name}"
     try:
         result = _dispatch(name, args, agent_id, role)
     except Exception as e:
@@ -1628,6 +2056,45 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
         return send_sms_tool(args.get("to"), args.get("message"), agent_id, role)
     elif name == "book_calendar_event":
         return book_calendar_event_tool(args.get("email"), args.get("date_time"), args.get("duration_minutes", 30), agent_id)
+    elif name == "search_knowledge":
+        return search_knowledge_tool(args.get("question") or args.get("query") or "", agent_id)
+    elif name == "get_my_details":
+        return get_my_details_tool(args.get("lead_id"), agent_id)
+    elif name == "handoff_to_human":
+        return handoff_to_human_tool(args.get("lead_id"), agent_id, args.get("conversation_id"), args.get("reason") or "")
+    elif name == "create_support_ticket":
+        return create_support_ticket_tool(args.get("lead_id"), agent_id, args.get("title") or "Support ticket", args.get("description") or "")
+    elif name == "reschedule_meeting":
+        return reschedule_meeting_tool(agent_id, args.get("lead_id"), args.get("date_time") or args.get("time") or "")
+    elif name == "cancel_meeting":
+        return cancel_meeting_tool(agent_id, args.get("lead_id"), args.get("reason") or "")
+    elif name == "update_lead_requirement":
+        return update_lead_requirement_tool(agent_id, args.get("lead_id"), args.get("requirement"), args.get("budget"),
+                                            args.get("timeline"), args.get("city"))
+    elif name == "check_my_order_or_deal_status":
+        return check_my_order_or_deal_status_tool(agent_id, args.get("lead_id"))
+    elif name == "send_brochure":
+        return send_brochure_tool(agent_id, args.get("lead_id"), args.get("conversation_id"), args.get("link") or "", args.get("filename"))
+    elif name == "request_document_from_customer":
+        return request_document_from_customer_tool(agent_id, args.get("lead_id"), args.get("what"))
+    elif name == "send_quick_replies":
+        return send_quick_replies_tool(agent_id, args.get("lead_id"), args.get("conversation_id"), args.get("body") or "", args.get("options") or [])
+    elif name == "send_options_list":
+        return send_options_list_tool(agent_id, args.get("lead_id"), args.get("conversation_id"), args.get("body") or "",
+                                      args.get("options") or [], args.get("button_label") or "Choose")
+    elif name == "share_location":
+        return share_location_tool(agent_id, args.get("lead_id"), args.get("conversation_id"), args.get("latitude"),
+                                   args.get("longitude"), args.get("name") or "", args.get("address") or "")
+    elif name == "send_payment_link":
+        return send_payment_link_tool(agent_id, args.get("lead_id"), args.get("amount"), args.get("purpose"))
+    elif name == "check_ticket_status":
+        return check_ticket_status_tool(agent_id, args.get("lead_id"))
+    elif name == "escalate_urgent":
+        return escalate_urgent_tool(agent_id, args.get("lead_id"), args.get("conversation_id"), args.get("reason") or "")
+    elif name == "set_language_preference":
+        return set_language_preference_tool(agent_id, args.get("lead_id"), args.get("language") or "")
+    elif name == "opt_out":
+        return opt_out_tool(agent_id, args.get("lead_id"), _on_flag(args.get("on", True)))
     # Own-agent actions a colleague needs on a call; an admin naming another agent ("Hairscope ka") works on that one.
     target = agent_id
     if role == "admin" and args.get("agent"):
