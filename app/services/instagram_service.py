@@ -41,6 +41,8 @@ from app.services.identity import merge_identity
 log = logging.getLogger(__name__)
 
 QUEUE_KEY = "va:instagram:inbound"
+BURST_WINDOW_SECONDS = 5  # merge customer messages arriving within this window into one agent turn
+BURST_POLL_SECONDS = 1
 LOCK_TTL_SECONDS = 30
 LOCK_ACQUIRE_ATTEMPTS = 3
 LOCK_ACQUIRE_WAIT = 0.3
@@ -87,10 +89,39 @@ def _acquire_with_retry(name: str) -> bool:
     return False
 
 
+def _requeue_front(msg: dict) -> None:
+    """Put a message back at the head (not the tail) of the queue: it was already the next one due for
+    this contact, so losing a lock race must not let it be overtaken by a later, unrelated message."""
+    store.store.client.lpush(QUEUE_KEY, json.dumps(msg))
+
+
+def _contact_key(msg: dict) -> tuple:
+    return (msg.get("page_id"), msg.get("from"))
+
+
+def _drain_same_contact(key: tuple, max_items: int = 20) -> list[dict]:
+    """Non-blocking: pop whatever is already queued, keep same-contact messages for the batch, and put
+    everything else straight back at the head of the queue so other contacts' ordering is undisturbed."""
+    client = store.store.client
+    batch, others = [], []
+    for _ in range(max_items):
+        raw = client.lpop(QUEUE_KEY)
+        if raw is None:
+            break
+        other = json.loads(raw)
+        if _contact_key(other) == key:
+            batch.append(other)
+        else:
+            others.append(raw)
+    if others:
+        client.lpush(QUEUE_KEY, *reversed(others))
+    return batch
+
+
 def queue_worker_loop(stop_event: threading.Event | None = None) -> None:
     """Consumer loop for the Instagram inbound queue. Same BLPOP+per-contact-lock shape as WhatsApp's
     queue_worker_loop, kept as its own loop/queue rather than sharing WhatsApp's to avoid risking its
-    now-working queue code; no burst-merge for this first slice (single message -> single reply)."""
+    now-working queue code; merges a short burst of messages into one agent turn, mirroring WhatsApp."""
     client = store.store.client
     while stop_event is None or not stop_event.is_set():
         item = client.blpop(QUEUE_KEY, timeout=5)
@@ -102,23 +133,42 @@ def queue_worker_loop(stop_event: threading.Event | None = None) -> None:
         except Exception:
             log.exception("Instagram queue: unreadable message, dropping")
             continue
-        ig_id = msg.get("from")
-        if not ig_id:
-            continue
-        agent_id = resolve_agent(msg.get("page_id"))
-        if not agent_id:
-            log.warning("Instagram message from %s: no agent resolved (set INSTAGRAM_AGENT_ID)", ig_id)
-            continue
-        name = _lock_name(agent_id, ig_id)
-        if not _acquire_with_retry(name):
-            store.store.client.lpush(QUEUE_KEY, raw)
-            continue
+        _process_from_queue(msg)
+
+
+def _process_from_queue(msg: dict) -> None:
+    ig_id = msg.get("from")
+    if not ig_id:
+        return
+    agent_id = resolve_agent(msg.get("page_id"))
+    if not agent_id:
+        log.warning("Instagram message from %s: no agent resolved (set INSTAGRAM_AGENT_ID)", ig_id)
+        return
+    name = _lock_name(agent_id, ig_id)
+    if not _acquire_with_retry(name):
+        # Someone else is mid-turn for this contact; don't block the whole worker on it, requeue at the
+        # front for another pass (ours or another worker's) rather than let a later message cut ahead.
+        _requeue_front(msg)
+        return
+    try:
+        key = _contact_key(msg)
+        batch = [msg] + _drain_same_contact(key)
+        client = store.store.client
+        item = client.blpop(QUEUE_KEY, timeout=BURST_POLL_SECONDS)
+        if item is not None:
+            _, raw = item
+            extra = json.loads(raw)
+            if _contact_key(extra) == key:
+                batch.append(extra)
+                batch.extend(_drain_same_contact(key))
+            else:
+                client.lpush(QUEUE_KEY, raw)
         try:
-            _handle_locked(msg, agent_id, ig_id)
+            _handle_batch(batch, agent_id, ig_id)
         except Exception:
-            log.exception("Instagram queue: failed to process message")
-        finally:
-            store.delete("lock:" + name)
+            log.exception("Instagram inbound handling failed for %s", ig_id)
+    finally:
+        store.delete("lock:" + name)
 
 
 def verify_signature(body: bytes, header: str | None) -> bool:
@@ -338,15 +388,34 @@ def close_chat(conv_id: int) -> bool:
     return True
 
 
-def _handle_locked(msg: dict, agent_id: int, ig_id: str) -> None:
-    from app.services import chat_agent
+def _handle_batch(batch: list[dict], agent_id: int, ig_id: str) -> None:
+    """Record every message in the burst as its own Message row, but generate/send only one reply for
+    the merged batch (one chat_agent.respond() + one outbound send)."""
+    contexts, added = [], 0
+    for m in batch:
+        ctx, did_add = _record_turn(m, agent_id, ig_id)
+        if did_add:
+            added += 1
+        if ctx is not None:
+            contexts.append(ctx)
+    if not contexts:
+        return
+    combined_say = "\n".join(c["say"] for c in contexts if c["say"])
+    _reply_turn(agent_id, contexts[-1], combined_say, drop_last=added)
+
+
+def _record_turn(msg: dict, agent_id: int, ig_id: str) -> tuple[dict | None, bool]:
+    """Persist one inbound message as its own Message row (always, for the transcript/audit trail).
+    Returns (ctx, added): `ctx` is the reply context (None when there's nothing further to do for this
+    particular message -- dedupe/do-not-call/paused), `added` is whether a Message row was actually
+    written (used by batch callers to size the history cutoff for the merged reply)."""
     from app.services.crm_service import CRMService
 
     mid = msg.get("mid")
     if mid:
         with get_db() as db:
             if db.scalar(select(Message.id).where(Message.agent_id == agent_id, Message.external_id == mid)) is not None:
-                return
+                return None, False
     lead_id = _find_or_create_lead(agent_id, ig_id)
     conv_id = _open_chat(agent_id, lead_id)
     with get_db() as db:
@@ -354,18 +423,26 @@ def _handle_locked(msg: dict, agent_id: int, ig_id: str) -> None:
     text = (msg.get("text") or "").strip()
     added = _add_message(conv_id, agent_id, "in", "customer", text or "[attachment]", external_id=mid)
     if not added:
-        return
+        return None, False
     lead = CRMService(agent_id).get(lead_id) or {"id": lead_id}
     events.record("instagram.received", f"Instagram from {ig_id}", text[:120],
                   agent_id=agent_id, lead_id=lead_id, actor="customer")
     if lead.get("do_not_call") or paused:
-        return
-    if not text:
+        return None, True
+    return {"conv_id": conv_id, "lead": lead, "lead_id": lead_id, "ig_id": ig_id, "say": text, "msg": msg}, True
+
+
+def _reply_turn(agent_id: int, ctx: dict, say: str, drop_last: int = 1) -> None:
+    """Generate (and send) one reply -- for a single message or a burst-merged batch alike."""
+    from app.services import chat_agent
+
+    conv_id, lead, lead_id, ig_id = ctx["conv_id"], ctx["lead"], ctx["lead_id"], ctx["ig_id"]
+    if not say:
         reply, end_call = NON_TEXT_REPLY, False
     else:
-        history = _history(conv_id)[:-1]
+        history = _history(conv_id)[:-drop_last] if drop_last else _history(conv_id)
         try:
-            res = chat_agent.respond(agent_id, conv_id, history, text, lead, channel="instagram")
+            res = chat_agent.respond(agent_id, conv_id, history, say, lead, channel="instagram")
         except Exception:
             log.exception("Instagram reply generation failed for %s", ig_id)
             return
@@ -378,6 +455,13 @@ def _handle_locked(msg: dict, agent_id: int, ig_id: str) -> None:
     _add_message(conv_id, agent_id, "out", "ai", reply)
     if end_call:
         close_chat(conv_id)
+
+
+def _handle_locked(msg: dict, agent_id: int, ig_id: str) -> None:
+    ctx, _ = _record_turn(msg, agent_id, ig_id)
+    if ctx is None:
+        return
+    _reply_turn(agent_id, ctx, ctx["say"])
 
 
 def human_reply(conv_id: int, text: str, by: str) -> dict:
