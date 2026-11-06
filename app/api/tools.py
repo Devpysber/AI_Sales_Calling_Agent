@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import workspace
 from app.core.database import get_db
-from app.models.channel import ToolDefinition
+from app.models.channel import ToolDefinition, ToolRun
 from app.services import industry_packs, tool_registry
 from app.services.tool_registry import template_host_is_fixed
 
@@ -144,6 +144,23 @@ def test_tool(tool_id: int, body: ToolTest, agent_id: int = Depends(workspace)):
         raise HTTPException(400, "Only custom HTTP tools can be test-run.")
     context = {"lead_phone": "+10000000000", "lead_name": "Test Lead"}
     return tool_registry.run_http_tool(definition, body.arguments, context)
+
+
+@router.get("/{tool_id}/runs")
+def list_tool_runs(tool_id: int, agent_id: int = Depends(workspace)):
+    with get_db() as db:
+        row = db.query(ToolDefinition).filter(ToolDefinition.agent_id == agent_id, ToolDefinition.id == tool_id).first()
+        if not row:
+            raise HTTPException(404, "Tool not found.")
+        tool_name = row.name
+        runs = (
+            db.query(ToolRun)
+            .filter(ToolRun.agent_id == agent_id, ToolRun.tool_name == tool_name)
+            .order_by(ToolRun.created_at.desc())
+            .limit(50)
+            .all()
+        )
+        return [r.to_dict() for r in runs]
 
 
 @packs_router.get("")

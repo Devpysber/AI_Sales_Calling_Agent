@@ -231,3 +231,35 @@ def test_money_risk_tool_withholds_first_execution_then_runs_on_confirm(client):
     # since the target is a private/unroutable address, but that's a different status than pending_confirm).
     result2, status2 = chat_agent._run_tool("charge_card", {"amount": 500}, agent_id, None, lead["id"])
     assert status2 != "pending_confirm"
+
+
+def test_list_tool_runs_endpoint_scoped_to_tool(client):
+    agent_id = _agent(client)
+    lead = CRMService(agent_id).create({"phone": "9811100078", "name": "Runner"}, actor="system")
+    with get_db() as db:
+        row = ToolDefinition(agent_id=agent_id, name="custom_lookup", description="look something up", type="http",
+                              parameters_json=json.dumps({"type": "object", "properties": {"q": {"type": "string"}}}),
+                              config_json=json.dumps({"url": "http://127.0.0.1:1/lookup", "method": "GET", "auth_type": "none"}),
+                              risk="read", enabled=True)
+        db.add(row)
+        db.flush()
+        tool_id = row.id
+
+    # Two runs for this tool (both fail at the network hop, logging ToolRun rows regardless).
+    chat_agent._run_tool("custom_lookup", {"q": "a"}, agent_id, None, lead["id"])
+    chat_agent._run_tool("custom_lookup", {"q": "b"}, agent_id, None, lead["id"])
+
+    # A run for an unrelated tool_name must not leak into the scoped response.
+    with get_db() as db:
+        db.add(ToolRun(agent_id=agent_id, tool_name="other_tool", arguments_json=json.dumps({}),
+                        status="ok", duration_ms=1))
+
+    resp = client.get(f"/api/agents/{agent_id}/tools/{tool_id}/runs")
+    assert resp.status_code == 200, resp.text
+    runs = resp.json()
+    assert len(runs) == 2
+    assert all("arguments" in r and "id" in r and "status" in r and "created_at" in r for r in runs)
+    assert runs[0]["created_at"] >= runs[1]["created_at"]
+
+    resp_404 = client.get(f"/api/agents/{agent_id}/tools/999999/runs")
+    assert resp_404.status_code == 404

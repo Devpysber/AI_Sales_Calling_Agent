@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Plus, Trash2, Wrench } from "lucide-react"
+import { History, Plus, Trash2, Wrench } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 import {
@@ -7,6 +7,13 @@ import {
 } from "@/components/ui"
 import { api } from "@/lib/api"
 import { useAgent } from "@/lib/agent"
+import { formatDate } from "@/lib/utils"
+
+type ToolRun = {
+  id: number; status: "ok" | "error" | "denied" | "timeout" | "pending_confirm" | "confirmed"
+  error: string | null; duration_ms: number | null; created_at: string
+  arguments: Record<string, unknown> | null; result: string | null
+}
 
 type Tool = {
   id: number; agent_id: number; name: string; description: string; type: "builtin" | "http" | "connector" | "mcp"
@@ -34,8 +41,15 @@ export default function Tools() {
   const [testing, setTesting] = useState<Tool | null>(null)
   const [testArgs, setTestArgs] = useState("{}")
   const [testResult, setTestResult] = useState<unknown>(null)
+  const [viewingRuns, setViewingRuns] = useState<Tool | null>(null)
 
   const invalidate = () => qc.invalidateQueries({ queryKey: key })
+
+  const runs = useQuery({
+    queryKey: ["tool-runs", base, viewingRuns?.id],
+    queryFn: () => api<ToolRun[]>(`${base}/tools/${viewingRuns?.id}/runs`),
+    enabled: !!viewingRuns,
+  })
 
   const create = useMutation({
     mutationFn: () => {
@@ -102,6 +116,7 @@ export default function Tools() {
                 <div className="flex shrink-0 items-center gap-2">
                   <Switch checked={t.enabled} onChange={(v) => patch.mutate({ id: t.id, body: { enabled: v } })} label={`Enable ${t.name}`} />
                   {t.type === "http" && <Button type="button" onClick={() => { setTestArgs("{}"); setTestResult(null); setTesting(t) }}>Test</Button>}
+                  {t.type === "http" && <Button type="button" title="View runs" onClick={() => setViewingRuns(t)}><History className="size-4" /></Button>}
                   {t.type === "http" && <Button type="button" onClick={() => {
                     setEditing(t)
                     setForm({
@@ -151,6 +166,29 @@ export default function Tools() {
           <Field label="Arguments (JSON)"><Textarea rows={4} value={testArgs} onChange={(e) => setTestArgs(e.target.value)} /></Field>
           {testResult != null && <pre className="max-h-64 overflow-auto rounded-xl bg-surface-2 p-3 text-xs">{JSON.stringify(testResult, null, 2)}</pre>}
         </div>
+      </Dialog>
+      <Dialog open={!!viewingRuns} onClose={() => setViewingRuns(null)} title={`Recent runs: ${viewingRuns?.name ?? ""}`}
+        footer={<Button onClick={() => setViewingRuns(null)}>Close</Button>}>
+        {runs.isLoading ? <Skeleton className="h-32" /> : (runs.data ?? []).length === 0 ? (
+          <p className="text-sm text-muted">No runs yet.</p>
+        ) : (
+          <div className="max-h-96 space-y-2 overflow-auto">
+            {(runs.data ?? []).map((r) => (
+              <div key={r.id} className="rounded-xl border border-border p-3 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <Badge tone={r.status === "ok" || r.status === "confirmed" ? "success" : r.status === "pending_confirm" ? "warning" : "danger"}>
+                    {r.status}
+                  </Badge>
+                  <span className="text-xs text-muted">{formatDate(r.created_at)}</span>
+                </div>
+                <div className="mt-1 text-xs text-muted">
+                  {r.duration_ms != null && <span>{r.duration_ms}ms</span>}
+                </div>
+                {r.error && <p className="mt-1 text-xs text-danger">{r.error}</p>}
+              </div>
+            ))}
+          </div>
+        )}
       </Dialog>
     </>
   )
