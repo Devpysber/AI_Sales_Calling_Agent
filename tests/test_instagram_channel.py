@@ -196,6 +196,18 @@ def test_close_idle_chats(agent_id, fakes):
     assert summaries == [cid] and next(c for c in _chats(agent_id) if c[0] == cid)[1] == "closed"
 
 
+def test_close_chat_locked_and_idempotent(agent_id, fakes):
+    _, summaries, _ = fakes
+    [m] = ig.parse_webhook(_payload(mid="mid.CLOSE1", sender="17800000099"))
+    ig.handle_inbound(m)
+    cid = next(c for c in _chats(agent_id) if c[2] and c[2][0].get("mid") == "mid.CLOSE1")[0]
+    assert ig.close_chat(cid) is True
+    assert summaries == [cid]
+    assert next(c for c in _chats(agent_id) if c[0] == cid)[1] == "closed"
+    assert ig.close_chat(cid) is False  # already closed -> no-op, no duplicate summary
+    assert summaries == [cid]
+
+
 def test_attachment_gets_generic_text_passed_to_agent(agent_id, fakes):
     # First slice: attachments become the text "[attachment]" and go through the normal chat_agent
     # turn (not a fixed reply) -- full media download/transcription is deferred, same as WhatsApp's was.

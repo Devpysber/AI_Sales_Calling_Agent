@@ -373,7 +373,14 @@ def _submit_chat_summary(conv_id: int, agent_id: int, lead_id: int | None, histo
     _turn_pool.submit(_apply_chat_outcome, conv_id, agent_id, lead_id, history).add_done_callback(_done)
 
 
-def close_chat(conv_id: int) -> bool:
+def _lead_ig_id(agent_id: int | None, lead_id: int | None) -> str | None:
+    with get_db() as db:
+        ci = db.scalar(select(ContactIdentity).where(ContactIdentity.agent_id == agent_id,
+                       ContactIdentity.channel == "instagram", ContactIdentity.lead_id == lead_id))
+        return ci.external_id if ci else None
+
+
+def _close_chat_locked(conv_id: int) -> bool:
     with get_db() as db:
         conv = db.get(Conversation, conv_id)
         if conv is None or conv.status != "open":
@@ -386,6 +393,19 @@ def close_chat(conv_id: int) -> bool:
     if has_customer:
         _submit_chat_summary(conv_id, agent_id, lead_id, _history(conv_id))
     return True
+
+
+def close_chat(conv_id: int) -> bool:
+    with get_db() as db:
+        conv = db.get(Conversation, conv_id)
+        if conv is None or conv.status != "open":
+            return False
+        agent_id, lead_id = conv.agent_id, conv.lead_id
+    ig_id = _lead_ig_id(agent_id, lead_id)
+    if not ig_id:
+        return _close_chat_locked(conv_id)
+    with _lock_for(agent_id or 0, ig_id):
+        return _close_chat_locked(conv_id)
 
 
 def close_idle_chats() -> int:
