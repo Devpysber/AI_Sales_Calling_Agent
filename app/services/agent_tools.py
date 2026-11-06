@@ -1917,12 +1917,12 @@ CUSTOMER_TOOLS = [
         "Ask the customer to send a document/file next, and note for the team what is expected.",
         "parameters": {"type": "object", "properties": {"what": {"type": "string"}}}}},
     {"type": "function", "function": {"name": "send_quick_replies", "description":
-        "WhatsApp only: send up to 3 tappable quick-reply buttons for the customer to choose from.",
+        "WhatsApp or Instagram: send up to 3 tappable quick-reply buttons for the customer to choose from.",
         "parameters": {"type": "object", "properties": {
             "body": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}},
             "required": ["body", "options"]}}},
     {"type": "function", "function": {"name": "send_options_list", "description":
-        "WhatsApp only: send an interactive list of options (more than 3) for the customer to choose from.",
+        "WhatsApp or Instagram: send an interactive list of options (more than 3) for the customer to choose from.",
         "parameters": {"type": "object", "properties": {
             "body": {"type": "string"}, "button_label": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}},
             "required": ["body", "options"]}}},
