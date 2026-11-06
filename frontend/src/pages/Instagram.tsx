@@ -3,7 +3,7 @@
 // merge of both channels into one component is future cleanup, not today's job — this keeps the
 // already-working WhatsApp.tsx untouched.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ExternalLink, Camera as InstagramIcon, Send, Sparkles, User } from "lucide-react"
+import { ExternalLink, Camera as InstagramIcon, Heart, Phone, Send, Sparkles, User, Video } from "lucide-react"
 import { Fragment, useEffect, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import { Link } from "react-router-dom"
@@ -74,66 +74,88 @@ export default function Instagram() {
             description={`Messages to your Instagram account appear here. Set the webhook URL to ${window.location.origin}/api/instagram/webhook in Meta.`} />
         </Card>
       ) : (
-        <Card className="grid h-[70vh] min-h-96 overflow-hidden md:grid-cols-[18rem_1fr]">
-          <div className="min-h-0 overflow-y-auto border-b border-border md:border-r md:border-b-0">
+        <Card className="grid h-[70vh] min-h-96 overflow-hidden p-0 md:grid-cols-[18rem_1fr]">
+          <div className="min-h-0 overflow-y-auto border-b border-border bg-white md:border-r md:border-b-0 dark:bg-black">
+            <div className="border-b border-border px-4 py-3 text-base font-semibold text-[#111] dark:text-white">Primary</div>
             {items.map((c) => (
               <button key={c.id} onClick={() => setSelected(c.id)}
-                className={cn("block w-full border-b border-border px-4 py-3 text-left hover:bg-surface-2/60", c.id === activeId && "bg-surface-2")}>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-sm font-semibold">{c.lead_name || c.lead_phone}</span>
-                  <span className="shrink-0 text-xs text-muted">{time(c.last_at)}</span>
-                </div>
-                <div className="mt-0.5 truncate text-xs text-muted">{c.last_text}</div>
-                <div className="mt-1 flex gap-1.5">
-                  <Badge tone={c.status === "Chat" ? "success" : "neutral"}>{c.status === "Chat" ? "Open" : "Closed"}</Badge>
-                  {c.ai_paused && <Badge tone="warning">AI paused</Badge>}
+                className={cn("flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-black/[0.03] dark:hover:bg-white/5",
+                  c.id === activeId && "bg-black/[0.04] dark:bg-white/10")}>
+                <span className="grid size-11 shrink-0 place-items-center rounded-full p-[2px]"
+                  style={{ background: "linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)" }}>
+                  <span className="grid size-full place-items-center rounded-full bg-white text-sm font-semibold text-[#111] dark:bg-black dark:text-white">
+                    {(c.lead_name || c.lead_phone || "?").trim().slice(0, 1).toUpperCase()}
+                  </span>
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium text-[#111] dark:text-white">{c.lead_name || c.lead_phone}</span>
+                    <span className="shrink-0 text-[11px] text-[#8e8e8e]">{time(c.last_at)}</span>
+                  </div>
+                  <div className="mt-0.5 flex items-center justify-between gap-2">
+                    <span className="truncate text-xs text-[#8e8e8e]">{c.last_text}</span>
+                    {c.ai_paused && <Badge tone="warning">Paused</Badge>}
+                  </div>
                 </div>
               </button>
             ))}
           </div>
-          <div className="flex min-h-0 flex-col">
+          <div className="flex min-h-0 flex-col bg-white dark:bg-black">
             {chat && (
               <>
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold">{chat.lead_name || chat.lead_phone}</div>
-                    <div className="text-xs text-muted">{chat.lead_phone} · {chat.message_count} messages</div>
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="grid size-9 shrink-0 place-items-center rounded-full p-[2px]"
+                      style={{ background: "linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)" }}>
+                      <span className="grid size-full place-items-center rounded-full bg-white text-sm font-semibold text-[#111] dark:bg-black dark:text-white">
+                        {(chat.lead_name || chat.lead_phone || "?").trim().slice(0, 1).toUpperCase()}
+                      </span>
+                    </span>
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-[#111] dark:text-white">{chat.lead_name || chat.lead_phone}</div>
+                      <div className="text-xs text-[#8e8e8e]">{chat.lead_phone} · {chat.message_count} messages</div>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <Phone className="size-[18px] text-[#111] dark:text-white" />
+                    <Video className="size-[20px] text-[#111] dark:text-white" />
                     {chat.ai_paused && <Button onClick={() => resume.mutate()} loading={resume.isPending}>Resume AI</Button>}
                     {chat.lead_id && <Link to={path(`/leads/${chat.lead_id}`)}><Button type="button"><ExternalLink className="size-4" />Lead</Button></Link>}
                   </div>
                 </div>
-                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-4">
+                <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto bg-white p-4 dark:bg-black">
                   {turns.map((t, i) => (
                     <div key={i} className={cn("flex flex-col", t.role === "customer" ? "items-start" : "items-end")}>
                       {t.role !== "customer" && (
-                        <div className={cn("mb-1 flex items-center gap-1.5 text-xs font-semibold",
-                          t.role === "human" ? "text-success" : "text-brand")}>
-                          <span className={cn("grid size-4 place-items-center rounded-full [&_svg]:size-2.5",
-                            t.role === "human" ? "bg-success/15" : "bg-brand-soft")}>
+                        <div className="mb-0.5 flex items-center gap-1.5 text-[11px] font-semibold text-[#8e8e8e]">
+                          <span className="grid size-3.5 place-items-center rounded-full bg-[#3797f0]/15 text-[#3797f0] [&_svg]:size-2.5">
                             {t.role === "human" ? <User /> : <Sparkles />}
                           </span>
                           {t.role === "human" ? (t.by && t.by !== "admin" ? t.by : "You") : "AI"}
                         </div>
                       )}
-                      <div className={cn("w-fit max-w-[min(80%,32rem)] rounded-2xl px-3 py-2 text-sm break-words whitespace-pre-wrap",
-                        t.role === "customer" ? "bg-surface-2" : t.role === "human" ? "bg-success/15 text-fg" : "bg-brand-soft text-fg")}>
-                        {renderFormatted(t.text)}
-                        <div className="mt-0.5 text-right text-[10px] text-muted">{time(t.at)}</div>
+                      <div className={cn("group relative flex items-end gap-1.5", t.role === "customer" ? "flex-row" : "flex-row-reverse")}>
+                        <div className={cn("w-fit max-w-[min(78%,28rem)] rounded-[20px] px-3.5 py-2 text-[14px] leading-[18px] break-words whitespace-pre-wrap",
+                          t.role === "customer" ? "bg-[#efefef] text-[#111] dark:bg-[#262626] dark:text-white" : "bg-[#3797f0] text-white")}>
+                          {renderFormatted(t.text)}
+                        </div>
+                        <Heart className="size-3 shrink-0 text-[#8e8e8e] opacity-0 transition-opacity group-hover:opacity-100" />
                       </div>
+                      <div className="mt-0.5 text-[10px] text-[#8e8e8e]">{time(t.at)}</div>
                     </div>
                   ))}
                   <div ref={endRef} />
                 </div>
                 {chat.status === "Chat" ? (
-                  <form className="flex items-end gap-2 border-t border-border p-3"
+                  <form className="flex items-end gap-2 border-t border-border p-2.5"
                     onSubmit={(e) => { e.preventDefault(); if (text.trim() && !send.isPending) send.mutate() }}>
-                    <Textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="Reply as a human (pauses the AI for this chat)"
+                    <Textarea rows={1} value={text} onChange={(e) => setText(e.target.value)} placeholder="Reply as a human (pauses the AI for this chat)"
+                      className="rounded-full border-[#dbdbdb] dark:border-white/15"
                       onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (text.trim() && !send.isPending) send.mutate() } }} />
-                    <Button type="submit" variant="primary" loading={send.isPending} disabled={!text.trim()}><Send className="size-4" /></Button>
+                    <Button type="submit" variant="primary" loading={send.isPending} disabled={!text.trim()}
+                      className="rounded-full bg-[#3797f0] hover:bg-[#1877c9]"><Send className="size-4" /></Button>
                   </form>
-                ) : <div className="border-t border-border p-3 text-center text-xs text-muted">This chat is closed. A new message starts a new chat.</div>}
+                ) : <div className="border-t border-border p-3 text-center text-xs text-[#8e8e8e]">This chat is closed. A new message starts a new chat.</div>}
               </>
             )}
           </div>
