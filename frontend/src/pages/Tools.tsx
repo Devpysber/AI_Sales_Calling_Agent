@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { History, Plus, Trash2, Wrench } from "lucide-react"
+import { Banknote, Eye, History, Pencil, Plus, Trash2, Wrench } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 import {
@@ -26,6 +26,30 @@ const emptyForm = {
   name: "", description: "", parameters: '{\n  "type": "object",\n  "properties": {}\n}',
   url: "", method: "GET", auth_type: "none", auth_header: "X-API-Key", secret: "",
   timeout_seconds: 10, risk: "read" as Tool["risk"],
+}
+
+const CATEGORY_MAP: Record<string, string> = {
+  schedule_callback: "Scheduling", set_meeting: "Scheduling", reschedule_meeting: "Scheduling", cancel_meeting: "Scheduling",
+  get_my_details: "Customer info", update_lead_requirement: "Customer info", check_my_order_or_deal_status: "Customer info",
+  set_language_preference: "Customer info",
+  create_support_ticket: "Support", check_ticket_status: "Support", handoff_to_human: "Support", escalate_urgent: "Support",
+  send_quick_replies: "Messaging & rich replies", send_options_list: "Messaging & rich replies", send_brochure: "Messaging & rich replies",
+  share_location: "Messaging & rich replies", request_document_from_customer: "Messaging & rich replies",
+  search_knowledge: "Knowledge",
+  send_payment_link: "Payments",
+  opt_out: "Compliance",
+}
+const CATEGORY_ORDER = ["Custom tools", "Scheduling", "Customer info", "Support", "Messaging & rich replies", "Knowledge", "Payments", "Compliance", "Other"]
+
+function categoryFor(t: Tool) {
+  if (t.type !== "builtin") return "Custom tools"
+  return CATEGORY_MAP[t.name] ?? "Other"
+}
+
+function RiskIcon({ risk }: { risk: Tool["risk"] }) {
+  if (risk === "money") return <Banknote className="size-4 shrink-0 text-danger" />
+  if (risk === "write") return <Pencil className="size-4 shrink-0 text-warning" />
+  return <Eye className="size-4 shrink-0 text-muted" />
 }
 
 export default function Tools() {
@@ -98,41 +122,54 @@ export default function Tools() {
       {list.isLoading ? <Skeleton className="h-64" /> : tools.length === 0 ? (
         <Card><EmptyState icon={<Wrench />} title="No tools yet" description="Add a custom HTTP tool to let this agent call your own API." /></Card>
       ) : (
-        <Card>
-          <CardHeader title="Tools" />
-          <div className="divide-y divide-border">
-            {tools.map((t) => (
-              <div key={t.id} className="flex flex-wrap items-start justify-between gap-3 p-4 sm:p-5">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold">{t.name}</span>
-                    <Badge tone="neutral">{t.type}</Badge>
-                    <Badge tone={t.risk === "read" ? "neutral" : t.risk === "write" ? "warning" : "danger"}>{t.risk}</Badge>
-                    {!t.enabled && <Badge tone="neutral">Disabled</Badge>}
-                  </div>
-                  <p className="mt-1 text-sm text-muted">{t.description || "No description."}</p>
-                  {t.type === "http" && t.config?.url && <p className="mt-1 truncate text-xs text-muted">{t.config.method} {t.config.url}</p>}
+        <div className="space-y-4">
+          {CATEGORY_ORDER.map((cat) => {
+            const group = tools.filter((t) => categoryFor(t) === cat)
+            if (group.length === 0) return null
+            return (
+              <Card key={cat}>
+                <CardHeader title={<span className="flex items-center gap-2 text-xs font-bold tracking-wide text-muted uppercase">
+                  {cat} <Badge tone="neutral">{group.length}</Badge>
+                </span>} />
+                <div className="divide-y divide-border">
+                  {group.map((t) => (
+                    <div key={t.id} className="flex flex-wrap items-start justify-between gap-3 p-4 sm:p-5">
+                      <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                        <RiskIcon risk={t.risk} />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold">{t.name}</span>
+                            <Badge tone="neutral">{t.type}</Badge>
+                            <Badge tone={t.risk === "read" ? "neutral" : t.risk === "write" ? "warning" : "danger"}>{t.risk}</Badge>
+                            {!t.enabled && <Badge tone="neutral">Disabled</Badge>}
+                          </div>
+                          <p className="mt-1 line-clamp-2 text-xs text-muted">{t.description || "No description."}</p>
+                          {t.type === "http" && t.config?.url && <p className="mt-1 truncate text-xs text-muted">{t.config.method} {t.config.url}</p>}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Switch checked={t.enabled} onChange={(v) => patch.mutate({ id: t.id, body: { enabled: v } })} label={`Enable ${t.name}`} />
+                        {t.type === "http" && <Button type="button" onClick={() => { setTestArgs("{}"); setTestResult(null); setTesting(t) }}>Test</Button>}
+                        {t.type === "http" && <Button type="button" title="View runs" onClick={() => setViewingRuns(t)}><History className="size-4" /></Button>}
+                        {t.type === "http" && <Button type="button" onClick={() => {
+                          setEditing(t)
+                          setForm({
+                            name: t.name, description: t.description, parameters: JSON.stringify(t.parameters ?? {}, null, 2),
+                            url: t.config?.url ?? "", method: t.config?.method ?? "GET", auth_type: t.config?.auth_type ?? "none",
+                            auth_header: t.config?.auth_header ?? "X-API-Key", secret: "", timeout_seconds: t.timeout_seconds, risk: t.risk,
+                          })
+                        }}>Edit</Button>}
+                        {t.type === "http" && (
+                          <Button type="button" onClick={() => { if (confirm(`Delete tool “${t.name}”?`)) remove.mutate(t.id) }}><Trash2 className="size-4" /></Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Switch checked={t.enabled} onChange={(v) => patch.mutate({ id: t.id, body: { enabled: v } })} label={`Enable ${t.name}`} />
-                  {t.type === "http" && <Button type="button" onClick={() => { setTestArgs("{}"); setTestResult(null); setTesting(t) }}>Test</Button>}
-                  {t.type === "http" && <Button type="button" title="View runs" onClick={() => setViewingRuns(t)}><History className="size-4" /></Button>}
-                  {t.type === "http" && <Button type="button" onClick={() => {
-                    setEditing(t)
-                    setForm({
-                      name: t.name, description: t.description, parameters: JSON.stringify(t.parameters ?? {}, null, 2),
-                      url: t.config?.url ?? "", method: t.config?.method ?? "GET", auth_type: t.config?.auth_type ?? "none",
-                      auth_header: t.config?.auth_header ?? "X-API-Key", secret: "", timeout_seconds: t.timeout_seconds, risk: t.risk,
-                    })
-                  }}>Edit</Button>}
-                  {t.type === "http" && (
-                    <Button type="button" onClick={() => { if (confirm(`Delete tool “${t.name}”?`)) remove.mutate(t.id) }}><Trash2 className="size-4" /></Button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
+              </Card>
+            )
+          })}
+        </div>
       )}
 
       <Dialog open={showAdd} onClose={() => setShowAdd(false)} title="Add custom tool"
