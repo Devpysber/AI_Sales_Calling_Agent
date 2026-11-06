@@ -141,6 +141,47 @@ def test_inbound_creates_phoneless_lead_and_chat(agent_id, fakes):
     assert summaries == [chats[0][0]]
 
 
+def test_reply_send_retries_then_succeeds(agent_id, fakes, monkeypatch):
+    sent, _, _ = fakes
+    monkeypatch.setattr(ig, "_SEND_RETRY_BACKOFF_SECONDS", [0, 0])
+    calls = []
+    real_send = ig._send
+
+    def flaky_send(to, text, agent_id, lead_id):
+        calls.append(1)
+        if len(calls) < 3:
+            return {"ok": False, "error": "transient"}
+        return real_send(to, text, agent_id, lead_id)
+
+    monkeypatch.setattr(ig, "_send", flaky_send)
+    [m] = ig.parse_webhook(_payload(mid="mid.RETRY1", sender="17800000010"))
+    ig.handle_inbound(m)
+    assert len(calls) == 3
+    assert sent == [("17800000010", "echo: Hi, price?")]
+    chats = _chats(agent_id)
+    turns = [c for c in chats if c[2] and c[2][0]["mid"] == "mid.RETRY1"][0][2]
+    assert [t["role"] for t in turns] == ["customer", "assistant"]
+
+
+def test_reply_send_persistent_failure_no_reply_row(agent_id, fakes, monkeypatch):
+    sent, _, _ = fakes
+    monkeypatch.setattr(ig, "_SEND_RETRY_BACKOFF_SECONDS", [0, 0])
+    calls = []
+
+    def always_fails(to, text, agent_id, lead_id):
+        calls.append(1)
+        return {"ok": False, "error": "down"}
+
+    monkeypatch.setattr(ig, "_send", always_fails)
+    [m] = ig.parse_webhook(_payload(mid="mid.RETRY2", sender="17800000012"))
+    ig.handle_inbound(m)
+    assert len(calls) == 3
+    assert sent == []
+    chats = _chats(agent_id)
+    turns = [c for c in chats if c[2] and c[2][0]["mid"] == "mid.RETRY2"][0][2]
+    assert [t["role"] for t in turns] == ["customer"]
+
+
 def test_attachment_gets_generic_text_passed_to_agent(agent_id, fakes):
     # First slice: attachments become the text "[attachment]" and go through the normal chat_agent
     # turn (not a fixed reply) -- full media download/transcription is deferred, same as WhatsApp's was.
