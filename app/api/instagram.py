@@ -94,10 +94,13 @@ def chat(chat_id: int, agent_id: int = Depends(workspace)):
 
 @router.post("/chats/{chat_id}/reply")
 def reply(chat_id: int, body: Reply, request: Request, agent_id: int = Depends(workspace)):
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "Reply text cannot be blank.")
     with get_db() as db:
         _chat(db, agent_id, chat_id)
     try:
-        return ig.human_reply(chat_id, body.text.strip(), actor(request))
+        return ig.human_reply(chat_id, text, actor(request))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
