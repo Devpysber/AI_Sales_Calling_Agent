@@ -322,6 +322,9 @@ def tick():
         with contextlib.suppress(Exception):
             from app.services.whatsapp_service import close_idle_chats
             close_idle_chats()
+        with contextlib.suppress(Exception):
+            from app.services.instagram_service import close_idle_chats as close_idle_ig_chats
+            close_idle_ig_chats()
     from app.services.heal_service import SCHEDULER_TICK_KEY
     store.set_json(SCHEDULER_TICK_KEY, time.time())
 

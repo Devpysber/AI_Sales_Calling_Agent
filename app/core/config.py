@@ -154,6 +154,7 @@ class Settings(BaseSettings):
     instagram_verify_token: str = Field("", alias="INSTAGRAM_VERIFY_TOKEN")
     instagram_app_secret: str = Field("", alias="INSTAGRAM_APP_SECRET")
     instagram_agent_id: int = Field(0, alias="INSTAGRAM_AGENT_ID")  # fallback agent for inbound chats
+    instagram_idle_minutes: int = Field(30, alias="INSTAGRAM_IDLE_MINUTES")
 
     # ---------------- Email ----------------
     # Email: Resend (preferred) or SMTP

@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -180,6 +181,19 @@ def test_reply_send_persistent_failure_no_reply_row(agent_id, fakes, monkeypatch
     chats = _chats(agent_id)
     turns = [c for c in chats if c[2] and c[2][0]["mid"] == "mid.RETRY2"][0][2]
     assert [t["role"] for t in turns] == ["customer"]
+
+
+def test_close_idle_chats(agent_id, fakes):
+    _, summaries, _ = fakes
+    [m] = ig.parse_webhook(_payload(mid="mid.D", sender="17800000004"))
+    ig.handle_inbound(m)
+    assert ig.close_idle_chats() == 0
+    old = (datetime.now(timezone.utc) - timedelta(minutes=90)).replace(tzinfo=None)
+    cid = next(c for c in _chats(agent_id) if c[2] and c[2][0].get("mid") == "mid.D")[0]
+    with get_db() as db:
+        db.get(Conversation, cid).last_message_at = old
+    assert ig.close_idle_chats() == 1
+    assert summaries == [cid] and next(c for c in _chats(agent_id) if c[0] == cid)[1] == "closed"
 
 
 def test_attachment_gets_generic_text_passed_to_agent(agent_id, fakes):

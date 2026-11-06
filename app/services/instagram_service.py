@@ -25,7 +25,7 @@ import os
 import socket
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
@@ -386,6 +386,21 @@ def close_chat(conv_id: int) -> bool:
     if has_customer:
         _submit_chat_summary(conv_id, agent_id, lead_id, _history(conv_id))
     return True
+
+
+def close_idle_chats() -> int:
+    cutoff = _now() - timedelta(minutes=settings.instagram_idle_minutes)
+    with get_db() as db:
+        rows = [(c.id, c.last_message_at, c.created_at)
+                for c in db.scalars(select(Conversation).where(Conversation.channel == "instagram", Conversation.status == "open"))]
+    closed = 0
+    for conv_id, last_message_at, created in rows:
+        last = last_message_at or created
+        if last is not None and last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        if last is not None and last < cutoff and close_chat(conv_id):
+            closed += 1
+    return closed
 
 
 def _handle_batch(batch: list[dict], agent_id: int, ig_id: str) -> None:

@@ -22,6 +22,7 @@ send_instagram_message = _ig.send_instagram_message
 parse_webhook = _ig.parse_webhook
 verify_signature = _ig.verify_signature
 handle_inbound = _ig.handle_inbound
+close_idle_chats = _ig.close_idle_chats
 human_reply = _ig.human_reply
 set_ai_paused = _ig.set_ai_paused
 resolve_agent = _ig.resolve_agent
