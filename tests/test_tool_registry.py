@@ -42,6 +42,7 @@ def test_ensure_builtin_defaults_adds_new_tools_to_existing_agent(client):
         db.query(ToolDefinition).filter(ToolDefinition.agent_id == agent_id).delete()
         db.add(ToolDefinition(agent_id=agent_id, name="search_knowledge", description="old", type="builtin",
                               risk="read", enabled=True))
+    tool_registry.invalidate_seed_cache(agent_id)
     tool_registry.ensure_builtin_defaults(agent_id)
     with get_db() as db:
         rows = db.query(ToolDefinition).filter(ToolDefinition.agent_id == agent_id).all()

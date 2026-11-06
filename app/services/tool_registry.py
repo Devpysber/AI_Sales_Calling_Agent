@@ -49,6 +49,19 @@ _BUILTIN_RISK = {
 }
 
 
+_seeded_cache: set[int] = set()
+_SEEDED_CACHE_LOCK = threading.Lock()
+
+
+def invalidate_seed_cache(agent_id: int | None = None) -> None:
+    """Drop `agent_id` (or everything, if None) from the seeded-agents cache. Test-reset hook only."""
+    with _SEEDED_CACHE_LOCK:
+        if agent_id is None:
+            _seeded_cache.clear()
+        else:
+            _seeded_cache.discard(agent_id)
+
+
 def ensure_builtin_defaults(agent_id: int) -> None:
     """Additively seed every builtin ToolDefinition name in CUSTOMER_TOOLS this agent doesn't have yet.
 
@@ -56,6 +69,9 @@ def ensure_builtin_defaults(agent_id: int) -> None:
     CUSTOMER_TOOLS name added later - an agent created back when there were only 6 builtins gets the
     rest added here too, instead of being stuck on the original set.
     """
+    if agent_id in _seeded_cache:
+        return
+
     from app.core.database import get_db
     from app.models.channel import ToolDefinition
 
@@ -69,6 +85,9 @@ def ensure_builtin_defaults(agent_id: int) -> None:
                 agent_id=agent_id, name=name, description=tool["function"].get("description", ""),
                 type="builtin", risk=_BUILTIN_RISK.get(name, "read"), enabled=True,
             ))
+
+    with _SEEDED_CACHE_LOCK:
+        _seeded_cache.add(agent_id)
 
 
 def _builtin_schema(name: str) -> dict | None:
