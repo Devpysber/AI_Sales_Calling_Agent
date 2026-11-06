@@ -1,6 +1,7 @@
 """Chat-channel tool-calling loop: native and JSON-fallback paths, isolation, and permission checks."""
 
 import json
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
@@ -126,6 +127,18 @@ def test_send_payment_link_not_configured(client):
     result, status = chat_agent._run_tool("send_payment_link", {"amount": "100"}, agent_id, None, lead["id"])
     assert status == "ok"
     assert "not configured" in result.lower()
+
+
+def test_stale_pending_confirm_expires_and_asks_again(client):
+    """A pending_confirm ToolRun older than CONFIRM_TTL_SECONDS must not be treated as a live confirmation."""
+    agent_id = client.post("/api/agents", json={"name": "Stale Confirm Test Co"}).json()["id"]
+    lead = _lead(agent_id)
+    with get_db() as db:
+        db.add(ToolRun(agent_id=agent_id, conversation_id=None, tool_name="send_payment_link",
+                        arguments_json=json.dumps({"amount": "100"}), result="", status="pending_confirm",
+                        duration_ms=0, created_at=datetime.utcnow() - timedelta(seconds=700)))
+    result, status = chat_agent._run_tool("send_payment_link", {"amount": "100"}, agent_id, None, lead["id"])
+    assert status == "pending_confirm"
 
 
 def test_money_risk_hits_confirmation_gate(client):

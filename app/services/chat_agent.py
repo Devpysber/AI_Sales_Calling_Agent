@@ -9,6 +9,7 @@ context, never read from the model's own JSON arguments.
 import json
 import logging
 import time
+from datetime import datetime, timedelta
 
 from app.services import agent as agent_svc
 from app.services import llm
@@ -26,6 +27,7 @@ MAX_TOOL_ROUNDS = 4
 # gating "write" too is left to a business's own custom tools (set risk="write" there) per the PRD note
 # that write *may* warrant it; the 6 defaults keep their existing no-gate behaviour (Day-3 tests rely on it).
 _CONFIRM_RISKS = ("money",)
+CONFIRM_TTL_SECONDS = 600
 
 
 def _log_tool_run(agent_id: int, conversation_id: int | None, name: str, args: dict, result: str, status: str,
@@ -46,10 +48,12 @@ def _pending_confirm(agent_id: int, conversation_id: int | None, name: str) -> b
     customer's confirmation, not the first ask) — clears it so the next ask starts fresh."""
     from app.core.database import get_db
     from app.models.channel import ToolRun
+    cutoff = datetime.utcnow() - timedelta(seconds=CONFIRM_TTL_SECONDS)
     with get_db() as db:
         row = (db.query(ToolRun)
                .filter(ToolRun.agent_id == agent_id, ToolRun.conversation_id == conversation_id,
-                       ToolRun.tool_name == name, ToolRun.status == "pending_confirm")
+                       ToolRun.tool_name == name, ToolRun.status == "pending_confirm",
+                       ToolRun.created_at >= cutoff)
                .order_by(ToolRun.id.desc()).first())
         if row:
             row.status = "confirmed"
