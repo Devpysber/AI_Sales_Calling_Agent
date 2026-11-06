@@ -550,7 +550,7 @@ def send_quick_replies_tool(agent_id: int, lead_id, conversation_id, body: str, 
     said as plain text instead."""
     channel = _conversation_channel(conversation_id)
     if channel not in ("whatsapp", "instagram"):
-        return "Quick-reply buttons are only available on WhatsApp today; say the options as plain text instead."
+        return "Quick-reply buttons are only available on WhatsApp or Instagram today; say the options as plain text instead."
     if not lead_id:
         return "Failed: no lead on file yet."
     opts = [str(o).strip() for o in (options or []) if str(o).strip()][:3]
@@ -578,7 +578,7 @@ def send_options_list_tool(agent_id: int, lead_id, conversation_id, body: str, o
     options said as plain text instead."""
     channel = _conversation_channel(conversation_id)
     if channel not in ("whatsapp", "instagram"):
-        return "An options list is only available on WhatsApp today; say the options as plain text instead."
+        return "An options list is only available on WhatsApp or Instagram today; say the options as plain text instead."
     if not lead_id:
         return "Failed: no lead on file yet."
     opts = [str(o).strip() for o in (options or []) if str(o).strip()][:10]
