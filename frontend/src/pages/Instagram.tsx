@@ -3,8 +3,9 @@
 // merge of both channels into one component is future cleanup, not today's job — this keeps the
 // already-working WhatsApp.tsx untouched.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ExternalLink, Camera as InstagramIcon, Send } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { ExternalLink, Camera as InstagramIcon, Send, Sparkles, User } from "lucide-react"
+import { Fragment, useEffect, useRef, useState } from "react"
+import type { ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { toast } from "sonner"
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton, Textarea } from "@/components/ui"
@@ -13,6 +14,18 @@ import { useAgent } from "@/lib/agent"
 import { cn } from "@/lib/utils"
 
 type Turn = { role: "customer" | "assistant" | "human"; text: string; at?: string; by?: string }
+
+// Very small WhatsApp-style plain-text markup renderer: *bold*, **bold**, _italic_, ~strike~
+function renderFormatted(text: string): ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|_[^_]+_|~[^~]+~)/g)
+  return parts.map((part, i) => {
+    if (/^\*\*[^*]+\*\*$/.test(part)) return <strong key={i}>{part.slice(2, -2)}</strong>
+    if (/^\*[^*]+\*$/.test(part)) return <strong key={i}>{part.slice(1, -1)}</strong>
+    if (/^_[^_]+_$/.test(part)) return <em key={i}>{part.slice(1, -1)}</em>
+    if (/^~[^~]+~$/.test(part)) return <s key={i}>{part.slice(1, -1)}</s>
+    return <Fragment key={i}>{part}</Fragment>
+  })
+}
 type Chat = {
   id: number; lead_id: number | null; lead_name: string | null; lead_phone: string | null; status: string
   last_text: string; last_at: string | null; message_count: number; ai_paused: boolean
@@ -93,11 +106,20 @@ export default function Instagram() {
                 </div>
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-4">
                   {turns.map((t, i) => (
-                    <div key={i} className={cn("flex", t.role === "customer" ? "justify-start" : "justify-end")}>
-                      <div className={cn("max-w-[80%] rounded-2xl px-3 py-2 text-sm break-words whitespace-pre-wrap",
+                    <div key={i} className={cn("flex flex-col", t.role === "customer" ? "items-start" : "items-end")}>
+                      {t.role !== "customer" && (
+                        <div className={cn("mb-1 flex items-center gap-1.5 text-xs font-semibold",
+                          t.role === "human" ? "text-success" : "text-brand")}>
+                          <span className={cn("grid size-4 place-items-center rounded-full [&_svg]:size-2.5",
+                            t.role === "human" ? "bg-success/15" : "bg-brand-soft")}>
+                            {t.role === "human" ? <User /> : <Sparkles />}
+                          </span>
+                          {t.role === "human" ? (t.by && t.by !== "admin" ? t.by : "You") : "AI"}
+                        </div>
+                      )}
+                      <div className={cn("w-fit max-w-[min(80%,32rem)] rounded-2xl px-3 py-2 text-sm break-words whitespace-pre-wrap",
                         t.role === "customer" ? "bg-surface-2" : t.role === "human" ? "bg-success/15 text-fg" : "bg-brand-soft text-fg")}>
-                        {t.role === "human" && <div className="mb-0.5 text-xs font-semibold text-success">{t.by && t.by !== "admin" ? t.by : "You"}</div>}
-                        {t.text}
+                        {renderFormatted(t.text)}
                         <div className="mt-0.5 text-right text-[10px] text-muted">{time(t.at)}</div>
                       </div>
                     </div>
