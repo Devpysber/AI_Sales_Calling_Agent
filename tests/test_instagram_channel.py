@@ -350,3 +350,60 @@ def test_options_list_tool_routes_to_instagram(agent_id, monkeypatch):
     assert text == "Choose:"
     assert len(sent_opts) == 10  # capped at 10 before reaching send_instagram_quick_replies
     assert max_options == 10
+
+
+def test_send_instagram_document_posts_file_attachment_payload(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    class Res:
+        status_code = 200
+        text = ""
+        def json(self): return {}
+
+    class Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, **k):
+            captured["url"] = url
+            captured["json"] = k.get("json")
+            return Res()
+
+    captured = {}
+    monkeypatch.setattr(ig, "settings", SimpleNamespace(instagram_token="t", instagram_page_id="PAGE-1"))
+    monkeypatch.setattr(ig.httpx, "AsyncClient", Client)
+    out = asyncio.run(ig.send_instagram_document("17800000001", None, None, "https://example.com/brochure.pdf"))
+    assert out["ok"] is True
+    assert "PAGE-1/messages" in captured["url"]
+    payload = captured["json"]
+    assert payload["recipient"] == {"id": "17800000001"}
+    assert payload["message"]["attachment"] == {
+        "type": "file",
+        "payload": {"url": "https://example.com/brochure.pdf", "is_reusable": True},
+    }
+
+
+def test_send_brochure_tool_routes_to_instagram(agent_id, monkeypatch):
+    from app.services import agent_tools
+    from app.services.crm_service import CRMService
+
+    crm = CRMService(agent_id)
+    lead = crm.create({"phone": None, "name": "IG brochure"}, actor="system", allow_no_phone=True)
+    with get_db() as db:
+        db.add(ContactIdentity(agent_id=agent_id, lead_id=lead["id"], channel="instagram", external_id="ig-doc"))
+        conv = Conversation(agent_id=agent_id, lead_id=lead["id"], channel="instagram", status="open")
+        db.add(conv)
+        db.flush()
+        conv_id = conv.id
+
+    calls = []
+
+    async def fake_send(to, agent_id, lead_id, link):
+        calls.append((to, link))
+        return {"ok": True}
+
+    monkeypatch.setattr(ig, "send_instagram_document", fake_send)
+    out = agent_tools.send_brochure_tool(agent_id, lead["id"], conv_id, "https://example.com/brochure.pdf")
+    assert out == "Brochure sent."
+    assert calls == [("ig-doc", "https://example.com/brochure.pdf")]

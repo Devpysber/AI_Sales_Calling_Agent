@@ -513,20 +513,30 @@ def check_my_order_or_deal_status_tool(agent_id: int, lead_id) -> str:
 
 
 def send_brochure_tool(agent_id: int, lead_id, conversation_id, link: str, filename: str | None = None) -> str:
-    """Send a document (brochure/price list) over the channel's real send path. WhatsApp sends it as an
-    actual document message (reusing the same Meta Graph API send path as chat replies); other channels
-    (Instagram has no document-send today) get the link as plain text instead."""
+    """Send a document (brochure/price list) over the channel's real send path. WhatsApp and Instagram
+    send it as an actual file message (reusing the same Meta Graph API send path as chat replies); other
+    channels get the link as plain text instead."""
     if not lead_id:
         return "Failed: no lead on file yet."
     if not link:
         return "Failed: no document link given."
     crm = CRMService(agent_id)
+    channel = _conversation_channel(conversation_id)
     phone = (crm.get(int(lead_id)) or {}).get("phone")
-    if _conversation_channel(conversation_id) == "whatsapp" and phone:
+    if channel == "whatsapp" and phone:
         from app.services.whatsapp_service import send_whatsapp_document
         outcome = send_whatsapp_document(phone, agent_id, lead_id, link, filename=filename)
         if outcome.get("ok"):
             return "Brochure sent."
+        return f"Failed to send brochure as a document, sending the link instead: {link}"
+    if channel == "instagram":
+        from app.services.instagram_service import send_instagram_document, _lead_ig_id
+        ig_id = _lead_ig_id(agent_id, int(lead_id))
+        if ig_id:
+            import asyncio
+            outcome = asyncio.run(send_instagram_document(ig_id, agent_id, lead_id, link))
+            if outcome.get("ok"):
+                return "Brochure sent."
         return f"Failed to send brochure as a document, sending the link instead: {link}"
     return f"Here is the document: {link}"
 

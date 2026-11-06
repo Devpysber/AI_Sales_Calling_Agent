@@ -276,6 +276,33 @@ async def send_instagram_quick_replies(to: str, agent_id: int | None, lead_id: i
         return {"ok": False, "error": str(e)}
 
 
+async def send_instagram_document(to: str, agent_id: int | None, lead_id: int | None, link: str) -> dict:
+    """Send a file attachment (brochure/price list) via Instagram Messaging's /messages endpoint,
+    mirroring send_instagram_message's structure. Instagram's attachment format has no filename/caption
+    fields, so none are sent."""
+    token = settings.instagram_token
+    page_id = settings.instagram_page_id
+    if not (token and page_id):
+        events.record("instagram.queued", f"Instagram ready for {to} (Awaiting Instagram credentials)",
+                      link[:120], agent_id=agent_id, lead_id=lead_id, actor="system")
+        return {"ok": False, "error": "Instagram credentials not configured"}
+    url = f"https://graph.facebook.com/v19.0/{page_id}/messages"
+    payload = {"recipient": {"id": to},
+               "message": {"attachment": {"type": "file", "payload": {"url": link, "is_reusable": True}}}}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(url, params={"access_token": token}, json=payload)
+            if res.status_code in (200, 201):
+                events.record("instagram.sent", f"Instagram dispatched to {to}", link[:120],
+                              agent_id=agent_id, lead_id=lead_id, actor="ai")
+                return {"ok": True, "provider": "meta", "data": res.json()}
+            log.warning("Instagram send response %s: %s", res.status_code, res.text)
+            return {"ok": False, "error": f"Meta HTTP {res.status_code}: {res.text}"}
+    except Exception as e:
+        log.exception("Instagram dispatch error: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
