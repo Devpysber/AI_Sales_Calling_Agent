@@ -8,7 +8,7 @@ import { api } from '@/lib/api'
 import { ChartNowDot } from '@/components/Live'
 import { AnimatedNumber, Stagger } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
-import type { AnalyticsKpis, AnalyticsReport, AnalyticsUsage } from '@/lib/types'
+import type { AnalyticsKpis, AnalyticsReport, AnalyticsUsage, ChannelAnalyticsReport } from '@/lib/types'
 import { cn, DAYS, formatDuration, titleCase } from '@/lib/utils'
 
 const tooltipStyle = { background: 'var(--elevated)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12, boxShadow: 'var(--shadow-pop)' }
@@ -100,6 +100,13 @@ export default function Analytics() {
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery<AnalyticsReport>({
     queryKey: ['analytics', days],
     queryFn: () => api<AnalyticsReport>(`${base}/analytics`, { params: { days } }),
+    placeholderData: keepPreviousData,
+    refetchInterval: 30000,
+  })
+
+  const { data: channelData } = useQuery<ChannelAnalyticsReport>({
+    queryKey: ['analytics-channels', days],
+    queryFn: () => api<ChannelAnalyticsReport>(`${base}/analytics/channels`, { params: { days } }),
     placeholderData: keepPreviousData,
     refetchInterval: 30000,
   })
@@ -281,6 +288,47 @@ export default function Analytics() {
               </div>
             </Card>
           </div>
+
+          {channelData && (channelData.channels.length > 0 || channelData.tools.length > 0) && (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Card className="overflow-hidden">
+                <CardHeader title="By channel" description="Voice, WhatsApp and Instagram volume and response time" />
+                <div className="w-full min-w-0 overflow-x-auto overscroll-x-contain">
+                  <table className="rows-in w-full min-w-[480px] text-sm">
+                    <thead><tr className="border-y border-border bg-surface-2/50 text-left text-[11px] font-bold tracking-wider text-muted uppercase">
+                      <th className="px-5 py-2.5">Channel</th><th className="px-3 py-2.5 text-right">Conversations</th>
+                      <th className="px-3 py-2.5 text-right">Resolved</th><th className="px-5 py-2.5 text-right">Avg. first response</th></tr></thead>
+                    <tbody className="divide-y divide-border">
+                      {channelData.channels.map((c) => (
+                        <tr key={c.channel}><td className="px-5 py-2.5 font-semibold">{titleCase(c.channel)}</td>
+                          <td className="px-3 text-right tabular-nums">{c.conversations}</td>
+                          <td className="px-3 text-right tabular-nums">{c.closed} <span className="text-xs text-muted">{pct(c.resolution_rate)}</span></td>
+                          <td className="px-5 text-right tabular-nums">{c.avg_first_response_seconds != null ? formatDuration(c.avg_first_response_seconds) : '—'}</td></tr>
+                      ))}
+                      {!channelData.channels.length && <tr><td colSpan={4} className="px-5 py-8 text-center text-muted">No channel activity in this period.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+              <Card className="overflow-hidden">
+                <CardHeader title="Tool usage" description="What the agent's tools were called to do, and how often it worked" />
+                <div className="w-full min-w-0 overflow-x-auto overscroll-x-contain">
+                  <table className="rows-in w-full min-w-[420px] text-sm">
+                    <thead><tr className="border-y border-border bg-surface-2/50 text-left text-[11px] font-bold tracking-wider text-muted uppercase">
+                      <th className="px-5 py-2.5">Tool</th><th className="px-3 py-2.5 text-right">Calls</th><th className="px-5 py-2.5 text-right">Success rate</th></tr></thead>
+                    <tbody className="divide-y divide-border">
+                      {channelData.tools.map((t) => (
+                        <tr key={t.tool_name}><td className="max-w-[200px] truncate px-5 py-2.5 font-semibold">{t.tool_name}</td>
+                          <td className="px-3 text-right tabular-nums">{t.calls}</td>
+                          <td className="px-5 text-right tabular-nums">{pct(t.success_rate)}</td></tr>
+                      ))}
+                      {!channelData.tools.length && <tr><td colSpan={3} className="px-5 py-8 text-center text-muted">No tool calls in this period.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </div>
+          )}
         </div>
       )}
     </>

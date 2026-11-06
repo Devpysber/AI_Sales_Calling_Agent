@@ -219,6 +219,13 @@ export interface AnalyticsReport {
   sources: { source: string; leads: number; meetings: number; hot: number }[]
 }
 
+export interface ChannelAnalyticsReport {
+  days: number
+  channels: { channel: string; conversations: number; open: number; closed: number
+    resolution_rate: number | null; avg_first_response_seconds: number | null }[]
+  tools: { tool_name: string; calls: number; ok: number; error: number; success_rate: number | null }[]
+}
+
 export type Board = Record<string, { total: number; items: Lead[] }>
 
 export interface PlaygroundUsage { used: number; limit: number; remaining: number | null; resets_at: string; exempt: boolean }

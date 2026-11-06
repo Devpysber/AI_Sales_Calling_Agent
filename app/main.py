@@ -4,6 +4,7 @@ frontend build exists) the dashboard SPA.
 """
 
 import asyncio
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -15,8 +16,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import agents, calls, intake, knowledge, leads, plivo, system, whatsapp
-from app.core import auth
+from app.api import accounts, agents, calls, crm, instagram, intake, knowledge, leads, plivo, system, tools, whatsapp, whatsapp_cloud
+from app.core import auth, store
 from app.core.config import settings
 from app.core.database import run_migrations
 from app.core.logging import get_logger, setup_logging
@@ -71,6 +72,17 @@ async def lifespan(app: FastAPI):
     if settings.run_scheduler:
         from app.services.scheduler import scheduler_loop
         task = asyncio.create_task(scheduler_loop())
+    # WhatsApp inbound queue consumer: runs here too (not just in the dedicated `app.worker` process)
+    # so a single-container deploy (docker-compose.yml) still consumes the Redis queue; when no
+    # dedicated worker exists this is the only consumer. Several processes/replicas may run this
+    # concurrently -- that's the intended scale-out story (BLPOP + per-contact Redis lock).
+    queue_stop = None
+    if isinstance(store.store, store.RedisStore):
+        from app.services.whatsapp_cloud_service import queue_worker_loop
+        from app.services.instagram_service import queue_worker_loop as ig_queue_worker_loop
+        queue_stop = threading.Event()
+        asyncio.create_task(asyncio.to_thread(queue_worker_loop, queue_stop))
+        asyncio.create_task(asyncio.to_thread(ig_queue_worker_loop, queue_stop))
     log.info("%s %s started (%s)", settings.app_name, settings.app_version, settings.environment)
     
     # Uploads and coverage analyses run on daemon threads; a restart mid-way left them "processing" /
@@ -124,6 +136,8 @@ async def lifespan(app: FastAPI):
     yield
     if task:
         task.cancel()
+    if queue_stop:
+        queue_stop.set()
 
 
 app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan,
@@ -153,9 +167,14 @@ async def request_context(request: Request, call_next):
 
 
 
-for module in (auth, agents, leads, calls, knowledge, system, plivo, intake, whatsapp):
+for module in (auth, accounts, agents, leads, calls, knowledge, system, plivo, intake, crm, whatsapp, whatsapp_cloud, instagram, tools):
     app.include_router(module.router)
+app.include_router(tools.packs_router)
+app.include_router(accounts.public)
 app.include_router(intake.public)
+app.include_router(crm.public)
+app.include_router(whatsapp_cloud.public)
+app.include_router(instagram.public)
 
 
 # ---------------- SPA (single-container / local mode; nginx serves it in production) ----------------

@@ -14,7 +14,7 @@ class Lead(Base):
     agent_id: Mapped[int | None] = mapped_column(Integer, index=True)
     name: Mapped[str | None] = mapped_column(String(255))
     company: Mapped[str | None] = mapped_column(String(255))
-    phone: Mapped[str] = mapped_column(String(32), index=True)
+    phone: Mapped[str | None] = mapped_column(String(32), index=True)
     email: Mapped[str | None] = mapped_column(String(255))
     city: Mapped[str | None] = mapped_column(String(128))
     language: Mapped[str] = mapped_column(String(16), default="en-IN")

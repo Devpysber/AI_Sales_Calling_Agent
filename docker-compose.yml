@@ -1,4 +1,4 @@
-# Single-server setup: one app container (API + dashboard + scheduler), Postgres, Redis.
+# Single-server setup: one app container (API + dashboard + scheduler + WhatsApp inbound queue consumer), Postgres, Redis.
 #   docker compose up -d --build
 # For horizontal scaling use docker-compose.prod.yml.
 

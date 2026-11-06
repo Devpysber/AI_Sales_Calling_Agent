@@ -131,6 +131,13 @@ export default function AgentSettings() {
         </form>
       </Card>
 
+      <Card>
+        <CardHeader title="Channels" description="WhatsApp and Instagram connection settings moved to the Channels tab." />
+        <div className="flex justify-end p-4 sm:p-5">
+          <Link to={path('/channels')}><Button type="button">Open Channels</Button></Link>
+        </div>
+      </Card>
+
       <div className="grid gap-3 sm:grid-cols-3">
         {links.map(({ Icon, title, to }) => (
           <Link key={to} to={path(to)} className="group glint relative block min-w-0 overflow-hidden rounded-[var(--radius-card)] shadow-card transition duration-300 hover:-translate-y-0.5 hover:shadow-pop">

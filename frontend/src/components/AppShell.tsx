@@ -1,8 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Activity, BarChart3, BookOpen, Bot, CalendarClock, Check, ChevronsLeft, ChevronsRight, ChevronsUpDown, Columns3,
-  Download, Keyboard, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Lock, Mail, Menu, MessageSquare, MessageSquareText, Moon, Pause, PhoneCall, Plus, Search, Settings,
-  SlidersHorizontal, Sparkles, Sun, Upload, UserPlus, Users, X,
+  Download, Camera, Keyboard, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Lock, Mail, Menu, MessageCircle, MessageSquare, MessageSquareText, Moon, Pause, PhoneCall, Plug, Plus, Search, Settings,
+  SlidersHorizontal, Sparkles, Sun, Upload, UserPlus, Users, Wrench, X,
 } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate, useNavigationType, useParams } from 'react-router-dom'
@@ -28,6 +28,8 @@ const AGENT_NAV: { section: string; items: NavItem[] }[] = [
       { to: '/leads', label: 'Leads', icon: Users, key: 'l', count: (a) => a.stats.leads || null },
       { to: '/pipeline', label: 'Pipeline', icon: Columns3, key: 'p', count: (a) => a.stats.hot ? <span className="text-danger">{a.stats.hot} hot</span> : null },
       { to: '/calls', label: 'Calls', icon: PhoneCall, key: 'c', count: (a) => a.stats.live ? <span className="rounded-full bg-success px-1.5 text-white">{a.stats.live} live</span> : a.stats.calls_today || null },
+      { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, key: 'w' },
+      { to: '/instagram', label: 'Instagram', icon: Camera, key: 'n' },
       { to: '/inbound', label: 'Inbound & transfer', icon: PhoneIncoming, key: 'i' },
     ],
   },
@@ -42,8 +44,10 @@ const AGENT_NAV: { section: string; items: NavItem[] }[] = [
     section: 'Build', items: [
       { to: '/agent', label: 'Persona & playground', icon: Bot, key: 'g' },
       { to: '/knowledge', label: 'Knowledge base', icon: BookOpen, key: 'k', count: (a) => a.stats.documents || null },
-      { to: '/whatsapp', label: 'WhatsApp', icon: MessageSquare, key: 'w' },
+      { to: '/whatsapp-cloud', label: 'WhatsApp (Cloud API)', icon: MessageSquare, key: 'y' },
       { to: '/automation', label: 'Automation', icon: CalendarClock, key: 'u', count: (a) => a.automation_on ? <span className="text-success">On</span> : null },
+      { to: '/channels', label: 'Channels', icon: Plug, key: 'x' },
+      { to: '/tools', label: 'Tools', icon: Wrench, key: 't' },
       { to: '/settings', label: 'Agent settings', icon: SlidersHorizontal, key: 's' },
     ],
   },

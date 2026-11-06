@@ -302,6 +302,7 @@ class CRMService:
             query = self._scoped(select(Lead)).where(
                 Lead.do_not_call.is_(False),
                 or_(Lead.call_status == "Pending", (Lead.status == "New") & Lead.call_status.is_(None)),
+                Lead.phone.isnot(None), Lead.phone != "",
                 ~(Lead.phone.like("+91%") & (func.length(Lead.phone) != 13)),
                 or_(Lead.callback_at.is_(None), Lead.callback_at == ""),  # scheduled calls belong to the callback job
                 # The same ten-minute cool-off the call queue applies. Without it auto-dial and the queue
@@ -317,6 +318,7 @@ class CRMService:
                 Lead.do_not_call.is_(False),
                 Lead.call_status.in_(("No Answer", "Busy", "Failed")),
                 Lead.retry_count < max_retries,
+                Lead.phone.isnot(None), Lead.phone != "",
                 ~(Lead.phone.like("+91%") & (func.length(Lead.phone) != 13)),
                 or_(Lead.last_contacted_at.is_(None), Lead.last_contacted_at < cutoff),
             ).order_by(Lead.last_contacted_at).limit(limit)
@@ -336,6 +338,7 @@ class CRMService:
             query = self._scoped(select(Lead)).where(Lead.call_status == "Pending", Lead.do_not_call.is_(False))
             if dialable_only:
                 query = query.where(
+                    Lead.phone.isnot(None), Lead.phone != "",
                     ~(Lead.phone.like("+91%") & (func.length(Lead.phone) != 13)),
                     or_(Lead.callback_at.is_(None), Lead.callback_at == ""),
                     # never ring someone again minutes after a call
@@ -445,10 +448,10 @@ class CRMService:
                 setattr(lead, key, value)
         return changes
 
-    def create(self, data: dict, actor: str = "admin") -> dict:
+    def create(self, data: dict, actor: str = "admin", allow_no_phone: bool = False) -> dict:
         if self.agent_id is None:
             raise ValueError("A lead must belong to an agent.")
-        if not normalize_phone(data.get("phone")):
+        if not normalize_phone(data.get("phone")) and not (allow_no_phone and not data.get("phone")):
             raise ValueError("A valid phone number is required (10-digit Indian or +country code).")
         with get_db() as db:
             lead = Lead(agent_id=self.agent_id, status="New", language="en-IN", retry_count=0, owner_user_id=self.owner_user_id)

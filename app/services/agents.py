@@ -104,6 +104,8 @@ PROFILE_DEFAULTS = {
     "max_call_minutes": 5,
     # Call routing: a human number to hand callers to
     "transfer_number": "",
+    "whatsapp_phone_number_id": "",    # Meta phone number ID this agent chats from; empty = server default
+    "instagram_account_id": "",        # Instagram-connected Page/IG account ID shown on the Channels tab (display only today; routing is still env-based, see instagram_service.resolve_agent)
     "team_members": [],
     "inbound_mode": "ai",              # ai | forward (ring the transfer number directly)
     "transfer_on_request": True,       # AI hands over when the caller asks for a person
@@ -115,6 +117,7 @@ PROFILE_DEFAULTS = {
     "record_calls": False,
     "detect_voicemail": False,
     "agent_password": "",
+    "industry_pack": "",               # key of the last-applied industry pack (industry_packs.py), if any
 }
 
 DEFAULTS = {"profile": PROFILE_DEFAULTS, "automation": AUTOMATION_DEFAULTS}
@@ -409,6 +412,9 @@ def create(data: dict, actor: str = "admin", created_by: str | None = None, orga
     events.record("agent.created", f"Agent created: {result['name']}", agent_id=result["id"], actor=actor)
     if result.get("phone_number"):
         _wire_own_number(result["id"], result["phone_number"], actor)
+    with contextlib.suppress(Exception):
+        from app.services.tool_registry import ensure_builtin_defaults
+        ensure_builtin_defaults(result["id"])
     return result
 
 

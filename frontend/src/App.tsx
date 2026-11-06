@@ -65,11 +65,15 @@ const Agent = lazy(page(() => import('@/pages/Agent')))
 const Knowledge = lazy(page(() => import('@/pages/Knowledge')))
 const Automation = lazy(page(() => import('@/pages/Automation')))
 const WhatsApp = lazy(page(() => import('@/pages/WhatsApp')))
+const WhatsAppCloud = lazy(page(() => import('@/pages/WhatsAppCloud')))
 const AgentSettings = lazy(page(() => import('@/pages/AgentSettings')))
 const SettingsPage = lazy(page(() => import('@/pages/Settings')))
 const ProfilePage = lazy(page(() => import('@/pages/Profile')))
 const Inbound = lazy(page(() => import('@/pages/Inbound')))
 const Emails = lazy(page(() => import('@/pages/Emails')))
+const InstagramPage = lazy(page(() => import('@/pages/Instagram')))
+const Channels = lazy(page(() => import('@/pages/Channels')))
+const ToolsPage = lazy(page(() => import('@/pages/Tools')))
 
 const Loading = () => <div className="grid h-64 place-items-center"><Spinner className="size-6" /></div>
 
@@ -130,10 +134,14 @@ export default function App() {
           <Route path="calls" element={<Calls />} />
           <Route path="inbound" element={<Inbound />} />
           <Route path="emails" element={<Emails />} />
+          <Route path="whatsapp" element={<WhatsApp />} />
+          <Route path="whatsapp-cloud" element={<WhatsAppCloud />} />
+          <Route path="instagram" element={<InstagramPage />} />
+          <Route path="channels" element={<Channels />} />
+          <Route path="tools" element={<ToolsPage />} />
           <Route path="activity" element={<ActivityPage />} />
           <Route path="agent" element={<Agent />} />
           <Route path="knowledge" element={<Knowledge />} />
-          <Route path="whatsapp" element={<WhatsApp />} />
           <Route path="automation" element={<Automation />} />
           <Route path="settings" element={<AgentSettings />} />
           <Route path="*" element={<Navigate to="." replace />} />

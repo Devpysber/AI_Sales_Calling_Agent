@@ -470,6 +470,19 @@ def past_conversations(agent_id: int, lead: dict, limit: int = 3) -> str:
             when = (created + timedelta(hours=5, minutes=30)).strftime("%d %b %H:%M") if created else "earlier"
             tag = ", ".join(x for x in (direction, (outcome or "").replace("_", " ")) if x)
             lines.append(f"- {when} ({tag}, {duration or 0}s): {summary}")
+        # A live call should know about prior WhatsApp chats with this lead too, capped small (2 chats,
+        # 200 chars of summary each) so this doesn't eat into the voice prompt's token budget.
+        from app.models.channel import Conversation
+        with get_db() as db:
+            chats = db.execute(
+                select(Conversation.created_at, Conversation.summary)
+                .where(Conversation.agent_id == agent_id, Conversation.lead_id == lead_id,
+                       Conversation.channel == "whatsapp", Conversation.summary.is_not(None))
+                .order_by(Conversation.id.desc()).limit(2)
+            ).all()
+        for created, summary in chats:
+            when = (created + timedelta(hours=5, minutes=30)).strftime("%d %b %H:%M") if created else "earlier"
+            lines.append(f"- {when} (whatsapp): {(summary or '')[:200]}")
         return "\n".join(lines)
     return _cached(("calls", agent_id, lead_id), build)
 
@@ -1053,7 +1066,7 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
             log.warning("Prompt still over budget after trimming: %s chars (budget %s)", size(), budget)
     messages = [{"role": "system", "content": system}]
     for turn in window:
-        messages.append({"role": "assistant" if turn["role"] == "assistant" else "user", "content": turn["text"]})
+        messages.append({"role": "assistant" if turn["role"] in ("assistant", "human") else "user", "content": turn["text"]})
     messages.append({"role": "user", "content": customer_text})
     return messages, knowledge
 
@@ -1471,7 +1484,7 @@ def compact_history(history: list[dict], prior: str | None = None, since: int = 
     older = history[since:-MAX_HISTORY_TURNS]
     if not older:
         return prior or ""
-    transcript = "\n".join(f"{'Agent' if t['role'] == 'assistant' else 'Customer'}: {t['text']}" for t in older)
+    transcript = "\n".join(f"{'Agent' if t['role'] in ('assistant', 'human') else 'Customer'}: {t['text']}" for t in older)
     user = (f"Previous summary:\n{prior}\n\n" if prior else "") + f"Call so far:\n{transcript}"
     result = llm.complete([{"role": "system", "content": COMPACT_PROMPT}, {"role": "user", "content": user}],
                           max_tokens=160, temperature=0.1, providers=settings.summary_llm_providers, timeout=12)
@@ -1479,7 +1492,7 @@ def compact_history(history: list[dict], prior: str | None = None, since: int = 
 
 
 def summarize(history: list[dict]) -> dict:
-    transcript = "\n".join(f"{'Agent' if t['role'] == 'assistant' else 'Customer'}: {t['text']}" for t in history)
+    transcript = "\n".join(f"{'Agent' if t['role'] in ('assistant', 'human') else 'Customer'}: {t['text']}" for t in history)
     messages = [{"role": "system", "content": SUMMARY_PROMPT.format(today=datetime.now(IST).strftime("%A %d %B %Y, %H:%M"))},
                 {"role": "user", "content": transcript}]
     providers = settings.summary_llm_providers
