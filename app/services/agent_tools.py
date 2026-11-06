@@ -679,6 +679,110 @@ def escalate_urgent_tool(agent_id: int, lead_id, conversation_id, reason: str = 
     return "This has been escalated to the team as urgent; someone will reach out shortly."
 
 
+def check_availability_tool(agent_id: int, lead_id, item: str = "") -> str:
+    """Orchestrates a configured custom 'http' tool named 'availability_check' if this business has set
+    one up (same thin pass-through as send_payment_link_tool); otherwise states plainly that availability
+    checking is not connected, rather than fabricating a yes/no answer."""
+    from app.services import tool_registry
+    defn = tool_registry.get_definition(agent_id, "availability_check")
+    if not defn or defn.get("type") != "http" or not defn.get("enabled"):
+        return "Availability checking isn't connected for this business yet."
+    try:
+        outcome = tool_registry.run_http_tool(defn, {"item": item}, {"lead_id": lead_id})
+    except Exception as e:
+        return f"Failed to check availability: {e}"
+    return outcome["result"] if outcome.get("ok") else (outcome.get("error") or "Failed to check availability.")
+
+
+def collect_feedback_tool(agent_id: int, lead_id, rating: str = "", comment: str = "") -> str:
+    """Log customer feedback as a CRM Task for the team, plus an activity-log event. No external survey
+    tool is connected; this is the real CRM-side record of what the customer said."""
+    from app.models.crm import Task
+    try:
+        with get_db() as db:
+            db.add(Task(agent_id=agent_id, title=(f"Customer feedback{': ' + rating if rating else ''}")[:255],
+                        description=comment or "", kind="follow_up", priority="medium", status="open",
+                        lead_id=lead_id, created_by="ai"))
+    except Exception as e:
+        return f"Failed to log feedback: {e}"
+    from app.services import events
+    events.record("feedback.received", f"Feedback received{': ' + rating if rating else ''}", comment or "",
+                  agent_id=agent_id, lead_id=lead_id, actor="ai")
+    return "Thanks, that's been noted for the team."
+
+
+def apply_discount_code_tool(agent_id: int, lead_id, code: str) -> str:
+    """Orchestrates a configured custom 'http' tool named 'discount_code_check' if this business has set
+    one up (same thin pass-through as send_payment_link_tool); otherwise states plainly that no
+    discount/coupon system is connected, rather than fabricating a discount result."""
+    from app.services import tool_registry
+    defn = tool_registry.get_definition(agent_id, "discount_code_check")
+    if not defn or defn.get("type") != "http" or not defn.get("enabled"):
+        return "No discount/coupon system is connected for this business."
+    try:
+        outcome = tool_registry.run_http_tool(defn, {"code": code}, {"lead_id": lead_id})
+    except Exception as e:
+        return f"Failed to check discount code: {e}"
+    return outcome["result"] if outcome.get("ok") else (outcome.get("error") or "Failed to check discount code.")
+
+
+def track_shipment_tool(agent_id: int, lead_id, reference: str = "") -> str:
+    """Orchestrates a configured custom 'http' tool named 'shipment_tracking' if this business has set
+    one up (same thin pass-through as send_payment_link_tool); otherwise states plainly that shipment
+    tracking is not connected, rather than fabricating a tracking status."""
+    from app.services import tool_registry
+    defn = tool_registry.get_definition(agent_id, "shipment_tracking")
+    if not defn or defn.get("type") != "http" or not defn.get("enabled"):
+        return "Shipment tracking isn't connected for this business yet."
+    try:
+        outcome = tool_registry.run_http_tool(defn, {"reference": reference}, {"lead_id": lead_id})
+    except Exception as e:
+        return f"Failed to track shipment: {e}"
+    return outcome["result"] if outcome.get("ok") else (outcome.get("error") or "Failed to track shipment.")
+
+
+def request_review_tool(agent_id: int, lead_id) -> str:
+    """Ask the customer for a review and log the ask as a CRM Task for the team, regardless of whether
+    a review link is configured. No real Google/review-platform API is integrated here; if this
+    business has a custom 'review_link' http tool configured, its result is used as the link, otherwise
+    a plain request is sent."""
+    link = ""
+    try:
+        from app.services import tool_registry
+        defn = tool_registry.get_definition(agent_id, "review_link")
+        if defn and defn.get("type") == "http" and defn.get("enabled"):
+            outcome = tool_registry.run_http_tool(defn, {}, {"lead_id": lead_id})
+            if outcome.get("ok"):
+                link = str(outcome.get("result") or "").strip()
+    except Exception:
+        log.exception("request_review_tool: review link lookup failed")
+    from app.models.crm import Task
+    try:
+        with get_db() as db:
+            db.add(Task(agent_id=agent_id, title="Review requested"[:255], description=link, kind="follow_up",
+                        priority="low", status="open", lead_id=lead_id, created_by="ai"))
+    except Exception as e:
+        return f"Failed to log review request: {e}"
+    if link:
+        return f"Could you share a quick review of your experience? {link}"
+    return "Could you share a quick review of your experience? Thank you!"
+
+
+def transfer_to_department_tool(agent_id: int, lead_id, conversation_id, department: str, reason: str = "") -> str:
+    """Same pause-and-handoff mechanism as handoff_to_human_tool, but also logs a Task naming the
+    specific department so the routing is visible to the team distinctly from a generic handoff."""
+    dept = str(department or "").strip() or "the team"
+    handoff_to_human_tool(lead_id, agent_id, conversation_id, f"transfer to {dept}: {reason}" if reason else f"transfer to {dept}")
+    from app.models.crm import Task
+    try:
+        with get_db() as db:
+            db.add(Task(agent_id=agent_id, title=f"Route to {dept}"[:255], description=reason or "",
+                        kind="follow_up", priority="medium", status="open", lead_id=lead_id, created_by="ai"))
+    except Exception as e:
+        return f"Failed to log transfer: {e}"
+    return f"Connecting you with our {dept} team; someone will follow up shortly."
+
+
 def set_language_preference_tool(agent_id: int, lead_id, language: str) -> str:
     """Save the customer's own preferred language on their lead record."""
     if not lead_id:
@@ -1947,6 +2051,25 @@ CUSTOMER_TOOLS = [
     {"type": "function", "function": {"name": "opt_out", "description":
         "Opt the customer out of further messages/calls, if they ask to stop being contacted.",
         "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "check_availability", "description":
+        "Check availability/stock for an item or slot, if this business has connected an availability system.",
+        "parameters": {"type": "object", "properties": {"item": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "collect_feedback", "description":
+        "Log the customer's feedback or rating about their experience for the team.",
+        "parameters": {"type": "object", "properties": {"rating": {"type": "string"}, "comment": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "apply_discount_code", "description":
+        "Check/apply a discount or coupon code, if this business has connected a discount system.",
+        "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}}},
+    {"type": "function", "function": {"name": "track_shipment", "description":
+        "Track a shipment/order by reference number, if this business has connected a tracking system.",
+        "parameters": {"type": "object", "properties": {"reference": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "request_review", "description":
+        "Ask the customer for a review of their experience, and note the ask for the team.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "transfer_to_department", "description":
+        "Pause the AI and route this chat to a specific department/team (e.g. billing, sales, technical).",
+        "parameters": {"type": "object", "properties": {"department": {"type": "string"}, "reason": {"type": "string"}},
+                       "required": ["department"]}}},
 ]
 
 # Tools whose dispatch already honours an `agent` argument ("Hairscope ka auto dial band karo"). The
@@ -2131,6 +2254,19 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
         return set_language_preference_tool(agent_id, args.get("lead_id"), args.get("language") or "")
     elif name == "opt_out":
         return opt_out_tool(agent_id, args.get("lead_id"), _on_flag(args.get("on", True)))
+    elif name == "check_availability":
+        return check_availability_tool(agent_id, args.get("lead_id"), args.get("item") or "")
+    elif name == "collect_feedback":
+        return collect_feedback_tool(agent_id, args.get("lead_id"), args.get("rating") or "", args.get("comment") or "")
+    elif name == "apply_discount_code":
+        return apply_discount_code_tool(agent_id, args.get("lead_id"), args.get("code") or "")
+    elif name == "track_shipment":
+        return track_shipment_tool(agent_id, args.get("lead_id"), args.get("reference") or "")
+    elif name == "request_review":
+        return request_review_tool(agent_id, args.get("lead_id"))
+    elif name == "transfer_to_department":
+        return transfer_to_department_tool(agent_id, args.get("lead_id"), args.get("conversation_id"),
+                                           args.get("department") or "", args.get("reason") or "")
     # Own-agent actions a colleague needs on a call; an admin naming another agent ("Hairscope ka") works on that one.
     target = agent_id
     if role == "admin" and args.get("agent"):

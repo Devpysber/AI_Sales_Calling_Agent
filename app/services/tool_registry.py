@@ -46,6 +46,12 @@ _BUILTIN_RISK = {
     "escalate_urgent": "write",
     "set_language_preference": "write",
     "opt_out": "write",
+    "check_availability": "read",
+    "collect_feedback": "write",
+    "apply_discount_code": "read",
+    "track_shipment": "read",
+    "request_review": "write",
+    "transfer_to_department": "write",
 }
 
 
