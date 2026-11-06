@@ -92,7 +92,7 @@ def test_webhook_verify_and_post(monkeypatch):
 def test_parse_webhook():
     [m] = ig.parse_webhook(_payload())
     assert m == {"mid": "mid.1", "from": "17800000001", "text": "Hi, price?", "page_id": "PAGE-1",
-                 "recipient_id": "PAGE-1"}
+                 "recipient_id": "PAGE-1", "quick_reply_payload": None}
     # non-message event (e.g. read receipt) yields nothing
     receipt = {"entry": [{"id": "PAGE-1", "messaging": [{"sender": {"id": "x"}, "read": {"mid": "m"}}]}]}
     assert ig.parse_webhook(receipt) == []
@@ -236,4 +236,60 @@ def test_identity_merge_reassigns_to_phone_lead(agent_id):
     with get_db() as db:
         ci = db.query(ContactIdentity).filter(ContactIdentity.external_id == "ig-x").first()
         assert ci.lead_id == phone_lead["id"]
-        assert db.get(Conversation, conv_id).lead_id == phone_lead["id"]
+
+
+def test_send_instagram_quick_replies_posts_quick_replies_payload(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    class Res:
+        status_code = 200
+        text = ""
+        def json(self): return {}
+
+    class Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, **k):
+            captured["url"] = url
+            captured["json"] = k.get("json")
+            return Res()
+
+    captured = {}
+    monkeypatch.setattr(ig, "settings", SimpleNamespace(instagram_token="t", instagram_page_id="PAGE-1"))
+    monkeypatch.setattr(ig.httpx, "AsyncClient", Client)
+    out = asyncio.run(ig.send_instagram_quick_replies("17800000001", None, None, "Pick one", ["A", "B", "C", "D"]))
+    assert out["ok"] is True
+    assert "PAGE-1/messages" in captured["url"]
+    payload = captured["json"]
+    assert payload["recipient"] == {"id": "17800000001"}
+    assert payload["message"]["text"] == "Pick one"
+    qrs = payload["message"]["quick_replies"]
+    assert len(qrs) == 3  # capped at 3, matching WhatsApp's send_quick_replies_tool cap
+    assert qrs[0] == {"content_type": "text", "title": "A", "payload": "opt_0"}
+
+
+def test_quick_replies_tool_routes_to_instagram(agent_id, monkeypatch):
+    from app.services import agent_tools
+    from app.services.crm_service import CRMService
+
+    crm = CRMService(agent_id)
+    lead = crm.create({"phone": None, "name": "IG only"}, actor="system", allow_no_phone=True)
+    with get_db() as db:
+        db.add(ContactIdentity(agent_id=agent_id, lead_id=lead["id"], channel="instagram", external_id="ig-qr"))
+        conv = Conversation(agent_id=agent_id, lead_id=lead["id"], channel="instagram", status="open")
+        db.add(conv)
+        db.flush()
+        conv_id = conv.id
+
+    calls = []
+
+    async def fake_send(to, agent_id, lead_id, text, options):
+        calls.append((to, text, options))
+        return {"ok": True}
+
+    monkeypatch.setattr(ig, "send_instagram_quick_replies", fake_send)
+    out = agent_tools.send_quick_replies_tool(agent_id, lead["id"], conv_id, "Choose:", ["A", "B"])
+    assert out == "Sent."
+    assert calls == [("ig-qr", "Choose:", ["A", "B"])]

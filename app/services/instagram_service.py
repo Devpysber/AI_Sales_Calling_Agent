@@ -204,7 +204,8 @@ def parse_webhook(payload: dict) -> list[dict]:
             if not text and message.get("attachments"):
                 text = "[attachment]"
             out.append({"mid": message.get("mid"), "from": sender, "text": text,
-                        "page_id": page_id, "recipient_id": (m.get("recipient") or {}).get("id")})
+                        "page_id": page_id, "recipient_id": (m.get("recipient") or {}).get("id"),
+                        "quick_reply_payload": (message.get("quick_reply") or {}).get("payload")})
     return out
 
 
@@ -231,6 +232,34 @@ async def send_instagram_message(to: str, text: str, agent_id: int | None = None
         return {"ok": False, "error": "Instagram credentials not configured"}
     url = f"https://graph.facebook.com/v19.0/{page_id}/messages"
     payload = {"recipient": {"id": to}, "message": {"text": text}}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(url, params={"access_token": token}, json=payload)
+            if res.status_code in (200, 201):
+                events.record("instagram.sent", f"Instagram dispatched to {to}", text[:120],
+                              agent_id=agent_id, lead_id=lead_id, actor="ai")
+                return {"ok": True, "provider": "meta", "data": res.json()}
+            log.warning("Instagram send response %s: %s", res.status_code, res.text)
+            return {"ok": False, "error": f"Meta HTTP {res.status_code}: {res.text}"}
+    except Exception as e:
+        log.exception("Instagram dispatch error: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
+async def send_instagram_quick_replies(to: str, agent_id: int | None, lead_id: int | None, text: str,
+                                       options: list[str]) -> dict:
+    """Up to 3 tappable quick-reply buttons (Meta Instagram Messaging's quick_replies array), mirroring
+    whatsapp_service.send_whatsapp_buttons."""
+    token = settings.instagram_token
+    page_id = settings.instagram_page_id
+    if not (token and page_id):
+        events.record("instagram.queued", f"Instagram ready for {to} (Awaiting Instagram credentials)",
+                      text[:120], agent_id=agent_id, lead_id=lead_id, actor="system")
+        return {"ok": False, "error": "Instagram credentials not configured"}
+    url = f"https://graph.facebook.com/v19.0/{page_id}/messages"
+    quick_replies = [{"content_type": "text", "title": str(o)[:20], "payload": f"opt_{i}"}
+                     for i, o in enumerate(options[:3])]
+    payload = {"recipient": {"id": to}, "message": {"text": text[:1000], "quick_replies": quick_replies}}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.post(url, params={"access_token": token}, json=payload)
