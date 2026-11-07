@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Activity, BarChart3, BookOpen, Bot, CalendarClock, Check, ChevronsLeft, ChevronsRight, ChevronsUpDown, Columns3,
-  Download, Camera, Keyboard, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Lock, Mail, Menu, MessageCircle, MessageSquare, MessageSquareText, Moon, Pause, PhoneCall, Plug, Plus, Search, Settings,
+  Download, Camera, Keyboard, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Lock, Mail, Menu, MessageCircle, MessageSquare, MessageSquareText, Moon, Pause, PhoneCall, Plug, Plus, FileText, Search, Settings,
   SlidersHorizontal, Sparkles, Sun, Upload, UserPlus, Users, Wrench, X,
 } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -45,6 +45,8 @@ const AGENT_NAV: { section: string; items: NavItem[] }[] = [
       { to: '/agent', label: 'Persona & playground', icon: Bot, key: 'g' },
       { to: '/knowledge', label: 'Knowledge base', icon: BookOpen, key: 'k', count: (a) => a.stats.documents || null },
       { to: '/whatsapp-cloud', label: 'WhatsApp (Cloud API)', icon: MessageSquare, key: 'y' },
+      { to: '/templates', label: 'Message templates', icon: FileText, key: 'e' },
+      { to: '/whatsapp-flows', label: 'WhatsApp Flows', icon: LayoutGrid, key: 'f' },
       { to: '/automation', label: 'Automation', icon: CalendarClock, key: 'u', count: (a) => a.automation_on ? <span className="text-success">On</span> : null },
       { to: '/channels', label: 'Channels', icon: Plug, key: 'x' },
       { to: '/tools', label: 'Tools', icon: Wrench, key: 't' },

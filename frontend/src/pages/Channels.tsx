@@ -40,6 +40,15 @@ export default function Channels() {
     onError: (e) => toast.error(e.message),
   })
 
+  const [wabaId, setWabaId] = useState("")
+  const savedWabaId = String(profileQ.data?.profile?.whatsapp_business_account_id ?? "")
+  useEffect(() => { if (profileQ.isSuccess) setWabaId(savedWabaId) }, [profileQ.isSuccess, savedWabaId])
+  const saveWaba = useMutation({
+    mutationFn: () => api(`${base}/profile`, { method: "PUT", json: { whatsapp_business_account_id: wabaId.trim() } }),
+    onSuccess: () => { toast.success("WhatsApp Business Account ID saved"); qc.invalidateQueries({ queryKey: ["agent-profile", id] }) },
+    onError: (e) => toast.error(e.message),
+  })
+
   const [igId, setIgId] = useState("")
   const savedIgId = String(profileQ.data?.profile?.instagram_account_id ?? "")
   useEffect(() => { if (profileQ.isSuccess) setIgId(savedIgId) }, [profileQ.isSuccess, savedIgId])
@@ -69,6 +78,14 @@ export default function Channels() {
             </Field>
             <div className="-mx-4 flex justify-end border-t border-border px-4 pt-3 sm:-mx-5 sm:px-5">
               <Button type="submit" variant="primary" disabled={waId.trim() === savedWaId} loading={saveWa.isPending}>Save</Button>
+            </div>
+          </form>
+          <form className="space-y-5 border-t border-border p-4 sm:p-5" onSubmit={(e) => { e.preventDefault(); if (wabaId.trim() !== savedWabaId && !saveWaba.isPending) saveWaba.mutate() }}>
+            <Field label="WhatsApp Business Account ID" hint="From Meta WhatsApp Manager → account overview. Needed to create and submit message templates for approval.">
+              <Input value={wabaId} onChange={(e) => setWabaId(e.target.value)} inputMode="numeric" autoComplete="off" disabled={saveWaba.isPending} />
+            </Field>
+            <div className="-mx-4 flex justify-end border-t border-border px-4 pt-3 sm:-mx-5 sm:px-5">
+              <Button type="submit" variant="primary" disabled={wabaId.trim() === savedWabaId} loading={saveWaba.isPending}>Save</Button>
             </div>
           </form>
         </Card>

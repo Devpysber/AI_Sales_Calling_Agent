@@ -66,6 +66,8 @@ const Knowledge = lazy(page(() => import('@/pages/Knowledge')))
 const Automation = lazy(page(() => import('@/pages/Automation')))
 const WhatsApp = lazy(page(() => import('@/pages/WhatsApp')))
 const WhatsAppCloud = lazy(page(() => import('@/pages/WhatsAppCloud')))
+const Templates = lazy(page(() => import('@/pages/Templates')))
+const WhatsAppFlows = lazy(page(() => import('@/pages/WhatsAppFlows')))
 const AgentSettings = lazy(page(() => import('@/pages/AgentSettings')))
 const SettingsPage = lazy(page(() => import('@/pages/Settings')))
 const ProfilePage = lazy(page(() => import('@/pages/Profile')))
@@ -148,6 +150,8 @@ export default function App() {
           <Route path="emails" element={<Emails />} />
           <Route path="whatsapp" element={<WhatsApp />} />
           <Route path="whatsapp-cloud" element={<WhatsAppCloud />} />
+          <Route path="templates" element={<Templates />} />
+          <Route path="whatsapp-flows" element={<WhatsAppFlows />} />
           <Route path="instagram" element={<InstagramPage />} />
           <Route path="channels" element={<Channels />} />
           <Route path="tools" element={<ToolsPage />} />
