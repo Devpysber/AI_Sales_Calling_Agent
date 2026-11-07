@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { CheckCircle2, CircleAlert, Copy, PlugZap, RefreshCw, Server, WifiOff } from 'lucide-react'
+import { CheckCircle2, ChevronDown, CircleAlert, Copy, PlugZap, RefreshCw, Server, WifiOff } from 'lucide-react'
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import HealPanel from '@/components/HealPanel'
@@ -47,6 +47,49 @@ const copy = async (t: string) => {
 }
 
 const INFRA_LABELS: Record<string, string> = { environment: 'Environment', database: 'Database', store: 'Session store', scheduler_in_api: 'Scheduler in API process', version: 'Version' }
+
+type HealthHistoryIssue = { id: string; title: string; detail: string; status: string; count: number; last_at: string }
+
+function historyAgo(iso: string) {
+  const diff = Date.now() - new Date(iso).getTime()
+  if (diff < 60_000) return 'just now'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
+  return `${Math.floor(diff / 86_400_000)}d ago`
+}
+
+/** Past connectivity issues for the rows above: lets an admin see a provider that keeps flapping,
+ * not just whether it is up right now. */
+function RecentIssues() {
+  const [open, setOpen] = useState(false)
+  const { data } = useQuery({
+    queryKey: ['system', 'health-history'],
+    queryFn: () => api<{ issues: HealthHistoryIssue[] }>('/api/system/health-history'),
+    staleTime: 30_000,
+  })
+  const issues = data?.issues ?? []
+  if (!issues.length) return null
+  return (
+    <div className="border-t border-border px-4 py-3 sm:px-5">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-center gap-1.5 text-sm font-semibold text-fg-2">
+        <ChevronDown className={cn('size-4 transition-transform', open && 'rotate-180')} />
+        View recent issues ({issues.length})
+      </button>
+      {open && (
+        <ul className="mt-2 space-y-1.5 text-sm">
+          {issues.map((it) => (
+            <li key={it.id} className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-muted">
+              <span className="shrink-0 text-xs tabular-nums">{historyAgo(it.last_at)}</span>
+              <span className="font-medium text-fg">{it.title}</span>
+              {it.count > 1 && <span className="text-xs">x{it.count}</span>}
+              <span className="text-xs">({it.status})</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
 
 export default function Settings() {
   const { data: s, refetch, isFetching, isError, error } = useQuery({ queryKey: ['system', 'status'], queryFn: () => api<Status>('/api/system/status'), staleTime: 30_000 })
@@ -111,6 +154,7 @@ export default function Settings() {
                   <Button variant="ghost" size="sm" onClick={sendTestEmail} loading={sendingTestEmail}>Send test</Button>
                 </div>
               </Row>
+              <RecentIssues />
             </Stagger>
 
             <Card>

@@ -456,6 +456,26 @@ def system_issues(detect: bool = True):
     return {"issues": issues, "escalation": heal_service.escalation_text()}
 
 
+# Kinds that correspond to the provider/connectivity rows on the Settings page (Plivo inbound,
+# OpenRouter, email, public URL, scheduler) — the history an admin needs to tell "flapping" from
+# "just failed once".
+HEALTH_HISTORY_KINDS = {"llm_dead", "public_url", "email_unconfigured", "inbound_disconnected",
+                        "scheduler_stalled", "scheduler_error"}
+
+
+@router.get("/system/health-history", dependencies=[Depends(require_admin)])
+def system_health_history(days: int = 7, limit: int = 20):
+    """Past connectivity issues (open, healed or escalated) for the health rows, so an admin can see
+    a provider that keeps dropping and reconnecting rather than just its current state."""
+    from datetime import datetime, timedelta
+    from app.services import heal_service
+    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    issues = [it for it in heal_service.list_issues(include_closed=True)
+             if it["kind"] in HEALTH_HISTORY_KINDS and it["last_at"] >= cutoff]
+    issues.sort(key=lambda i: i["last_at"], reverse=True)
+    return {"issues": issues[:limit]}
+
+
 @router.post("/system/issues/heal", dependencies=[Depends(require_admin)])
 def system_heal(payload: dict | None = None):
     """Heal one issue (payload {"id": ...}) or every open one; returns what each remedy did."""
