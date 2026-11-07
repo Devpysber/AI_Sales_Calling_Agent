@@ -28,6 +28,8 @@ const SETUP = [
   { key: 'leads', label: 'Leads imported', hint: 'People for this agent to call', to: '/import' },
   { key: 'number', label: 'Phone number assigned', hint: 'Own caller ID and inbound line', to: '/settings' },
   { key: 'automation', label: 'Automation on', hint: 'Auto-dial and retries', to: '/automation' },
+  { key: 'channels', label: 'Connect a chat channel', hint: 'WhatsApp or Instagram DMs', to: '/channels' },
+  { key: 'tools', label: 'Add a custom tool', hint: 'Give the agent a custom action to call', to: '/tools' },
 ] as const
 
 export default function Dashboard() {
@@ -43,6 +45,7 @@ export default function Dashboard() {
   const live = useQuery({ queryKey: ['calls', 'live'], queryFn: () => api<Page<Call>>(`${base}/calls`, { params: { status: 'active', page_size: 10 } }), refetchInterval: 3000 })
   const activity = useQuery({ queryKey: ['activity', 'recent'], queryFn: () => api<ActivityEvent[]>(`${base}/activity`, { params: { limit: 40 } }), refetchInterval: 8000 })
   const profile = useQuery({ queryKey: ['agent'], queryFn: () => api<{ profile: Record<string, string | number | boolean> }>(`${base}/profile`) })
+  const tools = useQuery({ queryKey: ['tools', 'count'], queryFn: () => api<{ type: string }[]>(`${base}/tools`) })
 
   const c = calls.data
   const l = leads.data
@@ -78,8 +81,14 @@ export default function Dashboard() {
   }, [activity.data])
 
   if (!agent) return null
-  const done = SETUP.filter((s) => agent.setup?.[s.key]).length
   const p = profile.data?.profile
+  const setupDone: Record<string, boolean> = {
+    persona: !!agent.setup?.persona, knowledge: !!agent.setup?.knowledge, leads: !!agent.setup?.leads,
+    number: !!agent.setup?.number, automation: !!agent.setup?.automation,
+    channels: !!(p?.whatsapp_phone_number_id || p?.instagram_account_id),
+    tools: !!tools.data?.some((t) => t.type === 'http'),
+  }
+  const done = SETUP.filter((s) => setupDone[s.key]).length
 
   return (
     <>
@@ -271,7 +280,7 @@ export default function Dashboard() {
               <div className="px-5"><Meter value={(100 * done) / SETUP.length} tone="neutral" className="h-2 [&>div]:bg-fg" /></div>
               <ul className="space-y-1 p-3">
                 {SETUP.map((s) => {
-                  const ok = agent.setup?.[s.key]
+                  const ok = setupDone[s.key]
                   return (
                     <li key={s.key}>
                       <button type="button" onClick={() => navigate(path(s.to))} disabled={ok}
