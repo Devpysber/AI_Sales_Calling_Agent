@@ -62,7 +62,14 @@ def list_events(agent_id: int | None, lead_id: int | None = None, call_id: int |
         if call_id:
             query = query.where(Event.call_id == call_id)
         if type_prefix:
-            query = query.where(Event.type.startswith(type_prefix))
+            # A chip can OR several prefixes together (e.g. "whatsapp,instagram,chat.handoff" for the
+            # "Chats" filter) by comma-separating them; each term still matches as a bare prefix like before.
+            prefixes = [p for p in type_prefix.split(",") if p]
+            if len(prefixes) == 1:
+                query = query.where(Event.type.startswith(prefixes[0]))
+            else:
+                from sqlalchemy import or_
+                query = query.where(or_(*(Event.type.startswith(p) for p in prefixes)))
         if before_id:
             query = query.where(Event.id < before_id)
         return [{**event.to_dict(), "lead_name": name} for event, name in db.execute(query).all()]

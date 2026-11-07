@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
-import { Activity as ActivityIcon, Bot, CalendarCheck, Clock, PhoneCall, Search, Settings2, Users } from 'lucide-react'
+import { Activity as ActivityIcon, Bot, CalendarCheck, Clock, MessageCircle, PhoneCall, Search, Settings2, Users } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ActivityFeed from '@/components/ActivityFeed'
@@ -16,7 +16,18 @@ const FILTERS = [
   { value: 'callback', label: 'Callbacks', icon: PhoneCall },
   { value: 'lead', label: 'Leads', icon: Users }, { value: 'automation', label: 'Automation', icon: Clock },
   { value: 'settings', label: 'Settings', icon: Settings2 },
+  // Comma-separated: matched as an OR of bare prefixes both server-side (see events.list_events) and
+  // in the client-side dotted-boundary check below, so one chip can cover whatsapp.*, instagram.* and
+  // the exact chat.handoff type together.
+  { value: 'whatsapp,instagram,chat.handoff', label: 'Chats', icon: MessageCircle },
 ]
+
+// A filter value may OR together several comma-separated bare prefixes (see the "Chats" chip above).
+// Mirrors the server's dotted-prefix semantics: "call" matches "call.started" but not "callback.scheduled".
+function matchesType(eventType: string, value: string) {
+  if (!value) return true
+  return value.split(',').some((p) => eventType === p || eventType.startsWith(`${p}.`))
+}
 
 function dayLabel(iso: string) {
   const d = new Date(iso)
@@ -53,7 +64,7 @@ export default function Activity() {
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = query
   const loadedCount = query.data?.pages.flat().length ?? 0
   const visibleCount = useMemo(
-    () => (query.data?.pages.flat() ?? []).filter((e) => !type || e.type.startsWith(`${type}.`)).length,
+    () => (query.data?.pages.flat() ?? []).filter((e) => matchesType(e.type, type)).length,
     [query.data, type])
   useEffect(() => {
     if (type && loadedCount > 0 && visibleCount === 0 && hasNextPage && !isFetchingNextPage) void fetchNextPage()
@@ -66,7 +77,7 @@ export default function Activity() {
       // The API matches the filter as a bare prefix, so "call" also returns "callback.*" events
       // even though Callbacks has its own chip. Every event type is "<group>.<name>", so require
       // the dotted prefix here.
-      if (type && !e.type.startsWith(`${type}.`)) return false
+      if (type && !matchesType(e.type, type)) return false
       if (needle && !`${e.title} ${e.detail ?? ''} ${e.lead_name ?? ''}`.toLowerCase().includes(needle)) return false
       // Scheduler runs every few minutes with the same result: keep only the latest of each per day.
       if (hideRoutine && type !== 'automation' && e.type === 'automation.run') {
