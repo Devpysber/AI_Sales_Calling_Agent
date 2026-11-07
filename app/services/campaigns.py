@@ -41,11 +41,15 @@ def _audience_query(agent_id: int, segment: dict):
 def audience(agent_id: int, segment: dict | None, channel: str) -> list[Lead]:
     with get_db() as db:
         leads = list(db.scalars(_audience_query(agent_id, segment or {}).limit(MAX_AUDIENCE)))
+    # do_not_call is the shared "don't contact this lead" flag (opt_out_tool sets it for chat opt-outs
+    # too, per its own docstring) -- a campaign blast must respect it on every channel, not just calls.
+    leads = [l for l in leads if not l.do_not_call]
     if channel == "email":
         return [l for l in leads if l.email]
     if channel == "whatsapp":
-        return [l for l in leads if l.phone]
-    return [l for l in leads if not (channel == "call" and l.do_not_call)]
+        from app.services.whatsapp_service import is_opted_out
+        return [l for l in leads if l.phone and not is_opted_out(l.to_dict())]
+    return leads
 
 
 def preview(agent_id: int, segment: dict | None, channel: str) -> dict:

@@ -116,6 +116,25 @@ def test_call_campaign_queues_audience(client, base):
     assert client.get(f"{base}/crm/campaigns/{camp['id']}").json()["status"] == "completed"
 
 
+def test_campaign_audience_excludes_opted_out_leads_on_every_channel(client, base):
+    from app.services import campaigns
+    from app.services.whatsapp_service import OPT_OUT_TAG
+
+    client.post(f"{base}/leads", json={"name": "Reachable", "phone": "+919844440001", "email": "r@x.test", "tags": ["camp"]})
+    dnc = client.post(f"{base}/leads", json={"name": "DNC", "phone": "+919844440002", "email": "d@x.test", "tags": ["camp"]}).json()
+    client.patch(f"{base}/leads/{dnc['id']}", json={"do_not_call": True})
+    client.post(f"{base}/leads", json={"name": "WaOptOut", "phone": "+919844440003", "email": "w@x.test",
+                                       "tags": ["camp", OPT_OUT_TAG]})
+    agent_id = int(base.rsplit("/", 1)[1])
+
+    for channel in ("call", "whatsapp", "email"):
+        names = {l.name for l in campaigns.audience(agent_id, {"tags": ["camp"]}, channel)}
+        assert "DNC" not in names, f"do_not_call lead must be excluded from {channel} campaigns"
+        if channel == "whatsapp":
+            assert "WaOptOut" not in names, "WhatsApp opt-out tag must be excluded from WhatsApp campaigns"
+        assert "Reachable" in names
+
+
 def test_assistant_proposes_and_executes(client, base, monkeypatch):
     from app.services import llm
     lead = client.post(f"{base}/leads", json={"name": "Priya", "phone": "+919855556666"}).json()

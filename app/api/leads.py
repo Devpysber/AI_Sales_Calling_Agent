@@ -27,6 +27,7 @@ class LeadIn(BaseModel):
     tags: list[str] | None = None
     notes: str | None = None
     status: str | None = "New"
+    do_not_call: bool | None = None
 
 
 class LeadPatch(BaseModel):
