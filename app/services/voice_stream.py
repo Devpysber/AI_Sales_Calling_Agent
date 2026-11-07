@@ -27,6 +27,7 @@ the end-of-call summary work exactly as in gather mode.
 import asyncio
 import base64
 import contextlib
+import functools
 import json
 import random
 import re
@@ -38,6 +39,15 @@ from urllib.parse import urlencode
 from collections import deque
 
 import numpy as np
+
+from app.services.call_service import _turn_pool
+
+
+async def _run(func, *args, **kwargs):
+    """Like asyncio.to_thread, but on the dedicated turn pool instead of asyncio's small
+    process-wide default executor, which every other asyncio.to_thread call in the process shares."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_turn_pool, functools.partial(func, *args, **kwargs))
 import websockets
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -562,8 +572,8 @@ class _LocalSocket:
                     self.first = True
                     continue
                 language = tts.detect_language(chunk, self.language)
-                pcm = await asyncio.to_thread(tts.synthesize_pcm, chunk, language, self.speaker)
-                mulaw = await asyncio.to_thread(pcm16_to_mulaw, pcm)
+                pcm = await _run(tts.synthesize_pcm, chunk, language, self.speaker)
+                mulaw = await _run(pcm16_to_mulaw, pcm)
                 await self.out.put(json.dumps({"type": "audio", "data": {"audio": base64.b64encode(mulaw).decode()}}))
         except asyncio.CancelledError:
             pass
@@ -792,7 +802,7 @@ class CallStream:
                 await self.ws.send_text(json.dumps(message))
 
     async def play_pcm(self, pcm: bytes):
-        await self.send_mulaw(await asyncio.to_thread(pcm16_to_mulaw, pcm), pcm)
+        await self.send_mulaw(await _run(pcm16_to_mulaw, pcm), pcm)
 
     async def send_mulaw(self, mulaw: bytes, pcm: bytes | None = None):
         """Queue audio for the caller and mirror it to supervisors who are listening."""
@@ -889,7 +899,7 @@ class CallStream:
                 raise ValueError("Write what the agent should say.")
             await self.interrupt(force=True)
             language = tts.detect_language(text, self.session.get("language") or "en-IN")
-            pcm = await asyncio.to_thread(tts.synthesize_pcm, text, language, self.persona.get("voice_speaker"))
+            pcm = await _run(tts.synthesize_pcm, text, language, self.persona.get("voice_speaker"))
             self.meter("tts_chars", len(text))
             await self.play_pcm(pcm)
             self.turn("assistant", text, by=by)
@@ -976,7 +986,7 @@ class CallStream:
     async def say_fixed(self, text: str, hangup: bool = False):
         self.note_spoken(text)
         language = tts.detect_language(text, self.session.get("language") or "en-IN")
-        pcm = await asyncio.to_thread(tts.cached_pcm, text, language, self.persona.get("voice_speaker"), self.usage)
+        pcm = await _run(tts.cached_pcm, text, language, self.persona.get("voice_speaker"), self.usage)
         await self.play_pcm(pcm)
         await self.checkpoint(hangup=hangup)
 
@@ -1016,13 +1026,13 @@ class CallStream:
         self.transferred = True
         from app.services.plivo_service import PlivoService
         try:
-            await asyncio.to_thread(PlivoService().transfer, self.call_uuid, self.session_id, self.session.get("call_id"))
+            await _run(PlivoService().transfer, self.call_uuid, self.session_id, self.session.get("call_id"))
             self.save_session(transferred=True)
             if self.session.get("call_id"):
                 calls = CallService(self.agent_id)
                 from app.services import team_service
                 number = team_service.transfer_line(self.persona, self.agent_id)
-                await asyncio.to_thread(calls.mark_transferred, self.session["call_id"],
+                await _run(calls.mark_transferred, self.session["call_id"],
                                         f"Transferred to {calls.transfer_label(number)}", "transfer", number)
             log.info("Transferred session %s to %s", self.session_id[:8], number)
         except Exception as e:  # noqa: BLE001 - keep the AI on the line if Plivo refuses
@@ -1036,7 +1046,7 @@ class CallStream:
             return
         with contextlib.suppress(Exception):
             # on_hangup is idempotent: a callback that did arrive already closed the call and this is a no-op.
-            await asyncio.to_thread(CallService().on_hangup, int(call_id), "completed", 0,
+            await _run(CallService().on_hangup, int(call_id), "completed", 0,
                                     "Stream ended; no hangup callback", self.call_uuid)
 
     async def wait_for_end(self):
@@ -1053,7 +1063,7 @@ class CallStream:
         if self.call_uuid:
             from app.services.plivo_service import PlivoService
             with contextlib.suppress(Exception):
-                await asyncio.to_thread(PlivoService().hangup, self.call_uuid)
+                await _run(PlivoService().hangup, self.call_uuid)
 
     def compact_history_soon(self):
         """Fold the turns that have fallen out of the prompt window into one summary line.
@@ -1077,7 +1087,7 @@ class CallStream:
                 return None
 
         async def store():
-            summary = await asyncio.to_thread(run)
+            summary = await _run(run)
             if summary:
                 self.save_session(summary=summary, compacted_upto=agent.compacted_upto(history))
                 log.info("Compacted %s turns into a summary, session=%s", len(history), self.session_id[:8])
@@ -1168,7 +1178,7 @@ class CallStream:
         # Render "one moment" now, while nobody is waiting. Synthesising it at the moment a reply runs
         # late meant the apology for the delay was itself delayed, behind the same busy TTS provider,
         # and it blocked the loop that was waiting for the real audio.
-        self.filler_audio = asyncio.create_task(asyncio.to_thread(
+        self.filler_audio = asyncio.create_task(_run(
             tts.cached_pcm, STREAM_PROMPTS["filler"][self.lang_key()],
             self.session.get("language") or "en-IN", self.persona.get("voice_speaker"), self.usage))
         try:
@@ -1397,7 +1407,7 @@ class CallStream:
             next((t["text"] for t in history if t["role"] == "assistant"), None)
         if not text:
             # May translate through the LLM: never on the event loop, where it would freeze every live call.
-            text = await asyncio.to_thread(agent.greeting, self.agent_id, self.session.get("lead") or {},
+            text = await _run(agent.greeting, self.agent_id, self.session.get("lead") or {},
                                            self.session.get("language") or "en-IN")
             self.turn("assistant", text)
             self.save_session()
@@ -1574,7 +1584,7 @@ class CallStream:
             self.session.setdefault("lead", {})["language"] = language
             self.session["language_explicit"] = True
             with contextlib.suppress(Exception):
-                await asyncio.to_thread(CallService(self.agent_id).crm.update, self.session["lead_id"], {"language": language}, "ai",
+                await _run(CallService(self.agent_id).crm.update, self.session["lead_id"], {"language": language}, "ai",
                                         "lead.updated", f"Language switched to {tts.LANGUAGES[language]} on request")
         if language == self.session.get("language"):
             return
@@ -1615,7 +1625,7 @@ class CallStream:
         self.session["lead"] = lead
         self.save_session()
         with contextlib.suppress(Exception):
-            await asyncio.to_thread(CallService(self.agent_id).crm.update, self.session["lead_id"], updates, "ai",
+            await _run(CallService(self.agent_id).crm.update, self.session["lead_id"], updates, "ai",
                                     "lead.updated", "Caller shared " + ", ".join(f"{k}: {v}" for k, v in updates.items()))
         self.publish({"type": "caller", **updates})
 
@@ -1672,7 +1682,7 @@ class CallStream:
         if purpose in ("team", "admin") and text:
             # A colleague's plain switch command: run it now, confirm in their language, no model round.
             from app.services.agent_tools import team_quick_action
-            done = await asyncio.to_thread(team_quick_action, self.agent_id, text)
+            done = await _run(team_quick_action, self.agent_id, text)
             if done:
                 result, state = done
                 self.turn("customer", text)
@@ -1694,7 +1704,7 @@ class CallStream:
             self.turn("customer", text)
             if lead_id:
                 with contextlib.suppress(Exception):
-                    await asyncio.to_thread(CallService(self.agent_id).crm.update, lead_id,
+                    await _run(CallService(self.agent_id).crm.update, lead_id,
                                             {"do_not_call": True, "status": "Do Not Call"}, "ai")
             self.save_session()
             await self.say_recorded(DNC_LINE[key], hangup=True)
@@ -1708,7 +1718,7 @@ class CallStream:
             body = f"{self.persona['company_name']}: details as discussed - {site}"
             try:
                 from app.services.plivo_service import PlivoService
-                await asyncio.to_thread(PlivoService().send_sms, phone, body)
+                await _run(PlivoService().send_sms, phone, body)
             except Exception as e:  # noqa: BLE001 - the model answers instead; never claim a text that did not go
                 log.warning("Details SMS failed on session %s: %s", self.session_id[:8], e)
                 self.heard = [text]
@@ -1751,7 +1761,7 @@ class CallStream:
         history = self.session.get("history") or []
         returned = any(t.get("role") == "assistant" and t.get("text") in FALLBACK_LINES.values() for t in history[-4:])
         if failures == 1:
-            await asyncio.to_thread(self.escalate_failure, error)
+            await _run(self.escalate_failure, error)
         if failures == 1 and not returned and self.has_human_line():
             line = PROMPTS["handover"][self.lang_key()]
             self.turn("assistant", line)
@@ -1787,9 +1797,9 @@ class CallStream:
             # then answers other questions, and the line that finally places the call is often earlier.
             said = " ".join([t.get("text", "") for t in self.session.get("history", [])
                              if t.get("role") in ("customer", "user")][-6:] + [text])
-            chosen = await asyncio.to_thread(agent.choose_agent, said, lead.get("choices") or [])
+            chosen = await _run(agent.choose_agent, said, lead.get("choices") or [])
             if chosen:
-                lead = await asyncio.to_thread(self.switch_agent, chosen)
+                lead = await _run(self.switch_agent, chosen)
                 # The caller never chose from a menu, so nothing is "confirmed" back at them: the agent
                 # simply carries on as the right desk.
                 guidance = " ".join(g for g in (guidance, "This call belongs to this desk. Continue from what they already "
@@ -1809,7 +1819,7 @@ class CallStream:
                         guidance = " ".join(g for g in (guidance, agent.CHOOSE_CLARIFIER["en" if english else "hi"]
                                                         .format(options=options)) if g)
                     else:
-                        lead = await asyncio.to_thread(self.switch_agent, self.agent_id)
+                        lead = await _run(self.switch_agent, self.agent_id)
                         guidance = " ".join(g for g in (guidance, "They have not placed the call and must not be asked a third "
                                                                   "time: help them here, as this desk.") if g)
                 self.save_session()
@@ -1818,12 +1828,12 @@ class CallStream:
             # they have named it plainly; cheap name match only, never a guess.
             chosen = agent.choose_agent(text, self.session["desk_choices"], use_llm=False)
             if chosen and chosen != self.agent_id:
-                lead = await asyncio.to_thread(self.switch_agent, chosen)
+                lead = await _run(self.switch_agent, chosen)
                 guidance = " ".join(g for g in (guidance, f"The caller now wants {self.persona['company_name']}. Say so in a few words "
                                                           "and continue as that agent; whole reply under 120 characters.") if g)
         if self.session.get("lead_id"):
             with contextlib.suppress(Exception):
-                fresh = await asyncio.to_thread(CallService(self.agent_id).crm.get, self.session["lead_id"])
+                fresh = await _run(CallService(self.agent_id).crm.get, self.session["lead_id"])
                 lead = merge_call_context(lead, fresh)
 
         loop = asyncio.get_running_loop()
@@ -1916,7 +1926,7 @@ class CallStream:
                     line = STREAM_PROMPTS["filler"][self.lang_key()]
                     try:
                         pcm = (await self.filler_audio if self.filler_audio
-                               else await asyncio.to_thread(tts.cached_pcm, line, self.session.get("language") or "en-IN",
+                               else await _run(tts.cached_pcm, line, self.session.get("language") or "en-IN",
                                                             self.persona.get("voice_speaker"), self.usage))
                         self.note_spoken(line)  # its echo must not come back as a caller turn
                         await self.play_pcm(pcm)
@@ -2000,7 +2010,7 @@ class CallStream:
                     spoken.append(rest)
                     self.note_spoken(rest)
                     self.meter("tts_chars", len(rest))
-                    await self.play_pcm(await asyncio.to_thread(tts.synthesize_pcm, rest, tts.detect_language(rest, language),
+                    await self.play_pcm(await _run(tts.synthesize_pcm, rest, tts.detect_language(rest, language),
                                                                 self.persona.get("voice_speaker")))
 
             reply = " ".join("".join(spoken).split())
@@ -2020,14 +2030,14 @@ class CallStream:
                                                       compacted_upto=self.session.get("compacted_upto")):
                             (self.meter_llm(d) if isinstance(d, dict) else parts.append(d))
                         return "".join(parts)
-                    raw = await asyncio.to_thread(spoken_retry)
+                    raw = await _run(spoken_retry)
                     reply = " ".join((retry.feed(raw) + retry.flush()).split())
                     cleaner.end_call = retry.end_call
                     if reply:
                         spoken.append(reply)
                         self.note_spoken(reply)
                         language = tts.detect_language(reply, self.session.get("language") or "en-IN")
-                        await self.play_pcm(await asyncio.to_thread(tts.synthesize_pcm, reply, language, self.persona.get("voice_speaker")))
+                        await self.play_pcm(await _run(tts.synthesize_pcm, reply, language, self.persona.get("voice_speaker")))
                         self.meter("tts_chars", len(reply))
             if not reply:
                 # Still nothing to say (never hang up). "I didn't catch that" is only honest when they said
