@@ -4,9 +4,23 @@ import { toast } from "sonner"
 import { Badge, Button, Card, CardHeader, Field, Input, PageHeader } from "@/components/ui"
 import { api } from "@/lib/api"
 import { useAgent } from "@/lib/agent"
+import { timeAgo } from "@/lib/utils"
 import type { AgentProfile } from "@/lib/types"
 
 type ProfileResponse = { profile: AgentProfile & Record<string, unknown> }
+type ChatSummary = { last_at: string | null }
+
+// Derives "most recent message" from the existing chats list rather than adding a new endpoint.
+function useLastMessageAt(base: string, channel: "whatsapp" | "instagram") {
+  const q = useQuery({
+    queryKey: ["channel-last-msg", base, channel],
+    queryFn: () => api<{ items: ChatSummary[] }>(`${base}/${channel}/chats`),
+    refetchInterval: 30000,
+  })
+  const items = q.data?.items ?? []
+  const latest = items.reduce<string | null>((max, it) => (it.last_at && (!max || it.last_at > max) ? it.last_at : max), null)
+  return latest
+}
 
 // No status-check endpoint exists against Meta today (only the signed webhook handlers in
 // app/api/whatsapp.py / app/api/instagram.py). "Connected" here just means the per-agent id is set.
@@ -36,6 +50,8 @@ export default function Channels() {
   })
 
   const origin = window.location.origin
+  const waLastAt = useLastMessageAt(base, "whatsapp")
+  const igLastAt = useLastMessageAt(base, "instagram")
 
   return (
     <>
@@ -43,6 +59,7 @@ export default function Channels() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader title="WhatsApp" action={<Badge tone={savedWaId ? "success" : "neutral"}>{savedWaId ? "Configured" : "Not configured"}</Badge>} />
+          <p className="px-4 pt-3 text-xs text-muted sm:px-5">Last message received: {waLastAt ? timeAgo(waLastAt) : "Never"}</p>
           <form className="space-y-5 p-4 sm:p-5" onSubmit={(e) => { e.preventDefault(); if (waId.trim() !== savedWaId && !saveWa.isPending) saveWa.mutate() }}>
             <Field label="WhatsApp phone number ID" hint="From Meta WhatsApp Manager → API setup. Leave empty to use the server default.">
               <Input value={waId} onChange={(e) => setWaId(e.target.value)} inputMode="numeric" autoComplete="off" disabled={saveWa.isPending} />
@@ -58,8 +75,9 @@ export default function Channels() {
 
         <Card>
           <CardHeader title="Instagram" action={<Badge tone={savedIgId ? "success" : "neutral"}>{savedIgId ? "Configured" : "Not configured"}</Badge>} />
+          <p className="px-4 pt-3 text-xs text-muted sm:px-5">Last message received: {igLastAt ? timeAgo(igLastAt) : "Never"}</p>
           <form className="space-y-5 p-4 sm:p-5" onSubmit={(e) => { e.preventDefault(); if (igId.trim() !== savedIgId && !saveIg.isPending) saveIg.mutate() }}>
-            <Field label="Instagram account ID" hint="The IG-connected Page/account ID for this agent. Routing to a single Instagram account is currently server-wide (settings.instagram_page_id); this value is stored for reference and future per-agent routing.">
+            <Field label="Instagram account ID" hint="The IG-connected Page/account ID for this agent. Incoming messages are routed to this agent by matching it against the sender's Instagram account.">
               <Input value={igId} onChange={(e) => setIgId(e.target.value)} inputMode="numeric" autoComplete="off" disabled={saveIg.isPending} />
             </Field>
             <Field label="Webhook URL" hint="Paste into Meta's Instagram webhook configuration.">
