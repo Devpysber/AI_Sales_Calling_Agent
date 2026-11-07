@@ -49,6 +49,15 @@ export default function Channels() {
     onError: (e) => toast.error(e.message),
   })
 
+  const [catalogId, setCatalogId] = useState("")
+  const savedCatalogId = String(profileQ.data?.profile?.whatsapp_catalog_id ?? "")
+  useEffect(() => { if (profileQ.isSuccess) setCatalogId(savedCatalogId) }, [profileQ.isSuccess, savedCatalogId])
+  const saveCatalog = useMutation({
+    mutationFn: () => api(`${base}/profile`, { method: "PUT", json: { whatsapp_catalog_id: catalogId.trim() } }),
+    onSuccess: () => { toast.success("Product catalog ID saved"); qc.invalidateQueries({ queryKey: ["agent-profile", id] }) },
+    onError: (e) => toast.error(e.message),
+  })
+
   const [igId, setIgId] = useState("")
   const savedIgId = String(profileQ.data?.profile?.instagram_account_id ?? "")
   useEffect(() => { if (profileQ.isSuccess) setIgId(savedIgId) }, [profileQ.isSuccess, savedIgId])
@@ -110,6 +119,14 @@ export default function Channels() {
             </Field>
             <div className="-mx-4 flex justify-end border-t border-border px-4 pt-3 sm:-mx-5 sm:px-5">
               <Button type="submit" variant="primary" disabled={wabaId.trim() === savedWabaId} loading={saveWaba.isPending}>Save</Button>
+            </div>
+          </form>
+          <form className="space-y-5 border-t border-border p-4 sm:p-5" onSubmit={(e) => { e.preventDefault(); if (catalogId.trim() !== savedCatalogId && !saveCatalog.isPending) saveCatalog.mutate() }}>
+            <Field label="Product catalog ID" hint="From Meta Commerce Manager. Lets the agent show products, a product list, or the full catalog in chat (show_product / browse_catalog tools). Leave empty if this business doesn't sell via a catalog.">
+              <Input value={catalogId} onChange={(e) => setCatalogId(e.target.value)} inputMode="numeric" autoComplete="off" disabled={saveCatalog.isPending} />
+            </Field>
+            <div className="-mx-4 flex justify-end border-t border-border px-4 pt-3 sm:-mx-5 sm:px-5">
+              <Button type="submit" variant="primary" disabled={catalogId.trim() === savedCatalogId} loading={saveCatalog.isPending}>Save</Button>
             </div>
           </form>
         </Card>
