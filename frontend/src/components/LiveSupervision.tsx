@@ -11,10 +11,10 @@ type LiveState = {
   direction: string | null; guidance: string | null; can_transfer?: boolean; transfer_number?: string | null
 }
 
-const RATE = 8000
+export const RATE = 8000
 
 /** Base64 PCM16 (8 kHz mono) -> Float32 samples for Web Audio. */
-function decodePcm(b64: string): Float32Array<ArrayBuffer> {
+export function decodePcm(b64: string): Float32Array<ArrayBuffer> {
   const bin = atob(b64)
   const out = new Float32Array(new ArrayBuffer((bin.length >> 1) * 4))
   for (let i = 0; i < out.length; i++) {

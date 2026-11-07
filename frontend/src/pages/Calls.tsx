@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bot, Clock, Gauge, PhoneCall, PhoneIncoming, PhoneOutgoing, Radio, Search, Timer, X, ListOrdered } from 'lucide-react'
-import { useEffect, useState, type CSSProperties } from 'react'
+import { Bot, Clock, Download, Ear, EarOff, Gauge, PhoneCall, PhoneIncoming, PhoneOutgoing, Radio, Search, Timer, X, ListOrdered } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import CallSheet from '@/components/CallSheet'
 import { CallStatusBadge, QualificationBadge, SentimentDot } from '@/components/status'
 import CallQueue from '@/components/CallQueue'
+import { decodePcm, RATE } from '@/components/LiveSupervision'
 import { Button, Card, EmptyState, Input, PageHeader, Pagination, Select, Skeleton, StatTile, Tabs, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
 import { Orb3D, VoiceOrb, Waveform } from '@/components/VoiceViz'
@@ -14,6 +15,57 @@ import { useAgent } from '@/lib/agent'
 import { useDebounced } from '@/lib/useDebounced'
 import type { Call, CallStats, Page } from '@/lib/types'
 import { callHandledBy, callParty, CALL_STATUSES, cn, formatDate, formatDuration, timeAgo, titleCase } from '@/lib/utils'
+
+/** Read-only "listen in" on a live call: opens the monitor socket, tells it to stream audio, and plays it. No commands sent. */
+function ListenInButton({ callId }: { callId: number }) {
+  const { base } = useAgent()
+  const [connected, setConnected] = useState(false)
+  const socket = useRef<WebSocket | null>(null)
+  const playback = useRef<{ ctx: AudioContext; at: number } | null>(null)
+
+  const stop = useCallback(() => {
+    const ws = socket.current
+    if (ws) { ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; ws.close() }
+    socket.current = null
+    void playback.current?.ctx.close()
+    playback.current = null
+    setConnected(false)
+  }, [])
+
+  useEffect(() => stop, [stop])
+
+  const start = () => {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const ws = new WebSocket(`${proto}//${window.location.host}${base}/calls/${callId}/monitor`)
+    socket.current = ws
+    ws.onopen = () => { setConnected(true); if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'listen', on: true })) }
+    ws.onmessage = (e) => {
+      let msg: Record<string, any>
+      try { msg = JSON.parse(e.data) } catch { return }
+      if (msg?.type === 'audio' && typeof msg.pcm === 'string') {
+        playback.current ??= { ctx: new AudioContext({ sampleRate: RATE }), at: 0 }
+        const { ctx } = playback.current
+        const samples = decodePcm(msg.pcm)
+        const buffer = ctx.createBuffer(1, samples.length, RATE)
+        buffer.copyToChannel(samples, 0)
+        const src = ctx.createBufferSource()
+        src.buffer = buffer
+        src.connect(ctx.destination)
+        const startAt = Math.max(ctx.currentTime + 0.05, playback.current.at)
+        src.start(startAt)
+        playback.current.at = startAt + buffer.duration
+      } else if (msg?.type === 'ended') stop()
+    }
+    ws.onclose = () => stop()
+    ws.onerror = () => stop()
+  }
+
+  return (
+    <Button type="button" variant={connected ? 'primary' : 'ghost'} size="sm" onClick={(e) => { e.stopPropagation(); if (connected) stop(); else start() }} className="shrink-0">
+      {connected ? <><Ear className="size-3.5 animate-pulse" />Listening…</> : <><EarOff className="size-3.5" />Listen in</>}
+    </Button>
+  )
+}
 
 function LiveCallCard({ call, onOpen, index, className, style }: { call: Call; onOpen: () => void; index: number; className?: string; style?: CSSProperties }) {
   const { base } = useAgent()
@@ -30,6 +82,7 @@ function LiveCallCard({ call, onOpen, index, className, style }: { call: Call; o
           <div className="truncate font-bold">{callParty(call)}</div>
           <div className="truncate text-xs text-muted">{call.direction === 'inbound' ? 'Inbound' : 'Outbound'} · {(call.direction === 'inbound' ? call.from_number : call.to_number) ?? 'Unknown number'} · {timeAgo(call.created_at)}</div>
         </div>
+        {call.status === 'In Progress' && <ListenInButton callId={call.id} />}
         <span className="shrink-0"><CallStatusBadge status={call.status} /></span>
       </div>
       <div className="flex h-56 flex-col-reverse overflow-y-auto p-4">
@@ -66,6 +119,10 @@ export default function Calls() {
   const q = useDebounced(search)
   const [page, setPage] = useState(1)
   const [callId, setCallId] = useState<number | null>(null)
+  // Client-side-only presets: the list endpoint has no date or qualification filter, so these narrow the
+  // already-fetched page instead of inventing a new backend query.
+  const [preset, setPreset] = useState<'' | 'today' | 'hot'>('')
+  const [exporting, setExporting] = useState(false)
 
   // URL -> state: sidebar / dashboard links push ?status=active or ?view=queue while this page is already mounted.
   useEffect(() => { setView(viewFromParams); setPage(1) }, [viewFromParams])
@@ -79,7 +136,12 @@ export default function Calls() {
   const changeStatus = (v: string) => { setStatus(v); setPage(1) }
   const changeDirection = (v: string) => { setDirection(v); setPage(1) }
   const changeSearch = (v: string) => { setSearch(v); setPage(1) }
-  const clearFilters = () => { setStatus(''); setDirection(''); setSearch(''); setPage(1) }
+  const clearFilters = () => { setStatus(''); setDirection(''); setSearch(''); setPreset(''); setPage(1) }
+  const togglePreset = (p: 'today' | 'hot') => {
+    if (preset === p) { setPreset(''); if (p === 'today') changeStatus(''); return }
+    setPreset(p)
+    if (p === 'today') changeStatus('No Answer')
+  }
 
   // The status/direction pickers only exist on the All-calls tab, so the Live view must never inherit them (an 'Inbound' pick would silently hide outbound live calls).
   const listDirection = view === 'active' ? '' : direction
@@ -96,13 +158,49 @@ export default function Calls() {
   const statsDown = stats.isError && !s
   const week = s?.series?.reduce((a, d) => ({ total: a.total + d.total, connected: a.connected + d.connected }), { total: 0, connected: 0 })
   const rate = s?.today?.total ? Math.round((100 * s.today.connected) / s.today.total) : null
-  const filtered = !!(status || direction || search)
-  const items = data?.items ?? []
+  const filtered = !!(status || direction || search || preset)
+  const todayStr = new Date().toDateString()
+  const allItems = data?.items ?? []
+  const items = preset === 'today' ? allItems.filter((c) => new Date(c.created_at).toDateString() === todayStr)
+    : preset === 'hot' ? allItems.filter((c) => c.qualification?.trim().toLowerCase() === 'hot')
+    : allItems
   const clearHistory = useMutation({
     mutationFn: () => api(`${base}/calls`, { method: 'DELETE' }),
     onSuccess: () => { toast.success('Call history deleted'); setPage(1); setCallId(null); qc.invalidateQueries({ queryKey: ['calls'] }); qc.invalidateQueries({ queryKey: ['leads'] }) },
     onError: (e) => toast.error(e instanceof Error ? e.message : 'Could not delete call history'),
   })
+  const exportCsv = async () => {
+    setExporting(true)
+    try {
+      const rows: Call[] = []
+      const size = 200
+      for (let p = 1; ; p++) {
+        const res = await api<Page<Call>>(`${base}/calls`, { params: { status, direction, search: q, page: p, page_size: size } })
+        rows.push(...res.items)
+        if (rows.length >= res.total || res.items.length < size) break
+      }
+      const filteredRows = preset === 'today' ? rows.filter((c) => new Date(c.created_at).toDateString() === todayStr)
+        : preset === 'hot' ? rows.filter((c) => c.qualification?.trim().toLowerCase() === 'hot')
+        : rows
+      const header = ['ID', 'Lead', 'Number', 'Direction', 'Status', 'Outcome', 'Qualification', 'Sentiment', 'Duration (s)', 'Trigger', 'Created At']
+      const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
+      const csv = [header, ...filteredRows.map((c) => [c.id, c.lead_name ?? '', (c.direction === 'inbound' ? c.from_number : c.to_number) ?? '', c.direction, c.status, c.outcome ?? '', c.qualification ?? '', c.sentiment ?? '', c.duration, c.trigger, c.created_at])]
+        .map((row) => row.map(esc).join(',')).join('\n')
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `calls-${new Date().toISOString().slice(0, 10)}.csv`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Export failed')
+    } finally {
+      setExporting(false)
+    }
+  }
   const onClearHistory = async () => {
     if (await confirm({ title: 'Delete all call history?', description: `Every call, transcript and recording link for ${agent?.name ?? 'this agent'} is removed permanently. Leads stay.`, confirmLabel: 'Delete history', danger: true })) clearHistory.mutate()
   }
@@ -158,14 +256,20 @@ export default function Calls() {
         </div>
       ) : (
         <Card className="overflow-hidden">
+          <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 pt-3">
+            <Button variant={preset === 'today' ? 'primary' : 'ghost'} size="sm" onClick={() => togglePreset('today')}>Missed today</Button>
+            <Button variant={preset === 'hot' ? 'primary' : 'ghost'} size="sm" onClick={() => togglePreset('hot')}>Hot leads</Button>
+            <Button variant={direction === 'inbound' ? 'primary' : 'ghost'} size="sm" onClick={() => changeDirection(direction === 'inbound' ? '' : 'inbound')}>Inbound only</Button>
+          </div>
           <div className="flex flex-wrap items-center gap-2 border-b border-border p-3">
             <div className="relative min-w-56 flex-1 sm:max-w-sm">
               <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
               <Input value={search} onChange={(e) => changeSearch(e.target.value)} placeholder="Search lead name or number…" className="pl-9" />
             </div>
-            <Select value={status} onChange={(e) => changeStatus(e.target.value)} className="w-auto"><option value="">All results</option>{CALL_STATUSES.filter((x) => x !== 'Pending').map((x) => <option key={x}>{x}</option>)}</Select>
+            <Select value={status} onChange={(e) => { setPreset(''); changeStatus(e.target.value) }} className="w-auto"><option value="">All results</option>{CALL_STATUSES.filter((x) => x !== 'Pending').map((x) => <option key={x}>{x}</option>)}</Select>
             <Select value={direction} onChange={(e) => changeDirection(e.target.value)} className="w-auto"><option value="">All directions</option><option value="outbound">Outbound</option><option value="inbound">Inbound</option></Select>
             {filtered && <Button variant="ghost" size="sm" onClick={clearFilters}><X />Clear</Button>}
+            <Button variant="secondary" size="sm" onClick={exportCsv} loading={exporting}><Download />Export CSV</Button>
             <span className="ml-auto text-xs font-semibold text-muted">{data ? `${data.total} call${data.total === 1 ? '' : 's'}` : ''}</span>
           </div>
           {isError ? (
