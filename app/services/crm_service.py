@@ -13,7 +13,9 @@ from sqlalchemy import and_, case, func, or_, select
 
 from app.core.database import get_db
 from app.core.logging import get_logger
+from app.models.agent import Agent
 from app.models.lead import Lead
+from app.models.user import User
 from app.services import events
 
 log = get_logger(__name__)
@@ -47,7 +49,12 @@ IMPORT_ALIASES = {
     "tags": "tags", "tag": "tags",
     "notes": "notes", "note": "notes", "remarks": "notes", "comments": "notes",
     "status": "status", "stage": "status", "leadstage": "status", "leadstatus": "status",
+    "qualification": "qualification", "temperature": "qualification", "leadquality": "qualification", "leadtemperature": "qualification",
+    "owner": "owner_user_id", "ownerid": "owner_user_id", "assignedto": "owner_user_id", "assignee": "owner_user_id",
+    "owneruserid": "owner_user_id", "salesowner": "owner_user_id",
 }
+
+QUALIFICATIONS = ("Hot", "Warm", "Cold")
 
 LANGUAGE_NAMES = {"english": "en-IN", "hindi": "hi-IN", "bengali": "bn-IN", "tamil": "ta-IN", "telugu": "te-IN",
                   "kannada": "kn-IN", "malayalam": "ml-IN", "marathi": "mr-IN", "gujarati": "gu-IN",
@@ -551,12 +558,31 @@ class CRMService:
     IMPORT_STATUSES = ("New", "Contacted", "Interested", "Follow Up", "Meeting Booked", "Closed Won", "Closed Lost",
                        "Not Interested", "Do Not Call")
 
-    def _row_values(self, row: dict, mapping: dict, defaults: dict) -> tuple[dict | None, str | None]:
-        """Cleaned lead fields for one spreadsheet row, or an error explaining why it can't be imported."""
+    def _owner_candidates(self) -> dict:
+        """User ids this import may assign to, keyed by both their id and lowercased email, scoped to the
+        agent's organisation (same check as the manual /assign endpoint: active and in-org)."""
+        with get_db() as db:
+            org_id = db.scalar(select(Agent.organization_id).where(Agent.id == self.agent_id)) if self.agent_id else None
+            if org_id is None:
+                return {}
+            rows = db.execute(select(User.id, User.email, User.status).where(User.organization_id == org_id)).all()
+        out = {}
+        for uid, email, status in rows:
+            if status != "active":
+                continue
+            out[str(uid)] = uid
+            if email:
+                out[email.strip().lower()] = uid
+        return out
+
+    def _row_values(self, row: dict, mapping: dict, defaults: dict, owners: dict | None = None) -> tuple[dict | None, str | None, list[str]]:
+        """Cleaned lead fields for one spreadsheet row, or an error explaining why it can't be imported.
+        Non-fatal problems (an owner or qualification that doesn't resolve) come back as warnings instead of
+        silently dropping the value."""
         values = {field: _clean(row.get(col)) for col, field in mapping.items() if field}
         phone = normalize_phone(values.get("phone"))
         if not phone:
-            return None, f"Invalid phone: {values.get('phone') or '(empty)'}"
+            return None, f"Invalid phone: {values.get('phone') or '(empty)'}", []
         email = values.get("email")
         if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
             email = None  # keep the lead, drop the bad address
@@ -568,13 +594,30 @@ class CRMService:
         else:
             status = next((s for s in self.IMPORT_STATUSES if s.lower() == raw_status), "New")
         tags = [t.strip() for t in f"{values.get('tags') or ''},{defaults.get('tags') or ''}".split(",") if t.strip()]
+
+        warnings = []
+        qualification = None
+        raw_qual = values.get("qualification")
+        if raw_qual:
+            qualification = next((q for q in QUALIFICATIONS if q.lower() == raw_qual.strip().lower()), None)
+            if qualification is None:
+                warnings.append(f"Unknown qualification '{raw_qual}' (expected Hot, Warm or Cold)")
+
+        owner_user_id = None
+        raw_owner = values.get("owner_user_id")
+        if raw_owner:
+            owners = owners or {}
+            owner_user_id = owners.get(raw_owner.strip()) if raw_owner.strip().isdigit() else owners.get(raw_owner.strip().lower())
+            if owner_user_id is None:
+                warnings.append(f"Owner '{raw_owner}' not found (use a user id or their email)")
+
         return {
             "name": values.get("name"), "company": values.get("company"), "phone": phone, "email": email,
             "city": values.get("city"), "language": normalize_language(values.get("language") or defaults.get("language")),
             "source": values.get("source") or defaults.get("source") or "import",
             "tags": ",".join(dict.fromkeys(tags)) or None, "notes": values.get("notes"), "status": status,
-            "do_not_call": status == "Do Not Call",
-        }, None
+            "do_not_call": status == "Do Not Call", "qualification": qualification, "owner_user_id": owner_user_id,
+        }, None, warnings
 
     def analyze_rows(self, df: pd.DataFrame, mapping: dict | None = None) -> dict:
         """Dry run for the preview: how many rows are new, duplicates (in the CRM or repeated in the file) or invalid."""
@@ -583,9 +626,10 @@ class CRMService:
             return {"ready": 0, "duplicates": 0, "invalid": len(df), "row_status": []}
         with get_db() as db:
             existing = set(db.scalars(self._scoped(select(Lead.phone))))
+        owners = self._owner_candidates() if "owner_user_id" in mapping.values() else {}
         seen, ready, duplicates, invalid, row_status = set(), 0, 0, 0, []
         for i, row in enumerate(df.to_dict("records")):
-            values, error = self._row_values(row, mapping, {})
+            values, error, warnings = self._row_values(row, mapping, {}, owners)
             if error:
                 invalid += 1
                 state = {"state": "invalid", "detail": error}
@@ -595,6 +639,8 @@ class CRMService:
             else:
                 ready += 1
                 state = {"state": "ready", "detail": values["phone"]}
+            if warnings and state["state"] != "invalid":
+                state = {**state, "detail": f"{state['detail']} — {'; '.join(warnings)}"}
             if values:
                 seen.add(values["phone"])
             if i < 8:
@@ -615,11 +661,12 @@ class CRMService:
         defaults["tags"] = ",".join(t for t in (defaults.get("tags"), batch) if t)
         on_duplicate = on_duplicate or ("skip" if skip_duplicates else "update")
         created, updated, skipped, errors = 0, 0, 0, []
+        owners = self._owner_candidates() if "owner_user_id" in mapping.values() else {}
 
         with get_db() as db:
             leads_by_phone = {l.phone: l for l in db.scalars(self._scoped(select(Lead)))}  # duplicates are per agent
             for i, row in enumerate(df.to_dict("records"), start=2):
-                values, error = self._row_values(row, mapping, defaults)
+                values, error, warnings = self._row_values(row, mapping, defaults, owners)
                 if error:
                     errors.append({"row": i, "error": error})
                     continue
@@ -628,7 +675,7 @@ class CRMService:
                     if on_duplicate != "update":
                         skipped += 1
                         continue
-                    for field in ("name", "company", "email", "city", "source"):
+                    for field in ("name", "company", "email", "city", "source", "qualification", "owner_user_id"):
                         if values.get(field) and not getattr(current, field):
                             setattr(current, field, values[field])
                     if values.get("tags"):

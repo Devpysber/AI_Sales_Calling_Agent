@@ -17,6 +17,7 @@ type Result = { created: number; updated?: number; skipped_duplicates: number; e
 const FIELDS = [
   ['', 'Ignore'], ['name', 'Name'], ['phone', 'Phone *'], ['company', 'Company'], ['email', 'Email'], ['city', 'City'],
   ['language', 'Language'], ['source', 'Source'], ['tags', 'Tags'], ['notes', 'Notes'], ['status', 'Stage'],
+  ['qualification', 'Qualification (Hot/Warm/Cold)'], ['owner_user_id', 'Owner / assigned to'],
 ] as const
 
 const TEMPLATE = 'Name,Company,Phone,Email,City,Language,Tags,Notes\nRahul Sharma,Acme Pvt Ltd,9876543210,rahul@acme.in,Bhopal,Hindi,webinar,Interested in automation\nPriya Nair,Nair Traders,+91 98450 12345,priya@nair.in,Kochi,English,referral,\n'
