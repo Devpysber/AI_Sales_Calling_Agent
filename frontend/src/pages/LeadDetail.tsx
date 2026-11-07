@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, Ban, Bot, Building2, CalendarClock, Check, ChevronRight, Clock, Copy, Gauge, Lightbulb, ListPlus, Mail, MapPin,
-  Globe, MessageSquare, MessageSquareQuote, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOutgoing, Play, RefreshCw, ShieldAlert, Sparkles, Target, Trash2, User,
+  ArrowLeft, Ban, Bot, Building2, CalendarClock, Camera, Check, ChevronRight, Clock, Copy, ExternalLink, Gauge, Lightbulb, ListPlus, Mail, MapPin,
+  Globe, MessageSquare, MessageSquareQuote, Pencil, Phone, PhoneCall, PhoneIncoming, PhoneOutgoing, Play, RefreshCw, ShieldAlert, Sparkles, Target, Trash2, User, X,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
@@ -99,7 +99,7 @@ export default function LeadDetail() {
   const qc = useQueryClient()
   const confirm = useConfirm()
   const startCall = useStartCall()
-  const [tab, setTab] = useState<'conversation' | 'calls' | 'whatsapp' | 'activity'>('conversation')
+  const [tab, setTab] = useState<'conversation' | 'calls' | 'whatsapp' | 'instagram' | 'activity'>('conversation')
   const [callId, setCallId] = useState<number | null>(null)
   const [transcriptOf, setTranscriptOf] = useState<number | null>(null)
   const [editing, setEditing] = useState(false)
@@ -346,6 +346,7 @@ export default function LeadDetail() {
                 { value: 'conversation', label: 'Transcript' },
                 { value: 'calls', label: `Calls (${stats.total})` },
                 { value: 'whatsapp', label: 'WhatsApp' },
+                { value: 'instagram', label: <span className="inline-flex items-center gap-1.5"><Camera className="size-3.5" />Instagram</span> },
                 { value: 'activity', label: `Timeline (${activity.data?.length ?? 0})` },
               ]} />
               {tab === 'conversation' && shownCallId !== null && (
@@ -427,7 +428,9 @@ export default function LeadDetail() {
                 ) : <EmptyState icon={<PhoneCall />} title="No calls yet" action={<Button variant="primary" disabled={l.do_not_call} loading={startCall.isPending} onClick={() => startCall.mutate(l.id)}><PhoneCall />Call now</Button>} />
               )}
 
-              {tab === 'whatsapp' && <WhatsAppPanel base={base} leadId={l.id} phone={l.phone} />}
+              {tab === 'whatsapp' && <WhatsAppTabs base={base} leadId={l.id} phone={l.phone} path={path} />}
+
+              {tab === 'instagram' && <InstagramPanel base={base} leadId={l.id} path={path} />}
 
               {tab === 'activity' && (
                 activity.isLoading ? <Skeleton className="h-32" />
@@ -521,7 +524,13 @@ export default function LeadDetail() {
                 ['Retries', l.retry_count || null],
                 ['Last contact', l.last_contacted_at ? timeAgo(l.last_contacted_at) : null],
                 ['Source', l.source],
-                ['Tags', l.tags?.length ? <span className="flex flex-wrap justify-end gap-1">{l.tags.map((t) => <Badge key={t}>{t}</Badge>)}</span> : null],
+              ] as [string, ReactNode][]).map(([k, v]) => (
+                <div key={k} className="flex items-center justify-between gap-4 py-2.5">
+                  <dt className="shrink-0 text-muted">{k}</dt><dd className="min-w-0 text-right font-semibold break-words">{v || <span className="font-normal text-muted">—</span>}</dd>
+                </div>
+              ))}
+              <TagsRow tags={l.tags ?? []} saving={patch.isPending} onSave={(tags) => patch.mutate({ tags })} />
+              {([
                 ['Created', formatDate(l.created_at)],
                 ['Updated', formatDate(l.updated_at)],
               ] as [string, ReactNode][]).map(([k, v]) => (
@@ -537,6 +546,36 @@ export default function LeadDetail() {
       <CallSheet callId={callId} onClose={() => setCallId(null)} />
       <LeadFormSheet key={editing ? l.id : 'closed'} open={editing} lead={editing ? l : null} onClose={() => setEditing(false)} />
     </>
+  )
+}
+
+/** Tags row for the Details card. Click-to-edit, like the Notes card above: a comma-separated input that
+ * PATCHes `tags` via the same lead-update endpoint as every other field on this page. */
+function TagsRow({ tags, saving, onSave }: { tags: string[]; saving: boolean; onSave: (tags: string[]) => void }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  if (draft === null) {
+    return (
+      <div className="flex items-center justify-between gap-4 py-2.5">
+        <dt className="shrink-0 text-muted">Tags</dt>
+        <dd className="flex min-w-0 items-center justify-end gap-1.5 text-right font-semibold break-words">
+          {tags.length ? <span className="flex flex-wrap justify-end gap-1">{tags.map((t) => <Badge key={t}>{t}</Badge>)}</span> : <span className="font-normal text-muted">—</span>}
+          <button type="button" title="Edit tags" aria-label="Edit tags" onClick={() => setDraft(tags.join(', '))} className="grid size-7 shrink-0 place-items-center rounded-lg text-muted hover:bg-surface-2 hover:text-fg"><Pencil className="size-3.5" /></button>
+        </dd>
+      </div>
+    )
+  }
+  const save = () => onSave(draft.split(',').map((t) => t.trim()).filter(Boolean))
+  return (
+    <div className="space-y-2 py-2.5">
+      <dt className="text-muted">Tags</dt>
+      <Input autoFocus value={draft} disabled={saving} placeholder="hot, follow-up, vip" onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') { save(); setDraft(null) } if (e.key === 'Escape') setDraft(null) }} />
+      <p className="text-xs text-muted">Comma-separated.</p>
+      <div className="flex justify-end gap-2">
+        <Button size="sm" disabled={saving} onClick={() => setDraft(null)}><X className="size-3.5" />Cancel</Button>
+        <Button size="sm" variant="primary" loading={saving} onClick={() => { save(); setDraft(null) }}><Check className="size-3.5" />Save</Button>
+      </div>
+    </div>
   )
 }
 
@@ -608,6 +647,65 @@ function QueueButton({ disabled, loading, onQueue }: { disabled: boolean; loadin
 
 
 type WaMsg = { id: number; direction: 'in' | 'out'; text: string; provider?: string; created_at: string }
+type ChatTurn = { role: 'customer' | 'assistant' | 'human'; text: string; at?: string; by?: string }
+type ChatDetail = { id: number; lead_id: number | null; status: string; message_count: number; transcript: ChatTurn[]; summary?: string | null }
+
+/** Two systems can hold a WhatsApp conversation with the same lead: the legacy wa-bridge (direct send/receive
+ * below) and the newer Meta Cloud API chat. Both are shown, clearly labelled, instead of merging or hiding one. */
+function WhatsAppTabs({ base, leadId, phone, path }: { base: string; leadId: number; phone: string; path: (p: string) => string }) {
+  const [sub, setSub] = useState<'bridge' | 'cloud'>('bridge')
+  return (
+    <div className="space-y-3">
+      <Tabs value={sub} onChange={setSub} items={[{ value: 'bridge', label: 'wa-bridge' }, { value: 'cloud', label: 'Cloud API' }]} />
+      {sub === 'bridge' ? <WhatsAppPanel base={base} leadId={leadId} phone={phone} /> : <CloudChatPanel base={base} leadId={leadId} path={path} channel="whatsapp" />}
+    </div>
+  )
+}
+
+/** Read-only view of the Instagram chat with this lead (if one exists). Replying happens on the Instagram
+ * inbox page, linked below, which is agent-scoped and already handles AI pause/resume. */
+function InstagramPanel({ base, leadId, path }: { base: string; leadId: number; path: (p: string) => string }) {
+  return <CloudChatPanel base={base} leadId={leadId} path={path} channel="instagram" />
+}
+
+/** Shared read-only chat viewer for the lead-scoped by-lead lookups on Instagram / WhatsApp Cloud API. */
+function CloudChatPanel({ base, leadId, path, channel }: { base: string; leadId: number; path: (p: string) => string; channel: 'instagram' | 'whatsapp' }) {
+  const q = useQuery({
+    queryKey: [`lead-${channel}-cloud`, leadId],
+    queryFn: () => api<ChatDetail>(`${base}/${channel}/chats/by-lead/${leadId}`),
+    retry: false,
+    refetchInterval: 8000,
+  })
+  const label = channel === 'instagram' ? 'Instagram' : 'WhatsApp Cloud API'
+  const inboxHref = channel === 'instagram' ? path('/instagram') : path('/whatsapp-cloud')
+  if (q.isLoading) return <Skeleton className="h-32" />
+  if (isGone(q.error)) return <p className="text-sm text-muted">No {label} conversation with this lead yet.</p>
+  if (q.isError) return <p className="text-sm text-danger">Could not load {label}. {q.error.message}</p>
+  const chat = q.data!
+  const turns = chat.transcript ?? []
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-semibold text-muted">{chat.message_count} message{chat.message_count === 1 ? '' : 's'} · {chat.status}</span>
+        <Link to={inboxHref}><Button size="sm"><ExternalLink className="size-3.5" />Open {label} inbox</Button></Link>
+      </div>
+      {chat.summary && <div className="rounded-xl bg-surface-2 p-3 text-[13px] break-words text-fg-2"><b className="text-fg">Summary:</b> {chat.summary}</div>}
+      {turns.length === 0 ? <p className="text-sm text-muted">No messages yet.</p> : (
+        <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
+          {turns.map((t, i) => (
+            <div key={i} className={cn('flex', t.role === 'customer' ? 'justify-start' : 'justify-end')}>
+              <div className={cn('max-w-[80%] rounded-2xl px-3 py-2 text-sm', t.role === 'customer' ? 'bg-surface-2 text-fg' : 'bg-brand/15 text-fg')}>
+                {t.role !== 'customer' && <div className="mb-0.5 text-[11px] font-semibold text-muted">{t.role === 'human' ? (t.by || 'Agent (human)') : 'AI'}</div>}
+                <p className="break-words whitespace-pre-wrap">{t.text}</p>
+                {t.at && <div className="mt-1 text-right text-[10px] text-muted">{formatDate(t.at)}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 /** WhatsApp thread with this lead. Mounted only while its tab is open, so the 5 s poll stops when it is hidden. */
 function WhatsAppPanel({ base, leadId, phone }: { base: string; leadId: number; phone: string }) {
