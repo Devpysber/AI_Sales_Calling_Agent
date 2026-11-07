@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, CalendarCheck, Clock, Flame, Gauge, IndianRupee, PhoneCall, Printer, TrendingUp, UserPlus } from 'lucide-react'
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, CalendarCheck, Clock, Download, Flame, Gauge, IndianRupee, PhoneCall, Printer, TrendingUp, UserPlus } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
@@ -13,6 +13,48 @@ import { cn, DAYS, formatDuration, titleCase } from '@/lib/utils'
 
 const tooltipStyle = { background: 'var(--elevated)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12, boxShadow: 'var(--shadow-pop)' }
 const RANGES = [{ value: '7', label: '7d' }, { value: '14', label: '14d' }, { value: '30', label: '30d' }, { value: '90', label: '90d' }] as const
+
+const csvCell = (v: unknown) => {
+  const s = v == null ? '' : String(v)
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+const csvSection = (title: string, header: string[], rows: (string | number | null | undefined)[][]) =>
+  [title, header.map(csvCell).join(','), ...rows.map((r) => r.map(csvCell).join(','))].join('\n')
+
+function downloadAnalyticsCsv(data: AnalyticsReport, channelData: ChannelAnalyticsReport | undefined, days: string) {
+  const k = data.kpis
+  const sections = [
+    csvSection('KPIs', ['metric', 'value'], [
+      ['calls', k.calls], ['connected', k.connected], ['connect_rate', k.connect_rate],
+      ['meetings', k.meetings], ['meeting_rate', k.meeting_rate], ['hot', k.hot],
+      ['talk_seconds', k.talk_seconds], ['avg_duration', k.avg_duration], ['avg_latency_ms', k.avg_latency_ms],
+      ['new_leads', data.new_leads],
+    ]),
+    csvSection('Daily activity', ['date', 'calls', 'connected', 'meetings', 'talk_seconds'],
+      data.series.map((s) => [s.date, s.calls, s.connected, s.meetings, s.talk_seconds])),
+    csvSection('Outcomes', ['outcome', 'count'], Object.entries(data.outcomes ?? {})),
+    csvSection('Qualification', ['temperature', 'count'], Object.entries(data.qualification ?? {})),
+    csvSection('Sentiment', ['sentiment', 'count'], Object.entries(data.sentiment ?? {})),
+    csvSection('By trigger', ['trigger', 'calls', 'connected', 'meetings'],
+      data.triggers.map((t) => [t.trigger, t.calls, t.connected, t.meetings])),
+    csvSection('Lead sources', ['source', 'leads', 'hot', 'meetings'],
+      data.sources.map((s) => [s.source, s.leads, s.hot, s.meetings])),
+    csvSection('Failures', ['reason', 'count'], data.failures.map((f) => [f.reason, f.count])),
+  ]
+  if (channelData) {
+    sections.push(csvSection('By channel', ['channel', 'conversations', 'closed', 'resolution_rate', 'avg_first_response_seconds'],
+      channelData.channels.map((c) => [c.channel, c.conversations, c.closed, c.resolution_rate, c.avg_first_response_seconds])))
+    sections.push(csvSection('Tool usage', ['tool_name', 'calls', 'success_rate'],
+      channelData.tools.map((t) => [t.tool_name, t.calls, t.success_rate])))
+  }
+  const blob = new Blob([sections.join('\n\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `analytics-${days}d-${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
 
 // The API already returns rates as percentages (0-100).
 const pct = (n: number | null | undefined) => (n == null ? '—' : `${n.toFixed(1)}%`)
@@ -95,7 +137,7 @@ function Heatmap({ cells }: { cells: AnalyticsReport['heatmap'] }) {
 }
 
 export default function Analytics() {
-  const { agent, base } = useAgent()
+  const { agent, base, path } = useAgent()
   const [days, setDays] = useState<'7' | '14' | '30' | '90'>('30')
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery<AnalyticsReport>({
     queryKey: ['analytics', days],
@@ -110,6 +152,13 @@ export default function Analytics() {
     placeholderData: keepPreviousData,
     refetchInterval: 30000,
   })
+
+  // Resolves tool_name -> tool_id so the "Tool usage" rows can link to that tool's runs on the Tools page.
+  const { data: toolDefs } = useQuery<{ id: number; name: string }[]>({
+    queryKey: ['tools', base],
+    queryFn: () => api<{ id: number; name: string }[]>(`${base}/tools`),
+  })
+  const toolIdByName = new Map((toolDefs ?? []).map((t) => [t.name, t.id]))
 
   const k: AnalyticsKpis | undefined = data?.kpis
   const p = data?.previous
@@ -140,6 +189,7 @@ export default function Analytics() {
         description="How this agent performs: reach, conversations, conversions and the best time to call. Compared with the previous period of the same length."
         actions={<>
           <Tabs value={days} onChange={setDays} items={RANGES.map((r) => ({ ...r }))} />
+          <Button onClick={() => data && downloadAnalyticsCsv(data, channelData, days)} disabled={!data} className="no-print"><Download />Export CSV</Button>
           <Button onClick={() => window.print()} className="no-print"><Printer />Print</Button>
         </>} />
 
@@ -317,11 +367,17 @@ export default function Analytics() {
                     <thead><tr className="border-y border-border bg-surface-2/50 text-left text-[11px] font-bold tracking-wider text-muted uppercase">
                       <th className="px-5 py-2.5">Tool</th><th className="px-3 py-2.5 text-right">Calls</th><th className="px-5 py-2.5 text-right">Success rate</th></tr></thead>
                     <tbody className="divide-y divide-border">
-                      {channelData.tools.map((t) => (
-                        <tr key={t.tool_name}><td className="max-w-[200px] truncate px-5 py-2.5 font-semibold">{t.tool_name}</td>
-                          <td className="px-3 text-right tabular-nums">{t.calls}</td>
-                          <td className="px-5 text-right tabular-nums">{pct(t.success_rate)}</td></tr>
-                      ))}
+                      {channelData.tools.map((t) => {
+                        const toolId = toolIdByName.get(t.tool_name)
+                        const nameCell = toolId != null
+                          ? <Link to={path(`/tools?viewRuns=${toolId}`)} className="underline-offset-2 hover:underline">{t.tool_name}</Link>
+                          : t.tool_name
+                        return (
+                          <tr key={t.tool_name}><td className="max-w-[200px] truncate px-5 py-2.5 font-semibold">{nameCell}</td>
+                            <td className="px-3 text-right tabular-nums">{t.calls}</td>
+                            <td className="px-5 text-right tabular-nums">{pct(t.success_rate)}</td></tr>
+                        )
+                      })}
                       {!channelData.tools.length && <tr><td colSpan={3} className="px-5 py-8 text-center text-muted">No tool calls in this period.</td></tr>}
                     </tbody>
                   </table>

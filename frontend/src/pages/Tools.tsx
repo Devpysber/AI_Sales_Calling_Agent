@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Banknote, Eye, History, Pencil, Plus, Trash2, Wrench } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import {
   Badge, Button, Card, CardHeader, Dialog, EmptyState, Field, Input, PageHeader, Select, Skeleton, Switch, Textarea,
@@ -66,6 +67,16 @@ export default function Tools() {
   const [testArgs, setTestArgs] = useState("{}")
   const [testResult, setTestResult] = useState<unknown>(null)
   const [viewingRuns, setViewingRuns] = useState<Tool | null>(null)
+
+  // Analytics' per-tool "Tool usage" rows link here with ?viewRuns=<id> to auto-open that tool's runs dialog.
+  const [params, setParams] = useSearchParams()
+  useEffect(() => {
+    const viewRuns = params.get("viewRuns")
+    if (!viewRuns || !tools.length) return
+    const match = tools.find((t) => String(t.id) === viewRuns)
+    if (match) setViewingRuns(match)
+    setParams((p) => { p.delete("viewRuns"); return p }, { replace: true })
+  }, [params, tools, setParams])
 
   const invalidate = () => qc.invalidateQueries({ queryKey: key })
 
