@@ -130,20 +130,64 @@ def resume(chat_id: int, agent_id: int = Depends(workspace)):
     return {"ok": True}
 
 
-# ---------------- WhatsApp message templates (Meta-approved, for the 24h window) ----------------
+# ---------------- WhatsApp message templates (real Meta message_templates shape) ----------------
+
+import json as _json
+
+MAX_BUTTONS = 3
+
 
 class TemplateIn(BaseModel):
     name: str
-    whatsapp_template_name: str
-    whatsapp_template_language: str = "en_US"
-    body: str = ""
-    is_meta_approved: bool = True
+    language: str = "en_US"
+    category: str
+    components: list[dict] = Field(default_factory=list)
+
+    def validated_components(self) -> tuple[list[dict], str]:
+        """Returns (components, header_format). Raises ValueError on an invalid shape."""
+        bodies = [c for c in self.components if (c.get("type") or "").upper() == "BODY"]
+        if len(bodies) != 1 or not str(bodies[0].get("text") or "").strip():
+            raise ValueError("Exactly one BODY component with non-empty text is required.")
+        headers = [c for c in self.components if (c.get("type") or "").upper() == "HEADER"]
+        header_format = (headers[0].get("format") or "TEXT").upper() if headers else "NONE"
+        buttons_comp = [c for c in self.components if (c.get("type") or "").upper() == "BUTTONS"]
+        if buttons_comp and len(buttons_comp[0].get("buttons") or []) > MAX_BUTTONS:
+            raise ValueError(f"At most {MAX_BUTTONS} buttons are allowed.")
+        return self.components, header_format
 
 
 class TemplateSend(BaseModel):
     lead_id: int | None = None
     phone: str | None = None
-    variables: list[str] = Field(default_factory=list)
+    variables: dict[str, list[str]] = Field(default_factory=dict)
+
+
+def _build_send_components(stored: list[dict], variables: dict[str, list[str]]) -> list[dict]:
+    """Build Meta's `template.components` send-time parameters array from the stored
+    create-time `components` (header/body/footer/buttons) plus caller-supplied variable values,
+    keyed by component type: {"header": [...], "body": [...], "button_0": [...], ...}."""
+    out: list[dict] = []
+    for comp in stored or []:
+        ctype = (comp.get("type") or "").upper()
+        if ctype == "BODY":
+            values = variables.get("body") or []
+            if values:
+                out.append({"type": "body", "parameters": [{"type": "text", "text": str(v)} for v in values]})
+        elif ctype == "HEADER":
+            values = variables.get("header") or []
+            fmt = (comp.get("format") or "TEXT").upper()
+            if values:
+                if fmt == "TEXT":
+                    out.append({"type": "header", "parameters": [{"type": "text", "text": str(values[0])}]})
+                else:
+                    out.append({"type": "header", "parameters": [{"type": fmt.lower(), fmt.lower(): {"link": str(values[0])}}]})
+        elif ctype == "BUTTONS":
+            for i, btn in enumerate(comp.get("buttons") or []):
+                values = variables.get(f"button_{i}") or []
+                if values and (btn.get("type") or "").upper() == "URL":
+                    out.append({"type": "button", "sub_type": "url", "index": str(i),
+                               "parameters": [{"type": "text", "text": str(values[0])}]})
+    return out
 
 
 @router.get("/templates")
@@ -156,12 +200,70 @@ def list_templates(agent_id: int = Depends(workspace)):
 
 @router.post("/templates")
 def create_template(body: TemplateIn, agent_id: int = Depends(workspace)):
+    try:
+        components, header_format = body.validated_components()
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    body_text = next(c.get("text") or "" for c in components if (c.get("type") or "").upper() == "BODY")
     with get_db() as db:
-        row = MessageTemplate(agent_id=agent_id, name=body.name, channel="whatsapp", body=body.body,
-                              whatsapp_template_name=body.whatsapp_template_name,
-                              whatsapp_template_language=body.whatsapp_template_language,
-                              is_meta_approved=body.is_meta_approved)
+        row = MessageTemplate(agent_id=agent_id, name=body.name, channel="whatsapp", body=body_text,
+                              whatsapp_template_name=body.name, whatsapp_template_language=body.language,
+                              category=body.category, components_json=_json.dumps(components),
+                              header_format=header_format, status="draft", is_meta_approved=False)
         db.add(row)
+        db.flush()
+        return row.to_dict()
+
+
+@router.post("/templates/{template_id}/submit")
+def submit_template(template_id: int, agent_id: int = Depends(workspace)):
+    with get_db() as db:
+        row = db.query(MessageTemplate).filter(MessageTemplate.agent_id == agent_id,
+                                                MessageTemplate.id == template_id,
+                                                MessageTemplate.channel == "whatsapp").first()
+        if not row:
+            raise HTTPException(404, "Template not found.")
+        name, language, category = row.whatsapp_template_name, row.whatsapp_template_language, row.category
+        components = _json.loads(row.components_json) if row.components_json else []
+    import asyncio
+    result = asyncio.run(wa.create_meta_template(name, language, category, components, agent_id=agent_id))
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "WhatsApp template submission failed")
+    with get_db() as db:
+        row = db.get(MessageTemplate, template_id)
+        row.status = "pending"
+        row.whatsapp_template_id = str((result.get("data") or {}).get("id") or "")
+        db.flush()
+        return row.to_dict()
+
+
+@router.get("/templates/{template_id}/status")
+def sync_template_status(template_id: int, agent_id: int = Depends(workspace)):
+    """Explicit "sync status" action: pulls the latest category/status/rejected_reason from Meta.
+    Never polled automatically."""
+    with get_db() as db:
+        row = db.query(MessageTemplate).filter(MessageTemplate.agent_id == agent_id,
+                                                MessageTemplate.id == template_id,
+                                                MessageTemplate.channel == "whatsapp").first()
+        if not row:
+            raise HTTPException(404, "Template not found.")
+        if not row.whatsapp_template_id:
+            raise HTTPException(400, "Template has not been submitted to Meta yet.")
+        whatsapp_template_id = row.whatsapp_template_id
+    import asyncio
+    result = asyncio.run(wa.fetch_meta_template(whatsapp_template_id, agent_id=agent_id))
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "WhatsApp status sync failed")
+    data = result.get("data") or {}
+    status = str(data.get("status") or "").lower()
+    with get_db() as db:
+        row = db.get(MessageTemplate, template_id)
+        if status:
+            row.status = status
+        if data.get("category"):
+            row.category = data["category"]
+        row.rejected_reason = data.get("rejected_reason")
+        row.is_meta_approved = status == "approved"
         db.flush()
         return row.to_dict()
 
@@ -175,15 +277,17 @@ def send_template(template_id: int, body: TemplateSend, agent_id: int = Depends(
         if not row:
             raise HTTPException(404, "Template not found.")
         template_name, language = row.whatsapp_template_name, row.whatsapp_template_language
+        stored_components = _json.loads(row.components_json) if row.components_json else []
     phone = body.phone
     if not phone and body.lead_id:
         with get_db() as db:
             phone = db.scalar(select(Lead.phone).where(Lead.id == body.lead_id))
     if not phone:
         raise HTTPException(400, "A lead_id with a phone number, or a phone, is required.")
+    send_components = _build_send_components(stored_components, body.variables)
     import asyncio
-    result = asyncio.run(wa.send_whatsapp_template(phone, template_name, language, body.variables,
-                                                    agent_id=agent_id, lead_id=body.lead_id))
+    result = asyncio.run(wa.send_whatsapp_template(phone, template_name, language, agent_id=agent_id,
+                                                    lead_id=body.lead_id, components=send_components))
     if not result.get("ok"):
         raise HTTPException(400, result.get("error") or "WhatsApp template send failed")
     return result

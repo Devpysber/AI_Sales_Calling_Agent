@@ -171,6 +171,16 @@ def _profile_phone_id(agent_id: int | None) -> str:
         return ""
 
 
+def _profile_waba_id(agent_id: int | None) -> str:
+    if not agent_id:
+        return ""
+    try:
+        from app.services import agents
+        return str((agents.get_profile(agent_id) or {}).get("whatsapp_business_account_id") or "").strip()
+    except Exception:
+        return ""
+
+
 def clean_phone(phone: str) -> str:
     """Normalize phone to E.164 without plus, e.g. 919876543210."""
     digits = re.sub(r"\D", "", phone or "")
@@ -448,10 +458,15 @@ async def send_whatsapp_template(
     agent_id: int | None = None,
     lead_id: int | None = None,
     phone_number_id: str | None = None,
+    components: list[dict] | None = None,
 ) -> dict:
     """Send a pre-approved Meta WhatsApp template message. Exempt from the 24-hour free-form window
     check -- that's the whole point of templates. Reuses the same httpx/token/phone-id plumbing as
-    send_whatsapp_message's direct-Meta path (no Composio equivalent for templates)."""
+    send_whatsapp_message's direct-Meta path (no Composio equivalent for templates).
+
+    `components` is the full Meta `template.components` parameters array (header/body/button
+    parameters), for templates with a real structured shape. When omitted, falls back to the
+    legacy behaviour of building a single flat BODY component from `variables`."""
     recipient = clean_phone(to)
     if not recipient:
         return {"ok": False, "error": "Invalid phone number"}
@@ -459,9 +474,10 @@ async def send_whatsapp_template(
     phone_number_id = phone_number_id or _profile_phone_id(agent_id) or getattr(settings, "whatsapp_phone_number_id", "")
     if not (whatsapp_token and phone_number_id):
         return {"ok": False, "error": "WhatsApp credentials not configured"}
-    components = []
-    if variables:
-        components.append({"type": "body", "parameters": [{"type": "text", "text": str(v)} for v in variables]})
+    if components is None:
+        components = []
+        if variables:
+            components.append({"type": "body", "parameters": [{"type": "text", "text": str(v)} for v in variables]})
     payload = {
         "messaging_product": "whatsapp",
         "to": recipient,
@@ -487,6 +503,54 @@ async def send_whatsapp_template(
                     actor="ai",
                 )
                 return {"ok": True, "provider": "meta", "data": res.json()}
+            return {"ok": False, "error": f"Meta HTTP {res.status_code}: {res.text}"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
+async def create_meta_template(
+    name: str,
+    language: str,
+    category: str,
+    components: list[dict],
+    agent_id: int | None = None,
+    business_account_id: str | None = None,
+) -> dict:
+    """Submit a template for Meta review: POST /{whatsapp_business_account_id}/message_templates.
+    Returns {"ok": False, "error": "..."} when the WABA id or token aren't configured, so callers
+    can surface a clear 400 rather than a confusing failure deeper in the call."""
+    waba_id = business_account_id or _profile_waba_id(agent_id) or getattr(settings, "whatsapp_business_account_id", "")
+    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    if not waba_id:
+        return {"ok": False, "error": "WhatsApp Business Account ID not configured for this agent"}
+    if not whatsapp_token:
+        return {"ok": False, "error": "WhatsApp credentials not configured"}
+    payload = {"name": name, "language": language, "category": category, "components": components}
+    try:
+        url = f"https://graph.facebook.com/v19.0/{waba_id}/message_templates"
+        headers = {"Authorization": f"Bearer {whatsapp_token}", "Content-Type": "application/json"}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            if res.status_code in (200, 201):
+                return {"ok": True, "data": res.json()}
+            return {"ok": False, "error": f"Meta HTTP {res.status_code}: {res.text}"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
+async def fetch_meta_template(whatsapp_template_id: str, agent_id: int | None = None) -> dict:
+    """Refresh a template's review status: GET /{whatsapp_template_id} returns category/status/
+    rejected_reason once Meta has reviewed it. Explicit "sync status" action, never polled."""
+    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    if not whatsapp_token:
+        return {"ok": False, "error": "WhatsApp credentials not configured"}
+    try:
+        url = f"https://graph.facebook.com/v19.0/{whatsapp_template_id}"
+        headers = {"Authorization": f"Bearer {whatsapp_token}"}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(url, headers=headers)
+            if res.status_code == 200:
+                return {"ok": True, "data": res.json()}
             return {"ok": False, "error": f"Meta HTTP {res.status_code}: {res.text}"}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
@@ -552,6 +616,52 @@ def send_whatsapp_location(to: str, agent_id: int | None, lead_id: int | None, l
     if address:
         loc["address"] = address
     payload = {"messaging_product": "whatsapp", "to": clean_phone(to), "type": "location", "location": loc}
+    return _meta_post(payload, agent_id, lead_id, phone_number_id)
+
+
+def send_whatsapp_product(to: str, agent_id: int | None, lead_id: int | None, catalog_id: str,
+                          product_retailer_id: str, body_text: str = "Check this out!",
+                          phone_number_id: str | None = None) -> dict:
+    """A single-product message from Meta's WhatsApp Business product catalog."""
+    interactive = {"type": "product", "body": {"text": (body_text or "")[:1024]},
+                   "action": {"catalog_id": catalog_id, "product_retailer_id": product_retailer_id}}
+    payload = {"messaging_product": "whatsapp", "to": clean_phone(to), "type": "interactive", "interactive": interactive}
+    return _meta_post(payload, agent_id, lead_id, phone_number_id)
+
+
+def send_whatsapp_product_list(to: str, agent_id: int | None, lead_id: int | None, catalog_id: str,
+                               header_text: str, body_text: str, sections: list[dict],
+                               phone_number_id: str | None = None) -> dict:
+    """A multi-product message: a header plus grouped sections of catalog products
+    (sections: list[{"title": str, "product_retailer_ids": list[str]}]), capped at 10 sections / 30 products."""
+    built_sections = []
+    total = 0
+    for sec in sections[:10]:
+        ids = [str(pid) for pid in (sec.get("product_retailer_ids") or [])]
+        ids = ids[: max(0, 30 - total)]
+        total += len(ids)
+        built_sections.append({"title": str(sec.get("title") or "Options")[:24],
+                               "product_items": [{"product_retailer_id": pid} for pid in ids]})
+        if total >= 30:
+            break
+    interactive = {"type": "product_list",
+                   "header": {"type": "text", "text": (header_text or "")[:60]},
+                   "body": {"text": (body_text or "")[:1024]},
+                   "action": {"catalog_id": catalog_id, "sections": built_sections}}
+    payload = {"messaging_product": "whatsapp", "to": clean_phone(to), "type": "interactive", "interactive": interactive}
+    return _meta_post(payload, agent_id, lead_id, phone_number_id)
+
+
+def send_whatsapp_catalog(to: str, agent_id: int | None, lead_id: int | None, catalog_id: str, body_text: str,
+                          thumbnail_product_retailer_id: str | None = None,
+                          phone_number_id: str | None = None) -> dict:
+    """A catalog message letting the customer browse the agent's whole connected product catalog."""
+    parameters = {}
+    if thumbnail_product_retailer_id:
+        parameters["thumbnail_product_retailer_id"] = thumbnail_product_retailer_id
+    interactive = {"type": "catalog_message", "body": {"text": (body_text or "")[:1024]},
+                   "action": {"name": "catalog_message", "parameters": parameters}}
+    payload = {"messaging_product": "whatsapp", "to": clean_phone(to), "type": "interactive", "interactive": interactive}
     return _meta_post(payload, agent_id, lead_id, phone_number_id)
 
 

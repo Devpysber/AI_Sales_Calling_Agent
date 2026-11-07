@@ -185,4 +185,11 @@ class MessageTemplate(_Dict, Base):
     whatsapp_template_name: Mapped[str | None] = mapped_column(String(120))
     whatsapp_template_language: Mapped[str | None] = mapped_column(String(16))
     is_meta_approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Real Meta template shape: category/components mirror the Graph API message_templates payload.
+    category: Mapped[str | None] = mapped_column(String(32))  # MARKETING | UTILITY | AUTHENTICATION
+    components_json: Mapped[str | None] = mapped_column(Text)  # full Meta `components` array (header/body/footer/buttons)
+    header_format: Mapped[str] = mapped_column(String(16), default="NONE")  # NONE | TEXT | IMAGE | VIDEO | DOCUMENT
+    rejected_reason: Mapped[str | None] = mapped_column(Text)  # Meta's rejection reason, when status == "rejected"
+    whatsapp_template_id: Mapped[str | None] = mapped_column(String(64))  # Meta's template id once created
+    status: Mapped[str] = mapped_column(String(16), default="draft")  # draft | pending | approved | rejected
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
