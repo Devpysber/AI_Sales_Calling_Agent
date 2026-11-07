@@ -193,3 +193,19 @@ class MessageTemplate(_Dict, Base):
     whatsapp_template_id: Mapped[str | None] = mapped_column(String(64))  # Meta's template id once created
     status: Mapped[str] = mapped_column(String(16), default="draft")  # draft | pending | approved | rejected
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class WhatsAppFlow(_Dict, Base):
+    """A Meta WhatsApp Flow (native multi-screen form inside a chat) -- navigate-only flows: 1-3
+    screens ending in a terminal "complete" screen, no live data-exchange callback. Mirrors
+    MessageTemplate's draft/create/publish lifecycle."""
+    __tablename__ = "whatsapp_flows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent_id: Mapped[int] = mapped_column(Integer, index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    category: Mapped[str] = mapped_column(String(32), default="LEAD_GENERATION")
+    screens_json: Mapped[str] = mapped_column(Text)  # Meta Flow JSON `screens` array
+    meta_flow_id: Mapped[str | None] = mapped_column(String(64))  # Meta's flow id once created on Graph API
+    status: Mapped[str] = mapped_column(String(16), default="draft")  # draft | created | published
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

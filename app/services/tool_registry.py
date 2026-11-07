@@ -55,6 +55,9 @@ _BUILTIN_RISK = {
     "show_product": "write",
     "show_product_list": "write",
     "browse_catalog": "write",
+    "send_cta_button": "write",
+    "request_customer_location": "read",
+    "send_flow": "write",
 }
 
 

@@ -291,3 +291,115 @@ def send_template(template_id: int, body: TemplateSend, agent_id: int = Depends(
     if not result.get("ok"):
         raise HTTPException(400, result.get("error") or "WhatsApp template send failed")
     return result
+
+
+# ---------------- WhatsApp Flows (native multi-screen forms, navigate-only) ----------------
+
+from app.models.crm import WhatsAppFlow
+
+
+class FlowIn(BaseModel):
+    name: str
+    category: str = "LEAD_GENERATION"
+    screens: list[dict] = Field(default_factory=list)
+
+
+class FlowSend(BaseModel):
+    lead_id: int | None = None
+    phone: str | None = None
+    body_text: str = "Let's get started"
+    cta_text: str = "Start"
+
+
+def _flow_row(db, agent_id: int, flow_id: int) -> WhatsAppFlow:
+    row = db.query(WhatsAppFlow).filter(WhatsAppFlow.agent_id == agent_id, WhatsAppFlow.id == flow_id).first()
+    if not row:
+        raise HTTPException(404, "Flow not found.")
+    return row
+
+
+@router.get("/flows")
+def list_flows(agent_id: int = Depends(workspace)):
+    with get_db() as db:
+        rows = db.query(WhatsAppFlow).filter(WhatsAppFlow.agent_id == agent_id).order_by(WhatsAppFlow.id).all()
+        return [r.to_dict() for r in rows]
+
+
+@router.get("/flows/{flow_id}")
+def get_flow(flow_id: int, agent_id: int = Depends(workspace)):
+    with get_db() as db:
+        return _flow_row(db, agent_id, flow_id).to_dict()
+
+
+@router.post("/flows")
+def create_flow(body: FlowIn, agent_id: int = Depends(workspace)):
+    if not body.screens:
+        raise HTTPException(400, "At least one screen is required.")
+    with get_db() as db:
+        row = WhatsAppFlow(agent_id=agent_id, name=body.name, category=body.category,
+                           screens_json=_json.dumps(body.screens), status="draft")
+        db.add(row)
+        db.flush()
+        return row.to_dict()
+
+
+@router.delete("/flows/{flow_id}")
+def delete_flow(flow_id: int, agent_id: int = Depends(workspace)):
+    with get_db() as db:
+        row = _flow_row(db, agent_id, flow_id)
+        if row.status != "draft":
+            raise HTTPException(400, "Only a draft flow can be deleted.")
+        db.delete(row)
+    return {"ok": True}
+
+
+@router.post("/flows/{flow_id}/publish")
+def publish_flow(flow_id: int, agent_id: int = Depends(workspace)):
+    """Create + upload + publish on Meta, in sequence; 400 if the WABA id isn't configured for this agent."""
+    with get_db() as db:
+        row = _flow_row(db, agent_id, flow_id)
+        name, category, screens = row.name, row.category, _json.loads(row.screens_json)
+        meta_flow_id = row.meta_flow_id
+    import asyncio
+    if not meta_flow_id:
+        created = asyncio.run(wa.create_meta_flow(agent_id, name, category))
+        if not created.get("ok"):
+            raise HTTPException(400, created.get("error") or "WhatsApp flow creation failed")
+        meta_flow_id = str((created.get("data") or {}).get("id") or "")
+        with get_db() as db:
+            row = db.get(WhatsAppFlow, flow_id)
+            row.meta_flow_id = meta_flow_id
+            row.status = "created"
+            db.flush()
+    uploaded = asyncio.run(wa.upload_flow_json(agent_id, meta_flow_id, screens))
+    if not uploaded.get("ok"):
+        raise HTTPException(400, uploaded.get("error") or "WhatsApp flow JSON upload failed")
+    published = asyncio.run(wa.publish_meta_flow(agent_id, meta_flow_id))
+    if not published.get("ok"):
+        raise HTTPException(400, published.get("error") or "WhatsApp flow publish failed")
+    with get_db() as db:
+        row = db.get(WhatsAppFlow, flow_id)
+        row.status = "published"
+        db.flush()
+        return row.to_dict()
+
+
+@router.post("/flows/{flow_id}/send")
+def send_flow(flow_id: int, body: FlowSend, agent_id: int = Depends(workspace)):
+    with get_db() as db:
+        row = _flow_row(db, agent_id, flow_id)
+        if row.status != "published" or not row.meta_flow_id:
+            raise HTTPException(400, "Flow must be published before it can be sent.")
+        meta_flow_id = row.meta_flow_id
+        first_screen_id = (_json.loads(row.screens_json) or [{}])[0].get("id") or "WELCOME"
+    phone = body.phone
+    if not phone and body.lead_id:
+        with get_db() as db:
+            phone = db.scalar(select(Lead.phone).where(Lead.id == body.lead_id))
+    if not phone:
+        raise HTTPException(400, "A lead_id with a phone number, or a phone, is required.")
+    result = wa.send_whatsapp_flow(phone, agent_id, body.lead_id, meta_flow_id, body.body_text, body.cta_text,
+                                   first_screen_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "WhatsApp flow send failed")
+    return result

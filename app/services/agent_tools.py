@@ -688,6 +688,64 @@ def browse_catalog_tool(agent_id: int, lead_id, conversation_id, message: str = 
     return "Catalog sent." if outcome.get("ok") else f"Failed to show the catalog: {outcome.get('error')}"
 
 
+def send_flow_tool(agent_id: int, lead_id, conversation_id, flow_name: str, message: str = "") -> str:
+    """Send a published WhatsApp Flow (native multi-screen form, e.g. a quote/booking/survey) by name.
+    Honest fallback if no such published flow exists, or the conversation isn't on WhatsApp."""
+    from app.models.crm import WhatsAppFlow
+    from app.core.database import get_db
+    import json as _json
+
+    channel = _conversation_channel(conversation_id)
+    if channel != "whatsapp":
+        return "WhatsApp Flows can only be sent on WhatsApp."
+    if not lead_id:
+        return "Failed: no lead on file yet."
+    with get_db() as db:
+        row = db.query(WhatsAppFlow).filter(WhatsAppFlow.agent_id == agent_id, WhatsAppFlow.name == flow_name,
+                                            WhatsAppFlow.status == "published").first()
+        if not row:
+            return f"No published WhatsApp Flow named '{flow_name}' for this business."
+        meta_flow_id = row.meta_flow_id
+        first_screen_id = (_json.loads(row.screens_json) or [{}])[0].get("id") or "WELCOME"
+    phone = (CRMService(agent_id).get(int(lead_id)) or {}).get("phone")
+    if not phone:
+        return "Failed: no phone number on file for this lead."
+    from app.services.whatsapp_cloud_service import send_whatsapp_flow
+    outcome = send_whatsapp_flow(phone, agent_id, lead_id, meta_flow_id, message or "Let's get started",
+                                 first_screen_id=first_screen_id)
+    return "Flow sent." if outcome.get("ok") else f"Failed to send the flow: {outcome.get('error')}"
+
+
+def send_cta_button(agent_id: int, lead_id, conversation_id, message: str, button_text: str, url: str) -> str:
+    """A single call-to-action button that opens a URL (e.g. "View your invoice", "Book now"), as a
+    real WhatsApp interactive message; other channels get the message with the URL said as plain text."""
+    channel = _conversation_channel(conversation_id)
+    if channel == "whatsapp" and lead_id:
+        phone = (CRMService(agent_id).get(int(lead_id)) or {}).get("phone")
+        if phone:
+            from app.services.whatsapp_cloud_service import send_whatsapp_cta_url
+            outcome = send_whatsapp_cta_url(phone, agent_id, lead_id, message or "", button_text or "Open", url)
+            if outcome.get("ok"):
+                return "Sent."
+            return f"Failed to send the button, sending the link instead: {message} {url}"
+    return f"{message} {url}"
+
+
+def request_customer_location(agent_id: int, lead_id, conversation_id, message: str = "Please share your location") -> str:
+    """Ask the customer to share their location (e.g. for delivery address, nearest branch), as a real
+    WhatsApp interactive location-request message; other channels just ask in plain text. The customer's
+    reply arrives later as an inbound location message, parsed separately."""
+    channel = _conversation_channel(conversation_id)
+    if channel == "whatsapp" and lead_id:
+        phone = (CRMService(agent_id).get(int(lead_id)) or {}).get("phone")
+        if phone:
+            from app.services.whatsapp_cloud_service import send_whatsapp_location_request
+            outcome = send_whatsapp_location_request(phone, agent_id, lead_id, message)
+            if outcome.get("ok"):
+                return "Sent."
+    return message
+
+
 def send_payment_link_tool(agent_id: int, lead_id, amount: str | None = None, purpose: str | None = None) -> str:
     """Orchestrates a configured custom 'http' tool named 'payment_link' if this business has set one up
     (a thin pass-through, not a hardcoded Razorpay/Stripe call); otherwise states plainly that no payment
@@ -2147,6 +2205,22 @@ CUSTOMER_TOOLS = [
     {"type": "function", "function": {"name": "browse_catalog", "description":
         "WhatsApp only: let the customer browse this business's whole connected product catalog.",
         "parameters": {"type": "object", "properties": {"message": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "send_cta_button", "description":
+        "A single call-to-action button that opens a URL (e.g. 'View your invoice', 'Book now'); "
+        "real button on WhatsApp, other channels get the link said as plain text.",
+        "parameters": {"type": "object", "properties": {
+            "message": {"type": "string"}, "button_text": {"type": "string"}, "url": {"type": "string"}},
+            "required": ["message", "button_text", "url"]}}},
+    {"type": "function", "function": {"name": "request_customer_location", "description":
+        "Ask the customer to share their location (e.g. for delivery address, nearest branch); real "
+        "location-request on WhatsApp, other channels just ask in plain text.",
+        "parameters": {"type": "object", "properties": {"message": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "send_flow", "description":
+        "WhatsApp only: send a published WhatsApp Flow (a native multi-screen form, e.g. a quote "
+        "request, appointment booking, or survey) by name.",
+        "parameters": {"type": "object", "properties": {
+            "flow_name": {"type": "string"}, "message": {"type": "string"}},
+            "required": ["flow_name"]}}},
 ]
 
 # Tools whose dispatch already honours an `agent` argument ("Hairscope ka auto dial band karo"). The
@@ -2353,6 +2427,15 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
     elif name == "browse_catalog":
         return browse_catalog_tool(agent_id, args.get("lead_id"), args.get("conversation_id"),
                                    args.get("message") or "Browse our full catalog")
+    elif name == "send_cta_button":
+        return send_cta_button(agent_id, args.get("lead_id"), args.get("conversation_id"),
+                               args.get("message") or "", args.get("button_text") or "", args.get("url") or "")
+    elif name == "request_customer_location":
+        return request_customer_location(agent_id, args.get("lead_id"), args.get("conversation_id"),
+                                         args.get("message") or "Please share your location")
+    elif name == "send_flow":
+        return send_flow_tool(agent_id, args.get("lead_id"), args.get("conversation_id"),
+                              args.get("flow_name") or "", args.get("message") or "")
     # Own-agent actions a colleague needs on a call; an admin naming another agent ("Hairscope ka") works on that one.
     target = agent_id
     if role == "admin" and args.get("agent"):

@@ -331,14 +331,25 @@ def parse_webhook(payload: dict) -> list[dict]:
             names = {c.get("wa_id"): (c.get("profile") or {}).get("name") for c in value.get("contacts") or []}
             for m in value.get("messages") or []:
                 kind = m.get("type") or ""
+                flow_data = None
                 if kind == "text":
                     text = (m.get("text") or {}).get("body") or ""
                 elif kind == "button":
                     text = (m.get("button") or {}).get("text") or ""
                 elif kind == "interactive":
                     inter = m.get("interactive") or {}
-                    reply = inter.get("button_reply") or inter.get("list_reply") or {}
-                    text = reply.get("title") or ""
+                    if inter.get("type") == "nfm_reply":
+                        # WhatsApp Flow completion: interactive.nfm_reply.response_json is a JSON
+                        # *string* of the submitted field values -- surface it structured, not as text.
+                        nfm = inter.get("nfm_reply") or {}
+                        try:
+                            flow_data = json.loads(nfm.get("response_json") or "{}")
+                        except (ValueError, TypeError):
+                            flow_data = {}
+                        text = ""
+                    else:
+                        reply = inter.get("button_reply") or inter.get("list_reply") or {}
+                        text = reply.get("title") or ""
                 elif kind == "location":
                     loc = m.get("location") or {}
                     text = f"[location: {loc.get('latitude')},{loc.get('longitude')} {loc.get('name') or ''}]".replace(" ]", "]")
@@ -347,11 +358,15 @@ def parse_webhook(payload: dict) -> list[dict]:
                 media = m.get(kind) if kind in MEDIA_TYPES and isinstance(m.get(kind), dict) else {}
                 if media.get("caption"):
                     text = media["caption"]
-                out.append({"media_id": media.get("id"), "mime_type": media.get("mime_type"),
-                            "caption": media.get("caption") or "", "filename": media.get("filename") or "",
-                            "wamid": m.get("id"), "from": m.get("from"), "name": names.get(m.get("from")) or "",
-                            "type": kind, "text": text.strip(), "phone_number_id": meta.get("phone_number_id"),
-                            "display_phone_number": meta.get("display_phone_number")})
+                item = {"media_id": media.get("id"), "mime_type": media.get("mime_type"),
+                        "caption": media.get("caption") or "", "filename": media.get("filename") or "",
+                        "wamid": m.get("id"), "from": m.get("from"), "name": names.get(m.get("from")) or "",
+                        "type": "flow_response" if flow_data is not None else kind, "text": text.strip(),
+                        "phone_number_id": meta.get("phone_number_id"),
+                        "display_phone_number": meta.get("display_phone_number")}
+                if flow_data is not None:
+                    item["flow_data"] = flow_data
+                out.append(item)
     return out
 
 
@@ -556,6 +571,95 @@ async def fetch_meta_template(whatsapp_template_id: str, agent_id: int | None = 
         return {"ok": False, "error": str(e)}
 
 
+# ---------------- WhatsApp Flows (native multi-screen forms, navigate-only) ----------------
+
+async def create_meta_flow(agent_id: int, name: str, category: str = "LEAD_GENERATION",
+                           business_account_id: str | None = None) -> dict:
+    """Create a Flow shell on Meta: POST /{waba_id}/flows -> {"id": "<flow_id>"}. The Flow JSON itself
+    is uploaded separately (upload_flow_json) once this id exists."""
+    waba_id = business_account_id or _profile_waba_id(agent_id) or getattr(settings, "whatsapp_business_account_id", "")
+    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    if not waba_id:
+        return {"ok": False, "error": "WhatsApp Business Account ID not configured for this agent"}
+    if not whatsapp_token:
+        return {"ok": False, "error": "WhatsApp credentials not configured"}
+    try:
+        url = f"https://graph.facebook.com/v19.0/{waba_id}/flows"
+        headers = {"Authorization": f"Bearer {whatsapp_token}", "Content-Type": "application/json"}
+        payload = {"name": name, "categories": [category]}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(url, headers=headers, json=payload)
+            if res.status_code in (200, 201):
+                return {"ok": True, "data": res.json()}
+            return {"ok": False, "error": f"Meta HTTP {res.status_code}: {res.text}"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
+async def upload_flow_json(agent_id: int, meta_flow_id: str, screens: list[dict], version: str = "3.1") -> dict:
+    """Upload the Flow's JSON definition: POST /{flow_id}/assets (multipart, asset_type=FLOW_JSON,
+    file=<the flow JSON as a file part>). UNCERTAIN: this multipart shape is built to faithfully match
+    Meta's documented "upload a Flow JSON asset" endpoint, but it has not been exercised against a real
+    Meta sandbox -- the exact multipart field names/content-type Meta's endpoint accepts should be
+    confirmed against a live WABA before relying on this in production."""
+    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    if not whatsapp_token:
+        return {"ok": False, "error": "WhatsApp credentials not configured"}
+    flow_json = json.dumps({"version": version, "screens": screens})
+    try:
+        url = f"https://graph.facebook.com/v19.0/{meta_flow_id}/assets"
+        headers = {"Authorization": f"Bearer {whatsapp_token}"}
+        files = {"file": ("flow.json", flow_json, "application/json")}
+        data = {"name": "flow.json", "asset_type": "FLOW_JSON"}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(url, headers=headers, data=data, files=files)
+            if res.status_code in (200, 201):
+                return {"ok": True, "data": res.json()}
+            return {"ok": False, "error": f"Meta HTTP {res.status_code}: {res.text}"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
+async def publish_meta_flow(agent_id: int, meta_flow_id: str) -> dict:
+    """Publish the Flow: POST /{flow_id}/publish. A Flow must be published before it can be sent to a
+    customer."""
+    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    if not whatsapp_token:
+        return {"ok": False, "error": "WhatsApp credentials not configured"}
+    try:
+        url = f"https://graph.facebook.com/v19.0/{meta_flow_id}/publish"
+        headers = {"Authorization": f"Bearer {whatsapp_token}"}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(url, headers=headers)
+            if res.status_code in (200, 201):
+                return {"ok": True, "data": res.json()}
+            return {"ok": False, "error": f"Meta HTTP {res.status_code}: {res.text}"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
+def send_whatsapp_flow(to: str, agent_id: int | None, lead_id: int | None, flow_id: str, body_text: str,
+                       cta_text: str = "Start", first_screen_id: str = "WELCOME",
+                       phone_number_id: str | None = None) -> dict:
+    """Send a published Flow to a customer as an interactive "flow" message."""
+    interactive = {
+        "type": "flow",
+        "body": {"text": (body_text or "")[:1024]},
+        "action": {
+            "name": "flow",
+            "parameters": {
+                "flow_message_version": "3",
+                "flow_id": flow_id,
+                "flow_cta": (cta_text or "Start")[:20],
+                "flow_action": "navigate",
+                "flow_action_payload": {"screen": first_screen_id or "WELCOME"},
+            },
+        },
+    }
+    payload = {"messaging_product": "whatsapp", "to": clean_phone(to), "type": "interactive", "interactive": interactive}
+    return _meta_post(payload, agent_id, lead_id, phone_number_id)
+
+
 def _meta_post(payload: dict, agent_id: int | None, lead_id: int | None, phone_number_id: str | None = None) -> dict:
     """Shared sync POST to the Meta Graph /messages endpoint for message types beyond plain text
     (document, interactive, location). Composio has no equivalent action for these, so they always go
@@ -665,6 +769,24 @@ def send_whatsapp_catalog(to: str, agent_id: int | None, lead_id: int | None, ca
     return _meta_post(payload, agent_id, lead_id, phone_number_id)
 
 
+def send_whatsapp_cta_url(to: str, agent_id: int | None, lead_id: int | None, body_text: str, button_text: str,
+                          url: str, phone_number_id: str | None = None) -> dict:
+    """A single call-to-action button that opens a URL (Meta's interactive "cta_url" message)."""
+    interactive = {"type": "cta_url", "body": {"text": (body_text or "")[:1024]},
+                   "action": {"name": "cta_url", "parameters": {"display_text": (button_text or "")[:20], "url": url}}}
+    payload = {"messaging_product": "whatsapp", "to": clean_phone(to), "type": "interactive", "interactive": interactive}
+    return _meta_post(payload, agent_id, lead_id, phone_number_id)
+
+
+def send_whatsapp_location_request(to: str, agent_id: int | None, lead_id: int | None, body_text: str,
+                                   phone_number_id: str | None = None) -> dict:
+    """Asks the customer to share their location (Meta's interactive "location_request_message")."""
+    interactive = {"type": "location_request_message", "body": {"text": (body_text or "")[:1024]},
+                   "action": {"name": "send_location"}}
+    payload = {"messaging_product": "whatsapp", "to": clean_phone(to), "type": "interactive", "interactive": interactive}
+    return _meta_post(payload, agent_id, lead_id, phone_number_id)
+
+
 def download_media(media_id: str, token: str) -> tuple[bytes, str]:
     headers = {"Authorization": f"Bearer {token}"}
     with httpx.Client(timeout=10.0) as client:
@@ -731,6 +853,25 @@ def _lead_phone(lead_id: int | None) -> str:
         return db.scalar(select(Lead.phone).where(Lead.id == lead_id)) or ""
 
 
+_FLOW_FIELD_MAP = {"full_name": "name", "name": "name", "phone": "phone", "email": "email"}
+
+
+def _apply_flow_fields(crm, lead_id: int, flow_data: dict) -> None:
+    """Write common WhatsApp Flow fields onto the lead's CRM record. Deliberately modest: only a small,
+    fixed set of well-known field names are mapped (not a generic field-mapper) -- mirrors how other
+    tools call CRMService.update with a small explicit dict."""
+    update = {}
+    for key, value in (flow_data or {}).items():
+        column = _FLOW_FIELD_MAP.get(key)
+        if column and value:
+            update[column] = str(value)
+    if update:
+        try:
+            crm.update(int(lead_id), update, actor="customer", title="Details submitted via WhatsApp Flow")
+        except Exception:
+            log.exception("Failed to apply WhatsApp Flow fields for lead %s", lead_id)
+
+
 def _record_turn(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> tuple[dict | None, bool]:
     """Persist one inbound message as its own Message row (always, for the transcript/audit trail).
     Returns (ctx, added): `ctx` is the reply context (None when there's nothing further to do for this
@@ -767,6 +908,10 @@ def _record_turn(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> tup
     elif not text and kind in ("image", "document", "video"):
         say = f"[customer sent {'an' if kind == 'image' else 'a'} {kind}{': ' + msg['filename'] if msg.get('filename') else ''}]"
         shown = say
+    elif kind == "flow_response":
+        flow_data = msg.get("flow_data") or {}
+        shown = say = "[WhatsApp Flow submitted: " + ", ".join(f"{k}={v}" for k, v in flow_data.items()) + "]"
+        _apply_flow_fields(crm, lead_id, flow_data)
     media_type = kind if kind in MEDIA_TYPES else "text"
     added = _add_message(conv_id, agent_id, "in", "customer", shown or f"[{kind or 'message'}]",
                           type_=media_type, external_id=wamid, sender_name=msg.get("name") or None)
