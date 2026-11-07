@@ -61,7 +61,8 @@ def test_prompt_stays_within_the_cost_budget():
     """~4.3k input tokens per turn is the cost baseline; a rule added back must not silently double it."""
     persona = Persona(agents.PROFILE_DEFAULTS)
     text = agent._system_prompt(persona, Persona(), [], None)
-    assert len(text) < 22600, f"prompt grew to {len(text)} chars; keep the LLM cost per turn down"  # ~5k tokens incl. the Situations block
+    # ~5k tokens incl. the Situations block and the default-on Sales mode block (agent.py's sales_block).
+    assert len(text) < 23000, f"prompt grew to {len(text)} chars; keep the LLM cost per turn down"
 
 
 SITUATIONS = {

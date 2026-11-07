@@ -450,6 +450,16 @@ function ProfileEditor({ section, draft, setDraft, data }: {
             <Field label="Never say or promise" hint="Enforced on every reply"><Counted rows={3} max={1500} value={draft.forbidden_topics} onChange={(e) => set('forbidden_topics', e.target.value)} placeholder="Discounts, guaranteed delivery dates, competitor criticism" /></Field>
           </div>
         </Section>
+        <Section title="Sales mode" description="Whether the agent actively sells — proactively pitching, upselling and asking for a next step — or stays purely reactive/support-style.">
+          <div className="grid gap-4">
+            <Switch checked={draft.sales_mode} onChange={(v) => set('sales_mode', v)} label="Actively sell, on calls and chat" />
+            {draft.sales_mode && (
+              <Field label="Sales playbook" hint="Used verbatim: upsell/cross-sell pairings, current promos or discount codes, objection-handling notes, and what counts as a close for this business (book a demo, confirm a purchase, schedule a visit).">
+                <Counted rows={6} max={2000} value={draft.sales_playbook} onChange={(e) => set('sales_playbook', e.target.value)} placeholder={'Upsell: basic plan buyers get offered the pro add-on.\nPromo: code WELCOME10 for first-time buyers this month.\n"Too expensive" → point to the ROI calculator, offer the quarterly plan.\nA close here = a confirmed paid order, not just a demo booking.'} />
+              </Field>
+            )}
+          </div>
+        </Section>
       </Stagger>
       <div className="space-y-4 xl:sticky xl:top-20 xl:h-fit">{aside}</div>
     </div>

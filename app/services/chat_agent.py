@@ -12,6 +12,7 @@ import time
 from datetime import datetime, timedelta
 
 from app.services import agent as agent_svc
+from app.services import agents
 from app.services import llm
 from app.services import tool_registry
 from app.services.agent_tools import execute_tool
@@ -205,6 +206,14 @@ def respond(agent_id: int, conversation_id: int, history: list[dict], customer_t
     """
     messages, _ = agent_svc.build_messages(agent_id, history, customer_text, lead, use_embeddings=True)
     messages[0]["content"] += "\n\n" + CHAT_GUIDANCE_BY_CHANNEL.get(channel, CHAT_GUIDANCE)
+    if (agents.get_profile(agent_id) or {}).get("sales_mode", True):
+        # The shared system prompt already carries the sales directive and any business sales_playbook
+        # (agent._system_prompt); this just keeps that selling chat-sized, matching this channel's own
+        # short-message style rather than the voice side's spoken-call pacing.
+        messages[0]["content"] += (
+            "\n\nKeep that selling chat-sized: fold a proactive mention or the one next-step ask into a normal "
+            "short message, never a long pitch wall of text."
+        )
     lead_id = lead.get("id")
     tools = tool_registry.tools_for_agent(agent_id, channel)
     if llm.tools_via_openrouter():

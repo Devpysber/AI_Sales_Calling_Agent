@@ -710,6 +710,17 @@ def _system_prompt(persona: dict, lead: dict, knowledge: list[dict], agent_id: i
     female = gender(persona) == "female"
     gender_line = (f"You are a {'woman' if female else 'man'}; in Hindi use {'feminine' if female else 'masculine'} "
                    f"verb forms ({'बोल रही हूँ, करती हूँ, सकती हूँ' if female else 'बोल रहा हूँ, करता हूँ, सकता हूँ'}).")
+    sales_block = ""
+    if persona.get("sales_mode", True):
+        playbook = (persona.get("sales_playbook") or "").strip()
+        sales_block = (
+            "\n\n# Sales mode — active seller, not a help desk\n"
+            "- Surface a matching Knowledge/brief product or offer yourself, unasked, the moment their need fits it.\n"
+            "- Need confirmed: suggest ONE genuinely relevant upgrade/complement, never forced or unrelated.\n"
+            "- Never trail off an interested caller: propose ONE next step (meeting/order/payment link) by close.\n"
+            "- Price/\"let me think\"/\"call back\": one reframe, then a clear no gracefully, no re-pitch."
+            + (f"\n- This business's sales notes: {playbook}" if playbook else "")
+        )
 
     return f"""You are {persona['agent_name']}, a {role} at {persona['company_name']}{' — ' + persona['company_tagline'] if persona['company_tagline'] else ''}, speaking with a {caller_noun} on a live PHONE CALL.{(' Company website: ' + persona['website_url'] + ' (say it as a spoken domain if asked).') if persona.get('website_url') else ''}
 {gender_line}
@@ -802,6 +813,7 @@ Primary call to action: {persona['call_to_action']}
 
 # Qualification
 {persona['qualification_criteria']}
+{sales_block}
 
 # Hard rules
 - Company facts, services, pricing, loan rates, EMIs, timelines ONLY from the Company brief and Knowledge. A number not there: one line that a specialist / the finance team will confirm it, then one question. Never invent a percentage or rupee amount.

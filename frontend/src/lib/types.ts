@@ -149,6 +149,8 @@ export interface AgentProfile {
   inbound_collect: string[]
   team_members: { name: string; phone: string; email: string }[]
   custom_topics: string[]
+  sales_mode: boolean
+  sales_playbook: string
 }
 
 export interface AutomationSettings {
