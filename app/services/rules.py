@@ -104,12 +104,21 @@ def _run_action(agent_id: int, action: dict, ctx: dict, rule_name: str):
                 raise ValueError("Lead is marked do-not-call.")
             crm.update(lead_id, {"call_status": "Pending", "callback_at": ""}, actor=actor)
         elif kind == "send_email":
+            lead = crm.get(lead_id) or {}
+            if lead.get("do_not_call"):
+                raise ValueError("Lead is marked do-not-call.")
             if not ctx.get("email"):
                 raise ValueError("Lead has no email address.")
             from app.services.notification_service import send_email
             send_email(ctx["email"], render(action.get("subject") or "Hello {name}", ctx), render(action.get("body") or "", ctx),
                        lead_id=lead_id, agent_id=agent_id, actor="ai")
         elif kind == "send_whatsapp":
+            lead = crm.get(lead_id) or {}
+            if lead.get("do_not_call"):
+                raise ValueError("Lead is marked do-not-call.")
+            from app.services.whatsapp_service import is_opted_out
+            if is_opted_out(lead):
+                raise ValueError("Lead has opted out of WhatsApp.")
             from app.services.whatsapp_cloud_service import send_whatsapp_message
             asyncio.run(send_whatsapp_message(ctx.get("phone") or "", render(action.get("text") or "", ctx), agent_id=agent_id, lead_id=lead_id))
         else:

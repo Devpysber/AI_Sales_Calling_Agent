@@ -116,6 +116,27 @@ def test_call_campaign_queues_audience(client, base):
     assert client.get(f"{base}/crm/campaigns/{camp['id']}").json()["status"] == "completed"
 
 
+def test_rule_actions_refuse_opted_out_leads(client, base):
+    from app.services import rules
+    from app.services.whatsapp_service import OPT_OUT_TAG
+
+    agent_id = int(base.rsplit("/", 1)[1])
+    dnc = client.post(f"{base}/leads", json={"name": "RuleDNC", "phone": "+919844440010", "email": "rd@x.test"}).json()
+    client.patch(f"{base}/leads/{dnc['id']}", json={"do_not_call": True})
+    wa_opt_out = client.post(f"{base}/leads", json={"name": "RuleWaOut", "phone": "+919844440011",
+                                                     "tags": [OPT_OUT_TAG]}).json()
+
+    rule = {"name": "r", "actions": []}
+    res = rules.execute({**rule, "actions": [{"type": "send_email"}]}, agent_id, dnc["id"], {})
+    assert res["actions"][0]["ok"] is False and "do-not-call" in res["actions"][0]["error"]
+
+    res = rules.execute({**rule, "actions": [{"type": "send_whatsapp"}]}, agent_id, dnc["id"], {})
+    assert res["actions"][0]["ok"] is False and "do-not-call" in res["actions"][0]["error"]
+
+    res = rules.execute({**rule, "actions": [{"type": "send_whatsapp"}]}, agent_id, wa_opt_out["id"], {})
+    assert res["actions"][0]["ok"] is False and "opted out" in res["actions"][0]["error"]
+
+
 def test_campaign_audience_excludes_opted_out_leads_on_every_channel(client, base):
     from app.services import campaigns
     from app.services.whatsapp_service import OPT_OUT_TAG
