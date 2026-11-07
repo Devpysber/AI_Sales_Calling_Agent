@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import {
-  AlertTriangle, ArrowUpRight, AudioWaveform, ChartBar, BookOpen, CalendarCheck, CalendarClock, Cpu, Flame, LayoutGrid, List, ListOrdered, Mail, MessageSquareText, Pause, Phone,
+  AlertTriangle, ArrowUpRight, AudioWaveform, ChartBar, BookOpen, CalendarCheck, CalendarClock, Cpu, Flame, LayoutGrid, List, ListOrdered, Mail, MessageSquareText, PackageCheck, Pause, Phone,
   Lock, PhoneCall, PhoneIncoming, Play, Plus, Radio, Search, Settings, Sparkles, TrendingUp, Upload, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -11,7 +11,7 @@ import { AgentMark, LiveDot } from '@/components/AppShell'
 import { CallTimer, LiveNumber, LiveStamp, useArrivals } from '@/components/Live'
 import NewAgentSheet from '@/components/NewAgentSheet'
 import { CallStatusBadge } from '@/components/status'
-import { Badge, Button, Card, CardHeader, EmptyState, Input, PageHeader, Ring, Select, Skeleton, StatTile, Tabs, TableScroll } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, Dialog, EmptyState, Input, PageHeader, Ring, Select, Skeleton, StatTile, Tabs, TableScroll } from '@/components/ui'
 import { api } from '@/lib/api'
 import { AnimatedNumber, Stagger } from '@/lib/motion'
 import { Orb3D, VoiceOrb, Waveform } from '@/components/VoiceViz'
@@ -57,7 +57,10 @@ function setupScore(a: AgentOverviewItem) {
   return values.filter(Boolean).length / values.length
 }
 
-function AgentCard({ agent, role, className, style }: { agent: AgentOverviewItem; role?: string; className?: string; style?: CSSProperties }) {
+function AgentCard({ agent, role, className, style, selectable, selected, onToggleSelect }: {
+  agent: AgentOverviewItem; role?: string; className?: string; style?: CSSProperties
+  selectable?: boolean; selected?: boolean; onToggleSelect?: () => void
+}) {
   const s = agent.stats
   const p = agent.period
   const o = agent.ops
@@ -74,6 +77,11 @@ function AgentCard({ agent, role, className, style }: { agent: AgentOverviewItem
     <Card className={cn('beam group relative flex min-w-0 flex-col overflow-hidden transition duration-300 hover:-translate-y-1 hover:shadow-pop',
       paused && 'opacity-90', s.live > 0 && !paused && 'is-live-card beam-on beam-live', className)} style={style}>
       <Link to={base} className="absolute inset-0 z-[1]" aria-label={`Open ${agent.name}`} />
+      {selectable && (
+        <label className="absolute top-3 left-3 z-10 grid size-8 cursor-pointer place-items-center rounded-lg bg-surface/90 shadow-sm ring-1 ring-border backdrop-blur-sm">
+          <input type="checkbox" checked={!!selected} onChange={onToggleSelect} aria-label={`Select ${agent.name}`} className="size-4 cursor-pointer accent-[var(--fg)]" />
+        </label>
+      )}
 
       <div className="relative p-5 pb-0">
         <div className="flex items-start gap-3">
@@ -187,7 +195,10 @@ function AgentCard({ agent, role, className, style }: { agent: AgentOverviewItem
   )
 }
 
-function AgentTable({ agents }: { agents: AgentOverviewItem[] }) {
+function AgentTable({ agents, selectable, selected, onToggleSelect, onToggleSelectAll, allSelected, someSelected }: {
+  agents: AgentOverviewItem[]; selectable?: boolean; selected?: Set<number>; onToggleSelect?: (id: number) => void
+  onToggleSelectAll?: () => void; allSelected?: boolean; someSelected?: boolean
+}) {
   const navigate = useNavigate()
   return (
     <Card className="overflow-hidden">
@@ -195,6 +206,13 @@ function AgentTable({ agents }: { agents: AgentOverviewItem[] }) {
       <table className="rows-in w-full min-w-[860px] text-sm">
         <thead>
           <tr className="border-b border-border text-left text-[11px] font-bold tracking-wider text-muted uppercase">
+            {selectable && (
+              <th className="w-10 px-0 py-3"><label className="grid min-h-10 cursor-pointer place-items-center px-3">
+                <input type="checkbox" aria-label="Select all agents" checked={!!allSelected}
+                  ref={(el) => { if (el) el.indeterminate = !!someSelected }} onChange={onToggleSelectAll}
+                  className="size-4 cursor-pointer accent-[var(--fg)]" />
+              </label></th>
+            )}
             <th className="px-5 py-3">Agent</th><th className="px-3 py-3">Status</th><th className="px-3 py-3 text-right">Leads</th>
             <th className="px-3 py-3 text-right">Calls 14d</th><th className="px-3 py-3 text-right">Connect</th><th className="px-3 py-3 text-right">Meetings</th>
             <th className="px-3 py-3 text-right">Talk time</th><th className="w-40 px-3 py-3">Trend</th><th className="px-5 py-3">Setup</th>
@@ -203,7 +221,14 @@ function AgentTable({ agents }: { agents: AgentOverviewItem[] }) {
         <tbody className="divide-y divide-border">
           {agents.map((a) => (
             <tr key={a.id} tabIndex={0} role="link" aria-label={`Open ${a.name}`} onClick={() => navigate(`/a/${a.id}`)} onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/a/${a.id}`) }}
-              className="cursor-pointer transition outline-none hover:bg-surface-2/60 focus-visible:bg-surface-2/60">
+              className={cn('cursor-pointer transition outline-none hover:bg-surface-2/60 focus-visible:bg-surface-2/60', selected?.has(a.id) && 'bg-surface-2/60')}>
+              {selectable && (
+                <td className="px-0 py-3" onClick={(e) => e.stopPropagation()}>
+                  <label className="grid min-h-10 cursor-pointer place-items-center px-3">
+                    <input type="checkbox" checked={!!selected?.has(a.id)} onChange={() => onToggleSelect?.(a.id)} aria-label={`Select ${a.name}`} className="size-4 cursor-pointer accent-[var(--fg)]" />
+                  </label>
+                </td>
+              )}
               <td className="px-5 py-3">
                 <div className="flex items-center gap-3">
                   <AgentMark agent={a} className={cn('size-9', a.status === 'paused' && 'grayscale')} />
@@ -231,10 +256,17 @@ function AgentTable({ agents }: { agents: AgentOverviewItem[] }) {
 }
 
 export default function Home() {
+  const qc = useQueryClient()
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api<{ user: string; can_create_agent?: boolean }>('/api/auth/me'), staleTime: 0 })
   const role = me?.user
   // Team members create agents up to the limit their administrator set; the admin has no limit.
   const canCreateAgent = role !== 'team' || me?.can_create_agent === true
+  // Bulk select/actions mirror the per-agent pause button and single-agent industry-pack picker: team
+  // members never saw those controls either, so bulk selection is hidden for them too.
+  const selectable = role !== 'team'
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const toggleSelect = (id: number) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  const [packPickerOpen, setPackPickerOpen] = useState(false)
 
   const [creating, setCreating] = useState(false)
   const [q, setQ] = useState('')
@@ -288,6 +320,54 @@ export default function Home() {
     }
     return [...list].sort((x, y) => { const a = by[sort](x), b = by[sort](y); return a < b ? -1 : a > b ? 1 : 0 })
   }, [agents, q, status, sort])
+
+  const allSelected = shown.length > 0 && shown.every((a) => selected.has(a.id))
+  const someSelected = !allSelected && shown.some((a) => selected.has(a.id))
+  const toggleSelectAll = () => setSelected((s) => {
+    if (allSelected) { const n = new Set(s); shown.forEach((a) => n.delete(a.id)); return n }
+    const n = new Set(s); shown.forEach((a) => n.add(a.id)); return n
+  })
+
+  // Bulk pause/resume loops the same single-agent PATCH the per-card Pause/Resume button already uses
+  // (no dedicated batch endpoint exists, nor is one needed for a handful of agents at a time).
+  const bulkStatus = useMutation({
+    mutationFn: async (next: 'active' | 'paused') => {
+      const ids = [...selected]
+      const results = await Promise.allSettled(ids.map((id) => api(`/api/agents/${id}`, { method: 'PATCH', json: { status: next } })))
+      return { total: ids.length, failed: results.filter((r) => r.status === 'rejected').length }
+    },
+    onSuccess: ({ total, failed }, next) => {
+      qc.invalidateQueries({ queryKey: ['agents'] })
+      const verb = next === 'paused' ? 'paused' : 'resumed'
+      if (failed) toast.warning(`${total - failed}/${total} agent${total === 1 ? '' : 's'} ${verb}`, { description: `${failed} failed.` })
+      else toast.success(`${total} agent${total === 1 ? '' : 's'} ${verb}`)
+      setSelected(new Set())
+    },
+    onError: (e) => toast.error('Could not update the selected agents', { description: (e as Error).message }),
+  })
+
+  // Industry packs are the same vertical-preset list Agent.tsx's picker uses; applying one is already
+  // fully server-side (tools + playbook text), so the bulk version just loops the same POST per agent.
+  const packs = useQuery({
+    queryKey: ['agents', 'industry-packs'],
+    queryFn: () => api<{ key: string; label: string; description: string; enabled_tools: string[] }[]>(`/api/agents/${agents[0]?.id}/industry-packs`),
+    enabled: packPickerOpen && agents.length > 0,
+  })
+  const applyPackBulk = useMutation({
+    mutationFn: async (key: string) => {
+      const ids = [...selected]
+      const results = await Promise.allSettled(ids.map((id) => api(`/api/agents/${id}/industry-packs/${key}/apply`, { method: 'POST' })))
+      return { total: ids.length, failed: results.filter((r) => r.status === 'rejected').length }
+    },
+    onSuccess: ({ total, failed }) => {
+      qc.invalidateQueries({ queryKey: ['agents'] })
+      if (failed) toast.warning(`Applied to ${total - failed}/${total} agents`, { description: `${failed} failed.` })
+      else toast.success(`Industry pack applied to ${total} agent${total === 1 ? '' : 's'}`)
+      setPackPickerOpen(false)
+      setSelected(new Set())
+    },
+    onError: (e) => toast.error('Could not apply the industry pack', { description: (e as Error).message }),
+  })
 
   const attention = useMemo(() => agents.flatMap((a) => [
     ...(a.status === 'paused' ? [{ a, text: 'Paused: no calls are being placed', to: '/settings' }] : []),
@@ -442,10 +522,28 @@ export default function Home() {
             </div>
           </div>
 
+          {selectable && selected.size > 0 && (
+            <div className="sticky top-2 z-20 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-elevated px-3 py-2 shadow-pop">
+              <span className="text-sm font-bold">{selected.size} selected</span>
+              <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
+              <Button size="sm" disabled={bulkStatus.isPending} loading={bulkStatus.isPending && bulkStatus.variables === 'paused'}
+                onClick={() => bulkStatus.mutate('paused')}><Pause className="size-3.5" />Pause selected</Button>
+              <Button size="sm" disabled={bulkStatus.isPending} loading={bulkStatus.isPending && bulkStatus.variables === 'active'}
+                onClick={() => bulkStatus.mutate('active')}><Play className="size-3.5" />Resume selected</Button>
+              <Button size="sm" variant="secondary" disabled={bulkStatus.isPending} onClick={() => setPackPickerOpen(true)}>
+                <PackageCheck className="size-3.5" />Apply industry pack to selected</Button>
+            </div>
+          )}
+
           {!shown.length ? <Card className="py-14 text-center text-sm text-muted">No agent matches these filters.</Card>
-          : view === 'table' ? <AgentTable agents={shown} /> : (
+          : view === 'table' ? (
+            <AgentTable agents={shown} selectable={selectable} selected={selected} onToggleSelect={toggleSelect}
+              onToggleSelectAll={toggleSelectAll} allSelected={allSelected} someSelected={someSelected} />
+          ) : (
             <Stagger className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {shown.map((a) => <AgentCard key={a.id} agent={a} role={role} />)}
+              {shown.map((a) => (
+                <AgentCard key={a.id} agent={a} role={role} selectable={selectable} selected={selected.has(a.id)} onToggleSelect={() => toggleSelect(a.id)} />
+              ))}
               {!q && status !== 'paused' && canCreateAgent && (
                 <button type="button" onClick={() => setCreating(true)}
                   className="dot-grid flex min-h-[420px] flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border-2 border-dashed border-border text-muted transition hover:border-brand hover:text-brand">
@@ -558,6 +656,24 @@ export default function Home() {
       </div>
 
       <NewAgentSheet open={creating} onClose={() => setCreating(false)} />
+
+      <Dialog open={packPickerOpen} onClose={() => setPackPickerOpen(false)} title="Apply industry pack"
+        description={`Enables the tools that vertical needs (disabling the rest) and adds a playbook steer, for all ${selected.size} selected agent${selected.size === 1 ? '' : 's'}.`}>
+        <div className="space-y-2">
+          {packs.isLoading && <Skeleton className="h-24" />}
+          {packs.data?.map((p) => (
+            <div key={p.key} className="rounded-lg border border-border p-3 text-sm">
+              <div className="font-medium">{p.label}</div>
+              <p className="mt-1 text-xs text-muted">{p.description}</p>
+              <Button className="mt-2 w-full" variant="secondary" size="sm" disabled={applyPackBulk.isPending}
+                loading={applyPackBulk.isPending && applyPackBulk.variables === p.key} onClick={() => applyPackBulk.mutate(p.key)}>
+                Apply to {selected.size} agent{selected.size === 1 ? '' : 's'}
+              </Button>
+            </div>
+          ))}
+          {!packs.isLoading && !packs.data?.length && <p className="text-sm text-muted">No industry packs available.</p>}
+        </div>
+      </Dialog>
     </>
   )
 }
