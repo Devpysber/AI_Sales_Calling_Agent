@@ -1,7 +1,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   ArrowRight, BookOpen, Bot, CalendarCheck, CalendarClock, Check, Clock, Flame, Gauge, Languages, MessageSquareText, Pause, Phone, PhoneCall,
-  PhoneIncoming, Sparkles, Upload, UserPlus, Users, Volume2,
+  PhoneIncoming, Rocket, Sparkles, Upload, UserPlus, Users, Volume2,
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
@@ -32,6 +32,15 @@ const SETUP = [
   { key: 'tools', label: 'Add a custom tool', hint: 'Give the agent a custom action to call', to: '/tools' },
 ] as const
 
+const READINESS = [
+  { key: 'sales_mode', label: 'Sales mode on', hint: 'Agent proactively pitches and asks for a close', to: '/agent?tab=playbook' },
+  { key: 'waba', label: 'WhatsApp Business Account connected', hint: 'Link your Meta WABA to send messages', to: '/channels' },
+  { key: 'template', label: 'At least one approved WhatsApp template', hint: 'Submit a template and wait for Meta approval', to: '/templates' },
+  { key: 'catalog', label: 'Product catalog connected', hint: 'Let the agent send product cards and lists', to: '/channels' },
+  { key: 'icebreakers', label: 'Instagram ice breakers set', hint: 'Greet first-time DMs with quick-start questions', to: '/channels' },
+  { key: 'flow', label: 'A published WhatsApp Flow', hint: 'Publish a lead-capture form your agent can send', to: '/whatsapp-flows' },
+] as const
+
 export default function Dashboard() {
   const { agent, base, path } = useAgent()
   const navigate = useNavigate()
@@ -46,6 +55,8 @@ export default function Dashboard() {
   const activity = useQuery({ queryKey: ['activity', 'recent'], queryFn: () => api<ActivityEvent[]>(`${base}/activity`, { params: { limit: 40 } }), refetchInterval: 8000 })
   const profile = useQuery({ queryKey: ['agent'], queryFn: () => api<{ profile: Record<string, string | number | boolean> }>(`${base}/profile`) })
   const tools = useQuery({ queryKey: ['tools', 'count'], queryFn: () => api<{ type: string }[]>(`${base}/tools`) })
+  const templates = useQuery({ queryKey: ['whatsapp', 'templates'], queryFn: () => api<{ status: string }[]>(`${base}/whatsapp/templates`) })
+  const flows = useQuery({ queryKey: ['whatsapp', 'flows'], queryFn: () => api<{ status: string }[]>(`${base}/whatsapp/flows`) })
 
   const c = calls.data
   const l = leads.data
@@ -89,6 +100,18 @@ export default function Dashboard() {
     tools: !!tools.data?.some((t) => t.type === 'http'),
   }
   const done = SETUP.filter((s) => setupDone[s.key]).length
+
+  const approvedTemplates = templates.data?.filter((t) => t.status === 'approved').length ?? 0
+  const publishedFlows = flows.data?.filter((f) => f.status === 'published').length ?? 0
+  const readinessDone: Record<string, boolean> = {
+    sales_mode: !!p?.sales_mode,
+    waba: !!p?.whatsapp_business_account_id,
+    template: approvedTemplates > 0,
+    catalog: !!p?.whatsapp_catalog_id,
+    icebreakers: Array.isArray(p?.instagram_ice_breakers as unknown) && ((p?.instagram_ice_breakers as unknown) as unknown[]).length > 0,
+    flow: publishedFlows > 0,
+  }
+  const readinessReady = READINESS.filter((r) => readinessDone[r.key]).length
 
   return (
     <>
@@ -298,6 +321,29 @@ export default function Dashboard() {
               </ul>
             </Card>
           )}
+
+          <Card>
+            <CardHeader title={<span className="flex items-center gap-2"><Rocket className="size-4" />Marketing readiness</span>} description={`${readinessReady} of ${READINESS.length} ready`} />
+            <div className="px-5"><Meter value={(100 * readinessReady) / READINESS.length} tone="neutral" className="h-2 [&>div]:bg-fg" /></div>
+            <ul className="space-y-1 p-3">
+              {READINESS.map((r) => {
+                const ok = readinessDone[r.key]
+                return (
+                  <li key={r.key}>
+                    <button type="button" onClick={() => navigate(path(r.to))}
+                      className="flex min-h-10 w-full items-center gap-3 rounded-xl px-2 py-2 text-left hover:bg-surface-2">
+                      <span className={cn('grid size-6 place-items-center rounded-full ring-1', ok ? 'bg-fg text-bg ring-fg' : 'text-muted ring-border-strong')}>{ok ? <Check className="size-3.5" /> : null}</span>
+                      <div className="min-w-0 flex-1 leading-tight">
+                        <div className={cn('text-[13px] font-bold', ok && 'text-muted')}>{r.label}</div>
+                        <div className="text-xs text-muted">{r.hint}</div>
+                      </div>
+                      <ArrowRight className="size-4 text-muted" />
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </Card>
 
           <Card>
             <CardHeader title="History" description="Latest events in this agent"
