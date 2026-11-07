@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, Bot, CalendarClock, Pause, Play, Trash2 } from 'lucide-react'
+import { BookOpen, Bot, CalendarClock, Download, Pause, Play, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -182,6 +182,13 @@ export default function AgentSettings() {
       {isAdmin && <Card className="border-danger/30">
         <CardHeader title={<span className="text-danger">Delete agent</span>}
           description={`Permanently deletes ${agent.name} with its ${s.leads} lead(s), all calls and transcripts, ${s.documents} knowledge document(s) and history. This cannot be undone.`} />
+        <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3 sm:px-5">
+          <span className="text-xs text-muted">Export this agent's data first:</span>
+          <a href={`${base}/leads/export`} className="rounded-xl">
+            <Button type="button"><Download />Export leads (CSV)</Button>
+          </a>
+          <span className="text-xs text-muted">(calls and chat history have no export yet)</span>
+        </div>
         <form className="flex flex-wrap items-end gap-3 px-4 py-4 sm:px-5" onSubmit={async (e) => {
           e.preventDefault()
           if (confirmName.trim() !== agent.name || busy) return
