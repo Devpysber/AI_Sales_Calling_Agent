@@ -1312,6 +1312,17 @@ def _json_tool_turn(messages: list[dict], tools: list[dict], agent_id: int, purp
     yield "Abhi yeh nahi ho paya, dobara boliye."
 
 
+def _normalize_qualification(value) -> str | None:
+    """Match the model's qualification against Hot/Warm/Cold tolerantly (case, whitespace, a trailing
+    period) instead of an exact string match -- "hot" or "Hot." used to silently fail this check and
+    leave the lead's qualification unchanged, with no error anywhere. "Unknown" stays excluded on
+    purpose: a mid-conversation "not sure yet" must never downgrade an already-set Hot/Warm/Cold.
+    (Duplicated from call_service.py's identical helper rather than imported: call_service already
+    imports this module, so importing back would be circular.)"""
+    cleaned = str(value or "").strip().rstrip(".").title()
+    return cleaned if cleaned in ("Hot", "Warm", "Cold") else None
+
+
 def _clean_crm(crm: dict) -> dict:
     """Spoken forms the model copies verbatim: "rahul at gmail dot com" -> rahul@gmail.com; a bad email is dropped."""
     if crm.get("email"):
@@ -1415,7 +1426,7 @@ def respond(agent_id: int, history: list[dict], customer_text: str, lead: dict, 
         "reply": reply,
         "language": language,
         "intent": data.get("intent") if data.get("intent") in INTENTS else "other",
-        "qualification": data.get("qualification") if data.get("qualification") in ("Hot", "Warm", "Cold") else None,
+        "qualification": _normalize_qualification(data.get("qualification")),
         "end_call": bool(data.get("end_call")),
         "crm_update": _clean_crm({k: str(v).strip() for k, v in crm.items() if v not in (None, "", [], {})}),
         **({"action": next((a for a in WHATSAPP_ACTIONS if a == str(data.get("action") or "").strip().lower()), "none")} if chat else {}),

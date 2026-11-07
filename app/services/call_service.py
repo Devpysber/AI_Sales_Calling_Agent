@@ -80,6 +80,14 @@ def _valid_callback(value) -> str | None:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
+def _normalize_qualification(value) -> str | None:
+    """Match the model's qualification against Hot/Warm/Cold tolerantly (case, whitespace, a trailing
+    period) instead of an exact string match -- a model that answers "hot" or "Hot." used to silently
+    drop a real hot lead with no error anywhere, since the old exact check just returned None."""
+    cleaned = str(value or "").strip().rstrip(".").title()
+    return cleaned if cleaned in ("Hot", "Warm", "Cold") else None
+
+
 def _valid_date(value) -> str | None:
     """Normalise an LLM-extracted follow-up date (YYYY-MM-DD); drop anything unparsable, past or more than a year out."""
     try:
@@ -919,7 +927,10 @@ class CallService:
             return None
         if asked_dnc:
             s["outcome"] = "do_not_call"
-        qualification = s.get("qualification") if s.get("qualification") in ("Hot", "Warm", "Cold") else None
+        qualification = _normalize_qualification(s.get("qualification"))
+        if s.get("qualification") and not qualification:
+            log.warning("Call %s: model returned an unrecognised qualification %r; lead qualification not updated",
+                       call_id, s.get("qualification"))
         self._team_handover(call_id, lead_id, s)
         if lead_id:
             updates = {"summary": s["summary"]} if s.get("summary") else {}
