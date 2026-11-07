@@ -266,13 +266,15 @@ class CRMService:
                 base = base.where(Lead.qualification == qualification)
             if tag:
                 base = base.where(Lead.tags.ilike(f"%{tag}%"))
+            # One grouped count for every column instead of one COUNT query per status.
+            sub = base.subquery()
+            counts_by_status = dict(db.execute(select(sub.c.status, func.count()).group_by(sub.c.status)).all())
             columns = {}
             for status in statuses:
                 query = base.where(Lead.status == status)
-                total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
                 rows = db.scalars(query.order_by(func.coalesce(Lead.last_contacted_at, Lead.updated_at).desc())
                                   .limit(per_column)).all()
-                columns[status] = {"total": total, "items": [r.to_dict() for r in rows]}
+                columns[status] = {"total": counts_by_status.get(status, 0), "items": [r.to_dict() for r in rows]}
             return columns
 
     def bulk_update(self, lead_ids: list[int], data: dict, add_tags: list[str] | None = None, actor: str = "admin") -> int:

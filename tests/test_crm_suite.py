@@ -116,6 +116,28 @@ def test_call_campaign_queues_audience(client, base):
     assert client.get(f"{base}/crm/campaigns/{camp['id']}").json()["status"] == "completed"
 
 
+def test_board_counts_match_per_status_with_filters(client):
+    agent_id = client.post("/api/agents", json={"name": "BoardCounts", "profile": {"company_name": "BoardCounts"}}).json()["id"]
+    base = f"/api/agents/{agent_id}"
+    client.post(f"{base}/leads", json={"name": "A", "phone": "+919844441001", "tags": ["vip"]})
+    client.post(f"{base}/leads", json={"name": "B", "phone": "+919844441002", "tags": ["vip"]})
+    c = client.post(f"{base}/leads", json={"name": "C", "phone": "+919844441003", "tags": ["vip"]}).json()
+    client.post(f"{base}/leads", json={"name": "D", "phone": "+919844441004"})
+    client.patch(f"{base}/leads/{c['id']}", json={"status": "Contacted"})
+
+    import app.services.crm_service as crm_mod
+    statuses = ["New", "Contacted", "Interested", "Meeting", "Won", "Lost", "Do Not Call"]
+    board_all = crm_mod.CRMService(agent_id).board(statuses)
+    assert sum(c["total"] for c in board_all.values()) == 4
+    assert board_all["New"]["total"] == 3
+    assert board_all["Contacted"]["total"] == 1
+
+    board_vip = crm_mod.CRMService(agent_id).board(statuses, tag="vip")
+    assert sum(c["total"] for c in board_vip.values()) == 3
+    assert board_vip["New"]["total"] == 2
+    assert board_vip["Contacted"]["total"] == 1
+
+
 def test_rule_actions_refuse_opted_out_leads(client, base):
     from app.services import rules
     from app.services.whatsapp_service import OPT_OUT_TAG
