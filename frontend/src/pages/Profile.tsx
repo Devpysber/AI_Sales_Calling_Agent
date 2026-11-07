@@ -40,6 +40,11 @@ export default function ProfilePage() {
   const [pw, setPw] = useState({ current: '', next: '', confirm: '' })
   const [emailPw, setEmailPw] = useState('')
   const [synced, setSynced] = useState(false)
+  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api<{ mfa_enabled?: boolean }>('/api/auth/me') })
+  const [mfaSetup, setMfaSetup] = useState<{ secret: string; uri: string } | null>(null)
+  const [mfaCode, setMfaCode] = useState('')
+  const [disabling, setDisabling] = useState(false)
+  const [disablePw, setDisablePw] = useState('')
   const base = useMemo(() => (p ? withLoginEmail(p) : undefined), [p])
   useEffect(() => { if (base && !synced) { setForm(base); setSynced(true) } }, [base, synced])
 
@@ -59,6 +64,29 @@ export default function ProfilePage() {
       toast.success('Password changed', { description: 'Use the new password next time you sign in.' })
     },
     onError: (e) => toast.error('Password not changed', { description: e.message }),
+  })
+  const mfaSetupM = useMutation({
+    mutationFn: () => api<{ secret: string; uri: string }>('/api/accounts/me/mfa/setup', { method: 'POST' }),
+    onSuccess: (data) => setMfaSetup(data),
+    onError: (e) => toast.error('Could not start 2FA setup', { description: e.message }),
+  })
+  const mfaConfirmM = useMutation({
+    mutationFn: () => api('/api/accounts/me/mfa/confirm', { method: 'POST', json: { code: mfaCode } }),
+    onSuccess: () => {
+      setMfaSetup(null); setMfaCode('')
+      qc.invalidateQueries({ queryKey: ['me'] })
+      toast.success('Two-factor authentication enabled')
+    },
+    onError: (e) => toast.error('That code did not match', { description: e.message }),
+  })
+  const mfaDisableM = useMutation({
+    mutationFn: () => api('/api/accounts/me/mfa/disable', { method: 'POST', json: { password: disablePw } }),
+    onSuccess: () => {
+      setDisabling(false); setDisablePw('')
+      qc.invalidateQueries({ queryKey: ['me'] })
+      toast.success('Two-factor authentication disabled')
+    },
+    onError: (e) => toast.error('Could not disable 2FA', { description: e.message }),
   })
   const logout = async () => {
     setSigningOut(true)
@@ -143,6 +171,46 @@ export default function ProfilePage() {
                 </div>
               </form>
             </Card>
+
+            {me && typeof me.mfa_enabled === 'boolean' && (
+              <Card className="reveal reveal-in reveal-up" style={{ animationDelay: '85ms' }}>
+                <CardHeader title="Two-factor authentication" description={me.mfa_enabled ? '2FA is enabled on this account.' : 'Require a code from an authenticator app at sign-in.'} />
+                <div className="space-y-3 px-4 pb-4 sm:px-5 sm:pb-5">
+                  {me.mfa_enabled ? (
+                    disabling ? (
+                      <form onSubmit={(e) => { e.preventDefault(); if (!mfaDisableM.isPending) mfaDisableM.mutate() }} className="space-y-3">
+                        <Field label="Current password" hint="Confirm your password to turn off 2FA.">
+                          <Input type="password" autoComplete="current-password" required disabled={mfaDisableM.isPending} value={disablePw} onChange={(e) => setDisablePw(e.target.value)} />
+                        </Field>
+                        <div className="flex justify-end gap-2">
+                          <Button type="button" onClick={() => { setDisabling(false); setDisablePw('') }}>Cancel</Button>
+                          <Button type="submit" variant="danger" loading={mfaDisableM.isPending} disabled={!disablePw}>Disable 2FA</Button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="flex items-center gap-2 text-sm text-success"><ShieldCheck className="size-4" />2FA is enabled</p>
+                        <Button type="button" onClick={() => setDisabling(true)}>Disable</Button>
+                      </div>
+                    )
+                  ) : mfaSetup ? (
+                    <form onSubmit={(e) => { e.preventDefault(); if (!mfaConfirmM.isPending) mfaConfirmM.mutate() }} className="space-y-3">
+                      <p className="text-sm text-muted">Enter this secret into your authenticator app, then confirm with the 6-digit code it shows.</p>
+                      <div className="rounded-lg bg-surface-2 p-3 text-xs break-all font-mono">{mfaSetup.secret}</div>
+                      <Field label="6-digit code">
+                        <Input inputMode="numeric" maxLength={6} required disabled={mfaConfirmM.isPending} value={mfaCode} onChange={(e) => setMfaCode(e.target.value)} />
+                      </Field>
+                      <div className="flex justify-end gap-2">
+                        <Button type="button" onClick={() => { setMfaSetup(null); setMfaCode('') }}>Cancel</Button>
+                        <Button type="submit" variant="primary" loading={mfaConfirmM.isPending} disabled={mfaCode.length !== 6}>Confirm</Button>
+                      </div>
+                    </form>
+                  ) : (
+                    <Button type="button" onClick={() => mfaSetupM.mutate()} loading={mfaSetupM.isPending}><ShieldCheck />Enable 2FA</Button>
+                  )}
+                </div>
+              </Card>
+            )}
           </div>
 
           <div className="min-w-0 space-y-4">

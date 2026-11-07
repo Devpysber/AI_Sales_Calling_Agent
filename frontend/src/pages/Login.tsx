@@ -1,38 +1,55 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { AudioWaveform, Lock } from 'lucide-react'
+import { AudioWaveform, Lock, ShieldCheck } from 'lucide-react'
 import { Orb3D, Waveform } from '@/components/VoiceViz'
 import { useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Button, Field, Input } from '@/components/ui'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 
 export default function Login() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [mfa, setMfa] = useState<{ email: string; password: string } | null>(null)
+  const [code, setCode] = useState('')
   const qc = useQueryClient()
   const navigate = useNavigate()
   const rawFrom = (useLocation().state as { from?: string } | null)?.from
   // Only return to an in-app path: never to /login itself or to anything that looks like an external URL.
   const from = rawFrom && rawFrom.startsWith('/') && !rawFrom.startsWith('//') && rawFrom !== '/login' ? rawFrom : '/'
 
-  const submit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
+  const doLogin = async (email: string, password: string, otp?: string) => {
     setLoading(true)
     setError('')
-    const form = new FormData(e.currentTarget)
-    const email = String(form.get('email') ?? '').trim()
-    const password = String(form.get('password') ?? '')
     try {
-      const res = await api<{ user: string }>('/api/auth/login', { method: 'POST', json: { email, password } })
+      const res = await api<{ user: string }>('/api/auth/login', { method: 'POST', json: { email, password, ...(otp ? { otp } : {}) } })
       // Seed the session so the guarded routes render at once, then refetch: /me also carries the
       // display name, role and agent limits that the login response does not.
       qc.setQueryData(['me'], (prev: object | undefined) => ({ ...(prev ?? {}), user: res.user, auth_enabled: true }))
       void qc.invalidateQueries({ queryKey: ['me'] })
       navigate(from, { replace: true })
     } catch (err) {
+      if (err instanceof ApiError && err.message === 'MFA_REQUIRED') {
+        setMfa({ email, password })
+        setLoading(false)
+        return
+      }
       setError(err instanceof Error && err.message ? err.message : 'Could not sign in. Please try again.')
       setLoading(false)
     }
+  }
+
+  const submit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const form = new FormData(e.currentTarget)
+    const email = String(form.get('email') ?? '').trim()
+    const password = String(form.get('password') ?? '')
+    void doLogin(email, password)
+  }
+
+  const submitMfa = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    if (!mfa) return
+    void doLogin(mfa.email, mfa.password, code)
   }
 
   return (
@@ -60,23 +77,41 @@ export default function Login() {
       </div>
 
       <div className="flex min-h-0 min-w-0 items-center justify-center overflow-y-auto px-4 py-8 sm:p-6">
-        <form onSubmit={submit} className="w-full min-w-0 max-w-sm" aria-busy={loading}>
-          <fieldset disabled={loading} className="min-w-0 space-y-5">
-            <div>
-              <div className="mb-6 grid size-10 place-items-center rounded-xl bg-brand-soft text-brand lg:hidden"><AudioWaveform className="size-5" /></div>
-              <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
-              <p className="mt-1 text-sm text-muted">Access your voice agent dashboard.</p>
-            </div>
-            <Field label="Email" hint="Sign-in email from your Admin profile. First sign-in before an email is set: your admin username.">
-              <Input name="email" type="text" inputMode="email" autoComplete="username" autoCapitalize="none" spellCheck={false} required autoFocus placeholder="you@company.com" />
-            </Field>
-            <Field label="Password"><Input name="password" type="password" autoComplete="current-password" required /></Field>
-            <Link to="/forgot-password" className="-mt-2 block text-right text-sm font-semibold text-brand hover:underline">Forgot password?</Link>
-            {error && <p role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm break-words text-danger">{error}</p>}
-            <Button type="submit" variant="primary" size="lg" className="w-full" loading={loading}><Lock />Sign in</Button>
-            <p className="text-center text-sm text-muted">No account? <Link to="/signup" className="font-semibold text-brand hover:underline">Create one</Link></p>
-          </fieldset>
-        </form>
+        {mfa ? (
+          <form onSubmit={submitMfa} className="w-full min-w-0 max-w-sm" aria-busy={loading}>
+            <fieldset disabled={loading} className="min-w-0 space-y-5">
+              <div>
+                <div className="mb-6 grid size-10 place-items-center rounded-xl bg-brand-soft text-brand lg:hidden"><ShieldCheck className="size-5" /></div>
+                <h1 className="text-2xl font-semibold tracking-tight">Enter your code</h1>
+                <p className="mt-1 text-sm text-muted">Open your authenticator app and enter the current 6-digit code.</p>
+              </div>
+              <Field label="6-digit code">
+                <Input name="code" inputMode="numeric" maxLength={6} autoComplete="one-time-code" required autoFocus value={code} onChange={(e) => setCode(e.target.value)} />
+              </Field>
+              {error && <p role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm break-words text-danger">{error}</p>}
+              <Button type="submit" variant="primary" size="lg" className="w-full" loading={loading} disabled={code.length !== 6}><ShieldCheck />Verify</Button>
+              <button type="button" className="block w-full text-center text-sm font-semibold text-brand hover:underline" onClick={() => { setMfa(null); setCode(''); setError('') }}>Back to sign in</button>
+            </fieldset>
+          </form>
+        ) : (
+          <form onSubmit={submit} className="w-full min-w-0 max-w-sm" aria-busy={loading}>
+            <fieldset disabled={loading} className="min-w-0 space-y-5">
+              <div>
+                <div className="mb-6 grid size-10 place-items-center rounded-xl bg-brand-soft text-brand lg:hidden"><AudioWaveform className="size-5" /></div>
+                <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
+                <p className="mt-1 text-sm text-muted">Access your voice agent dashboard.</p>
+              </div>
+              <Field label="Email" hint="Sign-in email from your Admin profile. First sign-in before an email is set: your admin username.">
+                <Input name="email" type="text" inputMode="email" autoComplete="username" autoCapitalize="none" spellCheck={false} required autoFocus placeholder="you@company.com" />
+              </Field>
+              <Field label="Password"><Input name="password" type="password" autoComplete="current-password" required /></Field>
+              <Link to="/forgot-password" className="-mt-2 block text-right text-sm font-semibold text-brand hover:underline">Forgot password?</Link>
+              {error && <p role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm break-words text-danger">{error}</p>}
+              <Button type="submit" variant="primary" size="lg" className="w-full" loading={loading}><Lock />Sign in</Button>
+              <p className="text-center text-sm text-muted">No account? <Link to="/signup" className="font-semibold text-brand hover:underline">Create one</Link></p>
+            </fieldset>
+          </form>
+        )}
       </div>
     </div>
   )
