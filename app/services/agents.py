@@ -67,7 +67,7 @@ PROFILE_LIMITS = {
     "greeting_en": 200, "greeting_hi": 200, "company_tagline": 400, "call_to_action": 200,
     "objective": 600, "instructions": 3000, "objection_handling": 3000, "qualification_criteria": 1500,
     "forbidden_topics": 1500, "agent_name": 60, "company_name": 120, "agent_role": 60,
-    "customer_noun": 40, "website_url": 200,
+    "customer_noun": 40, "website_url": 200, "sales_playbook": 2000,
 }
 
 PROFILE_DEFAULTS = {
@@ -105,6 +105,8 @@ PROFILE_DEFAULTS = {
     # Call routing: a human number to hand callers to
     "transfer_number": "",
     "whatsapp_phone_number_id": "",    # Meta phone number ID this agent chats from; empty = server default
+    "whatsapp_business_account_id": "",  # Meta WhatsApp Business Account (WABA) ID, needed to create/submit templates; empty = server default
+    "whatsapp_catalog_id": "",         # Meta WhatsApp Business product catalog ID; empty = no catalog connected
     "instagram_account_id": "",        # Instagram-connected Page/IG account ID shown on the Channels tab (display only today; routing is still env-based, see instagram_service.resolve_agent)
     "team_members": [],
     "inbound_mode": "ai",              # ai | forward (ring the transfer number directly)
@@ -119,6 +121,8 @@ PROFILE_DEFAULTS = {
     "agent_password": "",
     "industry_pack": "",               # key of the last-applied industry pack (industry_packs.py), if any
     "custom_topics": [],               # extra topics the operator asked the knowledge coverage audit to track
+    "sales_mode": True,                 # proactively pitch/upsell/close, vs. staying purely reactive support
+    "sales_playbook": "",               # business-specific upsell pairings, promos, objection notes, what "closing" means here
 }
 
 DEFAULTS = {"profile": PROFILE_DEFAULTS, "automation": AUTOMATION_DEFAULTS}
