@@ -261,6 +261,22 @@ def update_profile(values: dict, request: Request, agent_id: int = Depends(works
     return saved
 
 
+@router.get("/{agent_id}/persona/history")
+def persona_history(agent_id: int = Depends(workspace)):
+    return {"history": agents.persona_history(agent_id)}
+
+
+@router.post("/{agent_id}/persona/history/{snapshot_id}/restore")
+def restore_persona_history(request: Request, agent_id: int = Depends(workspace), snapshot_id: int = Path(...)):
+    try:
+        saved = dict(agents.restore_persona_snapshot(agent_id, snapshot_id, actor=actor(request)))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    if getattr(request.state, "user", "") not in ("admin", "api"):
+        saved.pop("agent_password", None)
+    return saved
+
+
 class Preview(BaseModel):
     text: str = Field(..., max_length=1000)
     language: str | None = None

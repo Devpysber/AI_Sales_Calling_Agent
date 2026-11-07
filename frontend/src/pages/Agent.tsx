@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlertTriangle, BookOpen, Bot, Check, CircleDashed, Lightbulb, MessageSquareText, Mic, MicOff, Play, RotateCcw, Save, SendHorizontal,
+  AlertTriangle, BookOpen, Bot, Check, CircleDashed, History, Lightbulb, MessageSquareText, Mic, MicOff, Play, RotateCcw, Save, SendHorizontal,
   ShieldAlert, Sparkles, Square, Target, UserRound, Volume2,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { QualificationBadge } from '@/components/status'
-import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, PageHeader, Select, Skeleton, Switch, Tabs, Textarea } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, PageHeader, Select, Skeleton, Switch, Tabs, Textarea, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
 import type { AgentProfile, AgentTurnResult, KnowledgeDoc, Lead, Page, PlaygroundUsage, Turn } from '@/lib/types'
 import { cn, LANGUAGES, titleCase } from '@/lib/utils'
@@ -18,6 +18,7 @@ import { useAgent } from '@/lib/agent'
 
 type ProfileResponse = { profile: AgentProfile; voices: string[]; languages: Record<string, string> }
 type KnowledgeResponse = { documents: KnowledgeDoc[]; stats: { chunks: number; documents: number; semantic: boolean } }
+type PersonaSnapshot = { id: number; agent_id: number; instructions: string; created_at: string; created_by: string | null }
 type Section = 'playground' | 'persona' | 'playbook'
 
 const PLACEHOLDERS = ['name', 'agent', 'company']
@@ -321,6 +322,39 @@ function ProfileEditor({ section, draft, setDraft, data }: {
 
   const insert = (key: 'greeting_en' | 'greeting_hi', token: string) => set(key, `${draft[key]}${draft[key].endsWith(' ') || !draft[key] ? '' : ' '}{${token}}`)
 
+  // Persona history: prior versions of "Style & process", kept server-side so an edit that goes wrong
+  // can be rolled back without retyping it from memory.
+  const qc = useQueryClient()
+  const confirm = useConfirm()
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const history = useQuery({
+    queryKey: [base, 'persona-history'],
+    queryFn: () => api<{ history: PersonaSnapshot[] }>(`${base}/persona/history`),
+    enabled: historyOpen,
+  })
+  const restore = useMutation({
+    mutationFn: (snapshotId: number) => api<AgentProfile>(`${base}/persona/history/${snapshotId}/restore`, { method: 'POST' }),
+    onSuccess: (saved) => {
+      qc.setQueryData<ProfileResponse | undefined>(['agent'], (old) =>
+        old ? { ...old, profile: { ...old.profile, instructions: saved.instructions } } : old)
+      setDraft((d) => (d ? { ...d, instructions: saved.instructions } : d))
+      qc.invalidateQueries({ queryKey: [base, 'persona-history'] })
+      setHistoryOpen(false)
+      toast.success('Persona restored', { description: 'The previous version is now live. Review it, then Save.' })
+    },
+    onError: (e) => toast.error('Could not restore', { description: e.message }),
+  })
+  const restoreSnapshot = async (snap: PersonaSnapshot) => {
+    const ok = await confirm({
+      title: 'Restore this version?',
+      description: 'This replaces the current "Style & process" text with the version from '
+        + `${new Date(snap.created_at).toLocaleString()}. Your current draft will be overwritten.`,
+      confirmLabel: 'Restore',
+      danger: true,
+    })
+    if (ok) restore.mutate(snap.id)
+  }
+
   const aside = (
     <Card className="p-5 text-sm reveal reveal-in reveal-right" style={{ animationDelay: '200ms' }}>
       <div className="flex items-center gap-2 font-medium"><BookOpen className="size-4 text-brand" />Playbook vs knowledge</div>
@@ -379,7 +413,34 @@ function ProfileEditor({ section, draft, setDraft, data }: {
         </Section>
         <Section title="Conversation" description="Plain-language instructions, written as you'd brief someone new on their first day.">
           <div className="grid gap-4">
-            <Field label="Style & process"><Counted rows={6} max={3000} value={draft.instructions} onChange={(e) => set('instructions', e.target.value)} placeholder={'1. Confirm you are speaking to the decision maker.\n2. Ask about their current challenge.\n3. …'} /></Field>
+            <div className="relative">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium">Style & process</span>
+                <Button variant="secondary" className="h-7 px-2 text-xs" onClick={() => setHistoryOpen((o) => !o)}>
+                  <History className="size-3.5" />History
+                </Button>
+              </div>
+              {historyOpen && (
+                <div className="absolute right-0 top-8 z-20 w-80 rounded-lg border border-border bg-surface p-2 shadow-lg">
+                  {history.isLoading && <div className="p-2 text-sm text-muted">Loading…</div>}
+                  {history.isError && <div className="p-2 text-sm text-danger">Could not load history.</div>}
+                  {history.data && history.data.history.length === 0 && (
+                    <div className="p-2 text-sm text-muted">No earlier versions yet — saved edits appear here.</div>
+                  )}
+                  {history.data?.history.map((snap) => (
+                    <div key={snap.id} className="flex items-center justify-between gap-2 rounded-md p-2 text-sm hover:bg-surface-2">
+                      <div className="min-w-0">
+                        <div className="text-xs text-muted">{new Date(snap.created_at).toLocaleString()}</div>
+                        <div className="truncate">{snap.instructions.slice(0, 80) || '(empty)'}</div>
+                      </div>
+                      <Button variant="secondary" className="h-7 shrink-0 px-2 text-xs" disabled={restore.isPending}
+                        onClick={() => restoreSnapshot(snap)}>Restore</Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <Field label=""><Counted rows={6} max={3000} value={draft.instructions} onChange={(e) => set('instructions', e.target.value)} placeholder={'1. Confirm you are speaking to the decision maker.\n2. Ask about their current challenge.\n3. …'} /></Field>
+            </div>
             <Field label="Objection handling" hint="One objection per line, with how to respond"><Counted rows={6} max={3000} value={draft.objection_handling} onChange={(e) => set('objection_handling', e.target.value)} placeholder={'Too expensive → explain phased delivery and ask about budget range.\nAlready have a vendor → ask what they would improve.'} /></Field>
           </div>
         </Section>

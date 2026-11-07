@@ -46,3 +46,23 @@ class Agent(Base):
     def stored(self, field: str) -> dict:
         value = getattr(self, field)
         return json.loads(value) if value else {}
+
+
+class PersonaSnapshot(Base):
+    """A copy of an agent's persona `instructions` text as it stood before a later save replaced it."""
+    __tablename__ = "persona_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent_id: Mapped[int] = mapped_column(Integer, index=True)
+    instructions: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_by: Mapped[str | None] = mapped_column(String(64))
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "agent_id": self.agent_id,
+            "instructions": self.instructions,
+            "created_at": iso(self.created_at),
+            "created_by": self.created_by,
+        }
