@@ -146,7 +146,9 @@ def _native_loop(messages: list[dict], tools: list[dict], agent_id: int, convers
                 args = {}
             result, status = _run_tool(name, args if isinstance(args, dict) else {}, agent_id, conversation_id, lead_id)
             tools_used.append({"name": name, "status": status})
-            messages.append({"role": "tool", "tool_call_id": tc["id"], "name": name, "content": result})
+            # Custom HTTP tools are already capped (tool_registry.run_http_tool, 4000 chars); this guards
+            # the builtin ones too, so a future verbose one can't inflate every remaining round's prompt.
+            messages.append({"role": "tool", "tool_call_id": tc["id"], "name": name, "content": result[:2000]})
     log.warning("Chat tool loop hit %s rounds for agent %s", MAX_TOOL_ROUNDS, agent_id)
     messages.append({"role": "user", "content": "Reply to the customer now in one short chat message, no more tool calls."})
     result = llm.complete(llm._without_tools(messages), max_tokens=250, temperature=0.4)
