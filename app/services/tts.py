@@ -212,16 +212,35 @@ def _sarvam_synthesize_pcm(text: str, language: str | None = None, speaker: str 
     return pcm[44:] if pcm[:4] == b"RIFF" else pcm
 
 
+_pcm_locks: dict[str, threading.Lock] = {}
+_pcm_locks_guard = threading.Lock()
+
+
+def _pcm_lock(key: str) -> threading.Lock:
+    with _pcm_locks_guard:
+        return _pcm_locks.setdefault(key, threading.Lock())
+
+
 def cached_pcm(text: str, language: str, speaker: str, usage: dict | None = None) -> bytes:
-    """Content-addressed cache of phone-stream audio for fixed lines (greetings, prompts). usage: billed chars on a miss."""
+    """Content-addressed cache of phone-stream audio for fixed lines (greetings, prompts). usage: billed chars on a miss.
+
+    A greeting/prompt is exactly the kind of line many calls ask for at once (a dial burst all hitting
+    the same cold cache key) -- without a single-flight lock, every concurrent miss on the same key
+    would pay for its own TTS synthesis instead of sharing one. Only the (rare) cold-cache path takes
+    the lock; a warm hit never blocks on it.
+    """
     key = "pcm:" + hashlib.sha256(f"{settings.tts_engine}|{settings.sarvam_tts_model}|{speaker}|{language}|{text}".encode()).hexdigest()[:40]
     audio = store.get_bytes(key)
-    if audio is None:
-        audio = synthesize_pcm(text, language, speaker)
-        fallback = isinstance(audio, FallbackAudio)
-        store.set_bytes(key, audio, ttl=AUDIO_TTL if fallback else CACHE_TTL)
-        if usage is not None and not fallback:
-            usage["tts_chars"] = usage.get("tts_chars", 0) + len(text)
+    if audio is not None:
+        return audio
+    with _pcm_lock(key):
+        audio = store.get_bytes(key)  # another caller may have finished the synthesis while we waited
+        if audio is None:
+            audio = synthesize_pcm(text, language, speaker)
+            fallback = isinstance(audio, FallbackAudio)
+            store.set_bytes(key, audio, ttl=AUDIO_TTL if fallback else CACHE_TTL)
+            if usage is not None and not fallback:
+                usage["tts_chars"] = usage.get("tts_chars", 0) + len(text)
     return audio
 
 
