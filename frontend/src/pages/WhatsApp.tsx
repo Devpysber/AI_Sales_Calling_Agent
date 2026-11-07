@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, PageHeader, Switch, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
 import { useAgent } from '@/lib/agent'
-import type { AutomationSettings } from '@/lib/types'
+import type { ActivityEvent, AutomationSettings } from '@/lib/types'
 import { titleCase } from '@/lib/utils'
 
 type WaStatus = { status?: string; phone?: string | null; pushname?: string | null }
@@ -59,13 +59,10 @@ export default function WhatsApp() {
 
   const { data: activity } = useQuery({
     queryKey: ['agent-whatsapp-events', agent?.id],
-    queryFn: () => api<any[]>(`${base}/activity`, { params: { limit: 40 } }),
+    queryFn: () => api<ActivityEvent[]>(`${base}/activity`, { params: { type: 'whatsapp', limit: 40 } }),
     enabled,
   })
-  const list: any[] = Array.isArray(activity) ? activity : (activity as any)?.items || []
-  const whatsappEvents = list.filter(
-    (e: any) => e?.title?.toLowerCase?.().includes('whatsapp') || e?.detail?.toLowerCase?.().includes('whatsapp'),
-  )
+  const whatsappEvents: ActivityEvent[] = Array.isArray(activity) ? activity : (activity as any)?.items || []
 
   const onDisconnect = async () => {
     if (await confirm({ title: 'Disconnect WhatsApp?', description: 'The agent stops replying on this number until you scan a new QR code.', confirmLabel: 'Disconnect', danger: true })) disconnect.mutate()
