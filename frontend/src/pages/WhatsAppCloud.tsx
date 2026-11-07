@@ -24,7 +24,7 @@ function renderFormatted(text: string): ReactNode[] {
 }
 type Chat = {
   id: number; lead_id: number | null; lead_name: string | null; lead_phone: string | null; status: string
-  last_text: string; last_at: string | null; message_count: number; ai_paused: boolean
+  last_text: string; last_at: string | null; message_count: number; ai_paused: boolean; awaiting_reply: boolean
 }
 type ChatDetail = Chat & { transcript: Turn[]; summary?: string | null }
 
@@ -36,10 +36,15 @@ export default function WhatsApp() {
   const [params] = useSearchParams()
   const [selected, setSelected] = useState<number | null>(null)
   const [text, setText] = useState("")
+  const [search, setSearch] = useState("")
   const endRef = useRef<HTMLDivElement>(null)
 
   const list = useQuery({ queryKey: ["wa-chats", base], queryFn: () => api<{ items: Chat[] }>(`${base}/whatsapp/chats`), refetchInterval: 5000 })
   const items = list.data?.items ?? []
+  const q = search.trim().toLowerCase()
+  const filteredItems = q
+    ? items.filter((c) => [c.lead_name, c.lead_phone, c.last_text].some((v) => (v || "").toLowerCase().includes(q)))
+    : items
   // Arriving from a lead's "WhatsApp" quick action: jump straight to that lead's chat once it's loaded.
   useEffect(() => {
     const leadId = Number(params.get("lead"))
@@ -83,7 +88,11 @@ export default function WhatsApp() {
             <div className="border-b border-border bg-[#f0f2f5] px-4 py-3 text-sm font-semibold text-[#41525d] dark:bg-[#202c33] dark:text-[#e9edef]">
               <span className="inline-flex items-center gap-2"><MessageCircle className="size-4 text-[#25d366]" />WhatsApp</span>
             </div>
-            {items.map((c) => (
+            <div className="border-b border-border px-2 py-2">
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search chats"
+                className="w-full rounded-full border border-border bg-[#f0f2f5] px-3 py-1.5 text-sm text-[#111b21] outline-none placeholder:text-[#667781] dark:bg-[#202c33] dark:text-[#e9edef] dark:placeholder:text-[#8696a0]" />
+            </div>
+            {filteredItems.map((c) => (
               <button key={c.id} onClick={() => setSelected(c.id)}
                 className={cn("flex w-full items-center gap-3 border-b border-black/5 px-3 py-3 text-left hover:bg-[#f5f6f6] dark:border-white/5 dark:hover:bg-white/5",
                   c.id === activeId && "bg-[#f0f2f5] dark:bg-white/10")}>
@@ -92,12 +101,15 @@ export default function WhatsApp() {
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-medium text-[#111b21] dark:text-[#e9edef]">{c.lead_name || c.lead_phone}</span>
+                    <span className={cn("truncate text-sm text-[#111b21] dark:text-[#e9edef]", c.awaiting_reply ? "font-semibold" : "font-medium")}>{c.lead_name || c.lead_phone}</span>
                     <span className="shrink-0 text-[11px] text-[#667781] dark:text-[#8696a0]">{time(c.last_at)}</span>
                   </div>
                   <div className="mt-0.5 flex items-center justify-between gap-2">
-                    <span className="truncate text-xs text-[#667781] dark:text-[#8696a0]">{c.last_text}</span>
-                    {c.ai_paused && <Badge tone="warning">Paused</Badge>}
+                    <span className={cn("truncate text-xs text-[#667781] dark:text-[#8696a0]", c.awaiting_reply && "font-semibold text-[#111b21] dark:text-[#e9edef]")}>{c.last_text}</span>
+                    <span className="flex shrink-0 items-center gap-1">
+                      {c.awaiting_reply && <Badge tone="success" dot>Awaiting reply</Badge>}
+                      {c.ai_paused && <Badge tone="warning">Paused</Badge>}
+                    </span>
                   </div>
                 </div>
               </button>

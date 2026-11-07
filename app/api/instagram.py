@@ -69,7 +69,8 @@ def _item(db, conv: Conversation, name, phone, with_transcript: bool = False) ->
             "status": "Chat" if conv.status == "open" else "Completed",
             "last_text": (last.text or "") if last else "",
             "last_at": (last.created_at.isoformat() if last and last.created_at else (conv.created_at.isoformat() if conv.created_at else None)),
-            "message_count": len(msgs), "ai_paused": bool(conv.ai_paused)}
+            "message_count": len(msgs), "ai_paused": bool(conv.ai_paused),
+            "awaiting_reply": bool(last and last.sender_type == "customer")}
     if with_transcript:
         data["transcript"] = [_turn(m) for m in msgs]
         data["summary"] = conv.summary
@@ -89,6 +90,20 @@ def chats(agent_id: int = Depends(workspace)):
 def chat(chat_id: int, agent_id: int = Depends(workspace)):
     with get_db() as db:
         c, n, p = _chat(db, agent_id, chat_id)
+        return _item(db, c, n, p, with_transcript=True)
+
+
+@router.get("/chats/by-lead/{lead_id}")
+def chat_by_lead(lead_id: int, agent_id: int = Depends(workspace)):
+    """The Instagram chat (if any) for a given lead, for that lead's detail page."""
+    with get_db() as db:
+        row = db.execute(select(Conversation, Lead.name, Lead.phone).outerjoin(Lead, Lead.id == Conversation.lead_id)
+                          .where(Conversation.lead_id == lead_id, Conversation.agent_id == agent_id,
+                                 Conversation.channel == "instagram")
+                          .order_by(Conversation.id.desc())).first()
+        if row is None:
+            raise HTTPException(404, "No Instagram chat for this lead.")
+        c, n, p = row
         return _item(db, c, n, p, with_transcript=True)
 
 
