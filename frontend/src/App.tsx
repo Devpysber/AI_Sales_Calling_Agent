@@ -74,6 +74,10 @@ const Emails = lazy(page(() => import('@/pages/Emails')))
 const InstagramPage = lazy(page(() => import('@/pages/Instagram')))
 const Channels = lazy(page(() => import('@/pages/Channels')))
 const ToolsPage = lazy(page(() => import('@/pages/Tools')))
+const ForgotPassword = lazy(page(() => import('@/pages/ForgotPassword')))
+const ResetPassword = lazy(page(() => import('@/pages/ResetPassword')))
+const AcceptInvite = lazy(page(() => import('@/pages/AcceptInvite')))
+const Signup = lazy(page(() => import('@/pages/Signup')))
 
 const Loading = () => <div className="grid h-64 place-items-center"><Spinner className="size-6" /></div>
 
@@ -106,6 +110,10 @@ export default function App() {
     return (
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Suspense fallback={<Loading />}><Signup /></Suspense>} />
+        <Route path="/forgot-password" element={<Suspense fallback={<Loading />}><ForgotPassword /></Suspense>} />
+        <Route path="/reset-password" element={<Suspense fallback={<Loading />}><ResetPassword /></Suspense>} />
+        <Route path="/accept-invite" element={<Suspense fallback={<Loading />}><AcceptInvite /></Suspense>} />
         <Route path="*" element={<Navigate to="/login" state={{ from: location.pathname }} replace />} />
       </Routes>
     )
@@ -119,6 +127,10 @@ export default function App() {
     <Suspense fallback={<Loading />}>
       <Routes>
         <Route path="/login" element={<Navigate to="/" replace />} />
+        <Route path="/signup" element={<Navigate to="/" replace />} />
+        <Route path="/forgot-password" element={<Navigate to="/" replace />} />
+        <Route path="/reset-password" element={<Navigate to="/" replace />} />
+        <Route path="/accept-invite" element={<Navigate to="/" replace />} />
         <Route element={shell}>
           <Route index element={<Home />} />
           <Route path="settings" element={me.user === 'team' ? <Navigate to="/" replace /> : <SettingsPage />} />

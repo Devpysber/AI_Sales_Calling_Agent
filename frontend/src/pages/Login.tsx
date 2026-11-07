@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { AudioWaveform, Lock } from 'lucide-react'
 import { Orb3D, Waveform } from '@/components/VoiceViz'
 import { useLayoutEffect, useRef, useState, type FormEvent } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Button, Field, Input } from '@/components/ui'
 import { api } from '@/lib/api'
 
@@ -71,8 +71,10 @@ export default function Login() {
               <Input name="email" type="text" inputMode="email" autoComplete="username" autoCapitalize="none" spellCheck={false} required autoFocus placeholder="you@company.com" />
             </Field>
             <Field label="Password"><Input name="password" type="password" autoComplete="current-password" required /></Field>
+            <Link to="/forgot-password" className="-mt-2 block text-right text-sm font-semibold text-brand hover:underline">Forgot password?</Link>
             {error && <p role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm break-words text-danger">{error}</p>}
             <Button type="submit" variant="primary" size="lg" className="w-full" loading={loading}><Lock />Sign in</Button>
+            <p className="text-center text-sm text-muted">No account? <Link to="/signup" className="font-semibold text-brand hover:underline">Create one</Link></p>
           </fieldset>
         </form>
       </div>
