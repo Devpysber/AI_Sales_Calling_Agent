@@ -79,6 +79,27 @@ const emptyForm = {
   footerText: "", buttons: [] as WaButton[],
 }
 
+/** Reverse of buildComponents(): pre-fills the builder form from an existing (draft) template. */
+function templateToForm(t: MessageTemplate): typeof emptyForm {
+  const components = t.components ?? []
+  const header = components.find((c) => c.type === "HEADER")
+  const body = components.find((c) => c.type === "BODY")
+  const footer = components.find((c) => c.type === "FOOTER")
+  const buttonsComp = components.find((c) => c.type === "BUTTONS")
+  return {
+    name: t.whatsapp_template_name ?? t.name,
+    language: t.whatsapp_template_language ?? "en_US",
+    category: (t.category as typeof emptyForm.category) ?? "MARKETING",
+    headerFormat: (header?.format ?? "NONE") as HeaderFormat,
+    headerText: header?.format === "TEXT" ? (header.text ?? "") : "",
+    headerExample: "",
+    bodyText: body?.text ?? "",
+    bodyExamples: [],
+    footerText: footer?.text ?? "",
+    buttons: buttonsComp?.buttons ?? [],
+  }
+}
+
 function buildComponents(form: typeof emptyForm): WaComponent[] {
   const comps: WaComponent[] = []
   if (form.headerFormat !== "NONE") {
@@ -145,6 +166,7 @@ export default function Templates() {
   const [showBuilder, setShowBuilder] = useState(false)
   const [form, setForm] = useState(emptyForm)
   const [createdId, setCreatedId] = useState<number | null>(null)
+  const [editingId, setEditingId] = useState<number | null>(null)
   const [sending, setSending] = useState<MessageTemplate | null>(null)
 
   const create = useMutation({
@@ -153,6 +175,15 @@ export default function Templates() {
       json: { name: form.name.trim(), language: form.language, category: form.category, components: buildComponents(form) },
     }),
     onSuccess: (row) => { toast.success("Saved as draft"); setCreatedId(row.id); invalidate() },
+    onError: (e) => toast.error(e.message),
+  })
+
+  const patch = useMutation({
+    mutationFn: (id: number) => api<MessageTemplate>(`${base}/whatsapp/templates/${id}`, {
+      method: "PATCH",
+      json: { name: form.name.trim(), language: form.language, category: form.category, components: buildComponents(form) },
+    }),
+    onSuccess: () => { toast.success("Template updated"); invalidate() },
     onError: (e) => toast.error(e.message),
   })
 
@@ -168,14 +199,15 @@ export default function Templates() {
     onError: (e) => toast.error(e.message),
   })
 
-  const closeBuilder = () => { setShowBuilder(false); setForm(emptyForm); setCreatedId(null) }
+  const closeBuilder = () => { setShowBuilder(false); setForm(emptyForm); setCreatedId(null); setEditingId(null) }
 
   const bodyVarN = varCount(form.bodyText)
+  const locked = !!createdId && !editingId
 
   return (
     <>
       <PageHeader eyebrow="Build" title="WhatsApp templates" description="Meta-approved message templates for notifications and re-engagement outside the 24-hour chat window."
-        actions={<Button variant="primary" onClick={() => { setForm(emptyForm); setCreatedId(null); setShowBuilder(true) }}><Plus className="size-4" />New template</Button>} />
+        actions={<Button variant="primary" onClick={() => { setForm(emptyForm); setCreatedId(null); setEditingId(null); setShowBuilder(true) }}><Plus className="size-4" />New template</Button>} />
 
       {list.isLoading ? <Skeleton className="h-64" /> : templates.length === 0 ? (
         <Card><EmptyState icon={<FileText />} title="No templates yet" description="Create a template, submit it to Meta for approval, then send it to leads." /></Card>
@@ -188,6 +220,7 @@ export default function Templates() {
                 description={t.body}
                 action={<div className="flex flex-wrap items-center gap-2">
                   {t.status === "pending" && <Button loading={syncStatus.isPending} onClick={() => syncStatus.mutate(t.id)}><RefreshCw className="size-4" />Sync status</Button>}
+                  {t.status === "draft" && <Button onClick={() => { setForm(templateToForm(t)); setCreatedId(null); setEditingId(t.id); setShowBuilder(true) }}>Edit</Button>}
                   {t.status === "draft" && <Button variant="primary" loading={submit.isPending} onClick={() => submit.mutate(t.id)}>Submit for approval</Button>}
                   {t.status === "approved" && <Button variant="primary" onClick={() => setSending(t)}><Send className="size-4" />Send</Button>}
                 </div>}
@@ -199,10 +232,12 @@ export default function Templates() {
       )}
 
       {/* ---------------- Builder ---------------- */}
-      <Sheet open={showBuilder} onClose={closeBuilder} title="New WhatsApp template" width="max-w-3xl"
+      <Sheet open={showBuilder} onClose={closeBuilder} title={editingId ? "Edit WhatsApp template" : "New WhatsApp template"} width="max-w-3xl"
         footer={<>
-          <Button onClick={closeBuilder}>{createdId ? "Close" : "Cancel"}</Button>
-          {!createdId ? (
+          <Button onClick={closeBuilder}>{createdId && !editingId ? "Close" : "Cancel"}</Button>
+          {editingId ? (
+            <Button variant="primary" loading={patch.isPending} onClick={() => patch.mutate(editingId)} disabled={!form.name.trim() || !form.bodyText.trim()}>Save changes</Button>
+          ) : !createdId ? (
             <Button variant="primary" loading={create.isPending} onClick={() => create.mutate()} disabled={!form.name.trim() || !form.bodyText.trim()}>Save as draft</Button>
           ) : (
             <Button variant="primary" loading={submit.isPending} onClick={() => submit.mutate(createdId, { onSuccess: closeBuilder })}>Submit for approval</Button>
@@ -210,15 +245,15 @@ export default function Templates() {
         </>}>
         <div className="grid gap-5 lg:grid-cols-2">
           <div className="space-y-4">
-            <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_") })} disabled={!!createdId} placeholder="order_confirmation" /></Field>
+            <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_") })} disabled={locked} placeholder="order_confirmation" /></Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Language">
-                <Select value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })} disabled={!!createdId}>
+                <Select value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })} disabled={locked}>
                   {Object.entries(TEMPLATE_LANGUAGES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </Select>
               </Field>
               <Field label="Category">
-                <Select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as typeof form.category })} disabled={!!createdId}>
+                <Select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as typeof form.category })} disabled={locked}>
                   <option value="MARKETING">Marketing</option><option value="UTILITY">Utility</option><option value="AUTHENTICATION">Authentication</option>
                 </Select>
               </Field>
@@ -226,13 +261,13 @@ export default function Templates() {
             <p className="text-xs text-muted">{CATEGORY_HELP[form.category]}</p>
 
             <Field label="Header">
-              <Select value={form.headerFormat} onChange={(e) => setForm({ ...form, headerFormat: e.target.value as HeaderFormat })} disabled={!!createdId}>
+              <Select value={form.headerFormat} onChange={(e) => setForm({ ...form, headerFormat: e.target.value as HeaderFormat })} disabled={locked}>
                 <option value="NONE">None</option><option value="TEXT">Text</option><option value="IMAGE">Image</option><option value="VIDEO">Video</option><option value="DOCUMENT">Document</option>
               </Select>
             </Field>
             {form.headerFormat === "TEXT" && (
               <Field label="Header text" hint="One {{1}} variable is allowed.">
-                <Input value={form.headerText} onChange={(e) => setForm({ ...form, headerText: e.target.value })} disabled={!!createdId} placeholder="Hi {{1}}!" />
+                <Input value={form.headerText} onChange={(e) => setForm({ ...form, headerText: e.target.value })} disabled={locked} placeholder="Hi {{1}}!" />
               </Field>
             )}
             {(form.headerFormat === "IMAGE" || form.headerFormat === "VIDEO" || form.headerFormat === "DOCUMENT") && (
@@ -240,49 +275,49 @@ export default function Templates() {
             )}
 
             <Field label="Body" hint={`Use {{1}}, {{2}}… for variables. ${bodyVarN} variable${bodyVarN === 1 ? "" : "s"} used.`}>
-              <Textarea rows={5} value={form.bodyText} onChange={(e) => setForm({ ...form, bodyText: e.target.value })} disabled={!!createdId}
+              <Textarea rows={5} value={form.bodyText} onChange={(e) => setForm({ ...form, bodyText: e.target.value })} disabled={locked}
                 placeholder="Hi {{1}}, your order {{2}} has shipped." />
             </Field>
             {bodyVarN > 0 && (
               <div className="grid gap-2">
                 {Array.from({ length: bodyVarN }, (_, i) => (
                   <Field key={i} label={`Example for {{${i + 1}}}`}>
-                    <Input value={form.bodyExamples[i] ?? ""} disabled={!!createdId}
+                    <Input value={form.bodyExamples[i] ?? ""} disabled={locked}
                       onChange={(e) => { const ex = [...form.bodyExamples]; ex[i] = e.target.value; setForm({ ...form, bodyExamples: ex }) }} />
                   </Field>
                 ))}
               </div>
             )}
 
-            <Field label="Footer (optional)"><Input value={form.footerText} onChange={(e) => setForm({ ...form, footerText: e.target.value })} disabled={!!createdId} /></Field>
+            <Field label="Footer (optional)"><Input value={form.footerText} onChange={(e) => setForm({ ...form, footerText: e.target.value })} disabled={locked} /></Field>
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-[13px] font-semibold text-fg-2">Buttons (up to {MAX_BUTTONS})</span>
-                {form.buttons.length < MAX_BUTTONS && !createdId && (
+                {form.buttons.length < MAX_BUTTONS && !locked && (
                   <Button size="sm" onClick={() => setForm({ ...form, buttons: [...form.buttons, emptyButton()] })}><Plus className="size-3.5" />Add button</Button>
                 )}
               </div>
               {form.buttons.map((b, i) => (
                 <div key={i} className="space-y-2 rounded-xl border border-border p-3">
                   <div className="grid grid-cols-2 gap-2">
-                    <Select value={b.type} disabled={!!createdId} onChange={(e) => {
+                    <Select value={b.type} disabled={locked} onChange={(e) => {
                       const buttons = [...form.buttons]; buttons[i] = { type: e.target.value as ButtonType, text: b.text }; setForm({ ...form, buttons })
                     }}>
                       <option value="QUICK_REPLY">Quick reply</option><option value="URL">URL</option><option value="PHONE_NUMBER">Phone number</option>
                     </Select>
-                    <Input placeholder="Button text" value={b.text} disabled={!!createdId}
+                    <Input placeholder="Button text" value={b.text} disabled={locked}
                       onChange={(e) => { const buttons = [...form.buttons]; buttons[i] = { ...b, text: e.target.value }; setForm({ ...form, buttons }) }} />
                   </div>
                   {b.type === "URL" && (
-                    <Input placeholder="https://example.com/orders/{{1}}" value={b.url ?? ""} disabled={!!createdId}
+                    <Input placeholder="https://example.com/orders/{{1}}" value={b.url ?? ""} disabled={locked}
                       onChange={(e) => { const buttons = [...form.buttons]; buttons[i] = { ...b, url: e.target.value }; setForm({ ...form, buttons }) }} />
                   )}
                   {b.type === "PHONE_NUMBER" && (
-                    <Input placeholder="+1 555 0100" value={b.phone_number ?? ""} disabled={!!createdId}
+                    <Input placeholder="+1 555 0100" value={b.phone_number ?? ""} disabled={locked}
                       onChange={(e) => { const buttons = [...form.buttons]; buttons[i] = { ...b, phone_number: e.target.value }; setForm({ ...form, buttons }) }} />
                   )}
-                  {!createdId && <Button size="sm" onClick={() => setForm({ ...form, buttons: form.buttons.filter((_, j) => j !== i) })}>Remove</Button>}
+                  {!locked && <Button size="sm" onClick={() => setForm({ ...form, buttons: form.buttons.filter((_, j) => j !== i) })}>Remove</Button>}
                 </div>
               ))}
             </div>

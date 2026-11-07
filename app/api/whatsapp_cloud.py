@@ -156,6 +156,13 @@ class TemplateIn(BaseModel):
         return self.components, header_format
 
 
+class TemplatePatch(BaseModel):
+    name: str | None = None
+    language: str | None = None
+    category: str | None = None
+    components: list[dict] | None = None
+
+
 class TemplateSend(BaseModel):
     lead_id: int | None = None
     phone: str | None = None
@@ -211,6 +218,39 @@ def create_template(body: TemplateIn, agent_id: int = Depends(workspace)):
                               category=body.category, components_json=_json.dumps(components),
                               header_format=header_format, status="draft", is_meta_approved=False)
         db.add(row)
+        db.flush()
+        return row.to_dict()
+
+
+@router.patch("/templates/{template_id}")
+def patch_template(template_id: int, body: TemplatePatch, agent_id: int = Depends(workspace)):
+    with get_db() as db:
+        row = db.query(MessageTemplate).filter(MessageTemplate.agent_id == agent_id,
+                                                MessageTemplate.id == template_id,
+                                                MessageTemplate.channel == "whatsapp").first()
+        if not row:
+            raise HTTPException(404, "Template not found.")
+        if row.status != "draft":
+            raise HTTPException(400, "Only draft templates can be edited; a submitted template must be "
+                                      "resubmitted as a new one.")
+        name = body.name if body.name is not None else row.whatsapp_template_name
+        language = body.language if body.language is not None else row.whatsapp_template_language
+        category = body.category if body.category is not None else row.category
+        components = body.components if body.components is not None else (
+            _json.loads(row.components_json) if row.components_json else [])
+        try:
+            components, header_format = TemplateIn(name=name, language=language, category=category,
+                                                    components=components).validated_components()
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        body_text = next(c.get("text") or "" for c in components if (c.get("type") or "").upper() == "BODY")
+        row.name = name
+        row.whatsapp_template_name = name
+        row.whatsapp_template_language = language
+        row.category = category
+        row.components_json = _json.dumps(components)
+        row.header_format = header_format
+        row.body = body_text
         db.flush()
         return row.to_dict()
 

@@ -195,6 +195,55 @@ def test_template_send_endpoint_builds_meta_components(client, base, monkeypatch
                        "parameters": [{"type": "text", "text": "12345"}]}
 
 
+def test_patch_template_updates_draft(client, base):
+    created = client.post(f"{base}/whatsapp/templates", json={
+        "name": "order_update", "language": "en_US", "category": "UTILITY",
+        "components": _order_update_components(),
+    }).json()
+
+    res = client.patch(f"{base}/whatsapp/templates/{created['id']}", json={
+        "name": "order_update_v2", "category": "MARKETING",
+        "components": [{"type": "BODY", "text": "Hi {{1}}, updated body!"}],
+    })
+    assert res.status_code == 200
+    body = res.json()
+    assert body["whatsapp_template_name"] == "order_update_v2"
+    assert body["category"] == "MARKETING"
+    assert body["header_format"] == "NONE"
+    assert body["body"] == "Hi {{1}}, updated body!"
+    assert body["status"] == "draft"
+
+
+def test_patch_template_rejects_non_draft(client, base, monkeypatch):
+    created = client.post(f"{base}/whatsapp/templates", json={
+        "name": "promo_blast2", "category": "MARKETING",
+        "components": [{"type": "BODY", "text": "Hi {{1}}, check our sale!"}],
+    }).json()
+
+    async def fake_create(*a, **k):
+        return {"ok": True, "data": {"id": "meta123"}}
+    monkeypatch.setattr(wa, "create_meta_template", fake_create)
+    submitted = client.post(f"{base}/whatsapp/templates/{created['id']}/submit")
+    assert submitted.status_code == 200
+    assert submitted.json()["status"] == "pending"
+
+    res = client.patch(f"{base}/whatsapp/templates/{created['id']}", json={"name": "wont_work"})
+    assert res.status_code == 400
+    assert "draft" in res.json()["detail"].lower()
+
+
+def test_patch_template_requires_body(client, base):
+    created = client.post(f"{base}/whatsapp/templates", json={
+        "name": "order_update3", "language": "en_US", "category": "UTILITY",
+        "components": _order_update_components(),
+    }).json()
+
+    res = client.patch(f"{base}/whatsapp/templates/{created['id']}", json={
+        "components": [{"type": "HEADER", "format": "TEXT", "text": "Hi"}],
+    })
+    assert res.status_code == 400
+
+
 def test_campaign_whatsapp_sends_template_outside_window(client):
     from app.services import campaigns
     from app.models.lead import Lead
