@@ -263,8 +263,10 @@ def test_campaign_whatsapp_sends_template_outside_window(client):
         campaign = {"id": 1, "agent_id": agent_id, "message": "Hi {name}"}
         sent = {}
 
-        async def fake_template(to, name, lang, variables, agent_id=None, lead_id=None, phone_number_id=None):
+        async def fake_template(to, name, lang, variables=None, agent_id=None, lead_id=None,
+                                phone_number_id=None, components=None):
             sent["name"] = name
+            sent["components"] = components
             return {"ok": True}
         import app.services.whatsapp_cloud_service as wa_mod
         orig = wa_mod.send_whatsapp_template
@@ -292,3 +294,70 @@ def test_campaign_whatsapp_skips_outside_window_without_template(client):
         campaign = {"id": 2, "agent_id": agent_id, "message": "Hi {name}"}
         result = campaigns._send_whatsapp_lead(campaign, lead)
     assert result is None
+
+
+def test_campaign_whatsapp_template_fills_body_variables(client):
+    import json as _json
+
+    from app.services import campaigns
+    from app.models.lead import Lead
+
+    agent_id = client.post("/api/agents", json={"name": "CampaignVars", "profile": {"company_name": "X"}}).json()["id"]
+    components = [{"type": "BODY", "text": "Hi {{1}}, special offer for {{2}}!"}]
+    with get_db() as db:
+        lead = Lead(agent_id=agent_id, name="Ravi", company="Acme", phone="+919811100097", source="test")
+        db.add(lead)
+        db.flush()
+        lead_id = lead.id
+        tmpl = MessageTemplate(agent_id=agent_id, name="Promo2", channel="whatsapp", body="",
+                               whatsapp_template_name="promo_blast_2", whatsapp_template_language="en_US",
+                               components_json=_json.dumps(components), is_meta_approved=True)
+        db.add(tmpl)
+    with get_db() as db:
+        lead = db.get(Lead, lead_id)
+        campaign = {"id": 3, "agent_id": agent_id, "message": "Hi {name}"}
+        sent = {}
+
+        async def fake_template(to, name, lang, variables=None, agent_id=None, lead_id=None,
+                                phone_number_id=None, components=None):
+            sent["name"] = name
+            sent["components"] = components
+            return {"ok": True}
+        import app.services.whatsapp_cloud_service as wa_mod
+        orig = wa_mod.send_whatsapp_template
+        wa_mod.send_whatsapp_template = fake_template
+        try:
+            result = campaigns._send_whatsapp_lead(campaign, lead)
+        finally:
+            wa_mod.send_whatsapp_template = orig
+        assert result["ok"]
+        assert sent["name"] == "promo_blast_2"
+        assert sent["components"] == [{"type": "body", "parameters": [
+            {"type": "text", "text": "Ravi"}, {"type": "text", "text": "Acme"}]}]
+
+
+def test_campaign_whatsapp_template_skips_when_too_many_body_variables(client, caplog):
+    import json as _json
+    import logging
+
+    from app.services import campaigns
+    from app.models.lead import Lead
+
+    agent_id = client.post("/api/agents", json={"name": "CampaignVarsTooMany", "profile": {"company_name": "X"}}).json()["id"]
+    components = [{"type": "BODY", "text": "Hi {{1}}, {{2}} at {{3}} wants {{4}} and {{5}}!"}]
+    with get_db() as db:
+        lead = Lead(agent_id=agent_id, name="Ravi", phone="+919811100096", source="test")
+        db.add(lead)
+        db.flush()
+        lead_id = lead.id
+        tmpl = MessageTemplate(agent_id=agent_id, name="Promo3", channel="whatsapp", body="",
+                               whatsapp_template_name="promo_blast_3", whatsapp_template_language="en_US",
+                               components_json=_json.dumps(components), is_meta_approved=True)
+        db.add(tmpl)
+    with get_db() as db:
+        lead = db.get(Lead, lead_id)
+        campaign = {"id": 4, "agent_id": agent_id, "message": "Hi {name}"}
+        with caplog.at_level(logging.WARNING):
+            result = campaigns._send_whatsapp_lead(campaign, lead)
+    assert result is None
+    assert any("needs" in r.getMessage() for r in caplog.records)

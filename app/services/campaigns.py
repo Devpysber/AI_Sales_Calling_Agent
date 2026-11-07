@@ -7,6 +7,7 @@ for any queued lead). Email and WhatsApp campaigns send on a background thread a
 
 import asyncio
 import json
+import re
 import threading
 from datetime import datetime
 
@@ -21,6 +22,7 @@ from app.services.rules import render
 
 log = get_logger(__name__)
 MAX_AUDIENCE = 5000
+_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*(\d+)\s*\}\}")
 
 
 def _audience_query(agent_id: int, segment: dict):
@@ -89,13 +91,30 @@ def _send_whatsapp_lead(campaign: dict, lead: Lead) -> dict | None:
         tmpl = db.query(MessageTemplate).filter(MessageTemplate.agent_id == agent_id,
                                                 MessageTemplate.channel == "whatsapp",
                                                 MessageTemplate.is_meta_approved.is_(True)).order_by(MessageTemplate.id).first()
-        tmpl_name, tmpl_lang = (tmpl.whatsapp_template_name, tmpl.whatsapp_template_language) if tmpl else (None, None)
+        tmpl_name = tmpl.whatsapp_template_name if tmpl else None
+        tmpl_lang = tmpl.whatsapp_template_language if tmpl else None
+        components_json = tmpl.components_json if tmpl else None
     if not tmpl_name:
         log.warning("Campaign %s skipping lead %s: outside 24h window and no WhatsApp template configured",
                    campaign["id"], lead.id)
         return None
-    return asyncio.run(send_whatsapp_template(lead.phone, tmpl_name, tmpl_lang or "en_US", [],
-                                              agent_id=agent_id, lead_id=lead.id))
+    stored_components = json.loads(components_json) if components_json else []
+    body_comp = next((c for c in stored_components if (c.get("type") or "").upper() == "BODY"), None)
+    nums = {int(n) for n in _TEMPLATE_VAR_RE.findall((body_comp or {}).get("text") or "")}
+    body_var_count = max(nums) if nums else 0
+    # Default variable ordering for template body {{1}}, {{2}}, ... -- phone is deliberately excluded
+    # (sending a lead their own phone number back is rarely a useful personalization).
+    default_values = [lead.name or "there", lead.company or "", lead.email or "", lead.city or ""]
+    if body_var_count > len(default_values):
+        log.warning("Campaign %s skipping lead %s: template %s body needs %s variables but only %s "
+                   "default values are available", campaign["id"], lead.id, tmpl_name, body_var_count,
+                   len(default_values))
+        return None
+    variables = {"body": default_values[:body_var_count]} if body_var_count else {}
+    from app.api.whatsapp_cloud import _build_send_components
+    send_components = _build_send_components(stored_components, variables)
+    return asyncio.run(send_whatsapp_template(lead.phone, tmpl_name, tmpl_lang or "en_US",
+                                              agent_id=agent_id, lead_id=lead.id, components=send_components))
 
 
 def _send(campaign: dict, leads: list[Lead]):
