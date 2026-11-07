@@ -79,14 +79,19 @@ export default function Knowledge() {
 
   // No batch-delete endpoint: looping the single-document delete is fine — it is a plain DB delete.
   const bulkRemove = useMutation({
-    mutationFn: (ids: number[]) => Promise.all(ids.map((id) => api(`${base}/knowledge/${id}`, { method: 'DELETE' }))),
-    onSuccess: (_r, ids) => {
-      toast.success(`Removed ${ids.length} document(s)`)
+    mutationFn: async (ids: number[]) => {
+      const results = await Promise.allSettled(ids.map((id) => api(`${base}/knowledge/${id}`, { method: 'DELETE' })))
+      const failed = results.filter((r) => r.status === 'rejected').length
+      return { ids, failed }
+    },
+    onSuccess: ({ ids, failed }) => {
+      if (failed) toast.error(`Removed ${ids.length - failed} of ${ids.length}; ${failed} failed`)
+      else toast.success(`Removed ${ids.length} document(s)`)
       setSelected(new Set())
       if (viewId !== null && ids.includes(viewId)) setViewId(null)
       qc.invalidateQueries({ queryKey: ['knowledge'] })
     },
-    onError: (e) => toast.error('Could not remove all documents', { description: e.message }),
+    onError: (e) => { toast.error('Could not remove documents', { description: e.message }); qc.invalidateQueries({ queryKey: ['knowledge'] }) },
   })
   const toggleSelected = (id: number) => setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
 

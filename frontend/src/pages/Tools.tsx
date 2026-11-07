@@ -123,10 +123,14 @@ export default function Tools() {
   // Bulk enable/disable for a category: loops the existing single-tool PATCH endpoint rather than adding
   // a new bulk backend route.
   const bulkToggle = useMutation({
-    mutationFn: (vars: { ids: number[]; enabled: boolean }) =>
-      Promise.all(vars.ids.map((id) => api(`${base}/tools/${id}`, { method: "PATCH", json: { enabled: vars.enabled } }))),
+    mutationFn: async (vars: { ids: number[]; enabled: boolean }) => {
+      const results = await Promise.allSettled(
+        vars.ids.map((id) => api(`${base}/tools/${id}`, { method: "PATCH", json: { enabled: vars.enabled } })))
+      const failed = results.filter((r) => r.status === "rejected").length
+      if (failed) throw new Error(`${failed} of ${vars.ids.length} tools failed to update`)
+    },
     onSuccess: () => invalidate(),
-    onError: (e) => toast.error(e.message),
+    onError: (e) => { toast.error(e.message); invalidate() },
     onSettled: () => setBulkCat(null),
   })
 
