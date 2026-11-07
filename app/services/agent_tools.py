@@ -625,6 +625,69 @@ def share_location_tool(agent_id: int, lead_id, conversation_id, latitude: float
     return f"{name or 'Our location'}{': ' + address if address else ''}".strip()
 
 
+def show_product_tool(agent_id: int, lead_id, conversation_id, product_id: str, message: str = "") -> str:
+    """Show a single product from this business's connected Meta WhatsApp product catalog. Honest
+    fallback if no catalog is connected, same pattern as send_payment_link_tool; WhatsApp only today."""
+    from app.services import agents as agent_service
+    catalog_id = (agent_service.get_profile(agent_id) or {}).get("whatsapp_catalog_id")
+    if not catalog_id:
+        return "No product catalog is connected for this business yet."
+    channel = _conversation_channel(conversation_id)
+    if channel != "whatsapp":
+        return "The product catalog can only be shown on WhatsApp today."
+    if not lead_id:
+        return "Failed: no lead on file yet."
+    phone = (CRMService(agent_id).get(int(lead_id)) or {}).get("phone")
+    if not phone:
+        return "Failed: no phone number on file for this lead."
+    from app.services.whatsapp_cloud_service import send_whatsapp_product
+    outcome = send_whatsapp_product(phone, agent_id, lead_id, catalog_id, product_id, message or "Check this out!")
+    return "Product sent." if outcome.get("ok") else f"Failed to show product: {outcome.get('error')}"
+
+
+def show_product_list_tool(agent_id: int, lead_id, conversation_id, header: str, products: list[dict]) -> str:
+    """Show grouped sections of products from the connected catalog (products: list[{"title": str,
+    "product_ids": list[str]}]). Honest fallback if no catalog is connected; WhatsApp only today."""
+    from app.services import agents as agent_service
+    catalog_id = (agent_service.get_profile(agent_id) or {}).get("whatsapp_catalog_id")
+    if not catalog_id:
+        return "No product catalog is connected for this business yet."
+    channel = _conversation_channel(conversation_id)
+    if channel != "whatsapp":
+        return "The product catalog can only be shown on WhatsApp today."
+    if not lead_id:
+        return "Failed: no lead on file yet."
+    phone = (CRMService(agent_id).get(int(lead_id)) or {}).get("phone")
+    if not phone:
+        return "Failed: no phone number on file for this lead."
+    sections = [{"title": p.get("title") or "Options", "product_retailer_ids": p.get("product_ids") or []}
+                for p in (products or [])]
+    from app.services.whatsapp_cloud_service import send_whatsapp_product_list
+    outcome = send_whatsapp_product_list(phone, agent_id, lead_id, catalog_id, header or "Our products",
+                                         "Pick one to learn more", sections)
+    return "Product list sent." if outcome.get("ok") else f"Failed to show the product list: {outcome.get('error')}"
+
+
+def browse_catalog_tool(agent_id: int, lead_id, conversation_id, message: str = "Browse our full catalog") -> str:
+    """Let the customer browse the whole connected Meta WhatsApp product catalog. Honest fallback if no
+    catalog is connected; WhatsApp only today."""
+    from app.services import agents as agent_service
+    catalog_id = (agent_service.get_profile(agent_id) or {}).get("whatsapp_catalog_id")
+    if not catalog_id:
+        return "No product catalog is connected for this business yet."
+    channel = _conversation_channel(conversation_id)
+    if channel != "whatsapp":
+        return "The product catalog can only be shown on WhatsApp today."
+    if not lead_id:
+        return "Failed: no lead on file yet."
+    phone = (CRMService(agent_id).get(int(lead_id)) or {}).get("phone")
+    if not phone:
+        return "Failed: no phone number on file for this lead."
+    from app.services.whatsapp_cloud_service import send_whatsapp_catalog
+    outcome = send_whatsapp_catalog(phone, agent_id, lead_id, catalog_id, message)
+    return "Catalog sent." if outcome.get("ok") else f"Failed to show the catalog: {outcome.get('error')}"
+
+
 def send_payment_link_tool(agent_id: int, lead_id, amount: str | None = None, purpose: str | None = None) -> str:
     """Orchestrates a configured custom 'http' tool named 'payment_link' if this business has set one up
     (a thin pass-through, not a hardcoded Razorpay/Stripe call); otherwise states plainly that no payment
@@ -2070,6 +2133,20 @@ CUSTOMER_TOOLS = [
         "Pause the AI and route this chat to a specific department/team (e.g. billing, sales, technical).",
         "parameters": {"type": "object", "properties": {"department": {"type": "string"}, "reason": {"type": "string"}},
                        "required": ["department"]}}},
+    {"type": "function", "function": {"name": "show_product", "description":
+        "WhatsApp only: show a single product from this business's connected product catalog.",
+        "parameters": {"type": "object", "properties": {
+            "product_id": {"type": "string"}, "message": {"type": "string"}}, "required": ["product_id"]}}},
+    {"type": "function", "function": {"name": "show_product_list", "description":
+        "WhatsApp only: show several products from this business's connected product catalog, grouped into sections.",
+        "parameters": {"type": "object", "properties": {
+            "header": {"type": "string"},
+            "products": {"type": "array", "items": {"type": "object", "properties": {
+                "title": {"type": "string"}, "product_ids": {"type": "array", "items": {"type": "string"}}}}}},
+            "required": ["products"]}}},
+    {"type": "function", "function": {"name": "browse_catalog", "description":
+        "WhatsApp only: let the customer browse this business's whole connected product catalog.",
+        "parameters": {"type": "object", "properties": {"message": {"type": "string"}}}}},
 ]
 
 # Tools whose dispatch already honours an `agent` argument ("Hairscope ka auto dial band karo"). The
@@ -2267,6 +2344,15 @@ def _dispatch(name: str, args: dict, agent_id: int, role: str) -> str:
     elif name == "transfer_to_department":
         return transfer_to_department_tool(agent_id, args.get("lead_id"), args.get("conversation_id"),
                                            args.get("department") or "", args.get("reason") or "")
+    elif name == "show_product":
+        return show_product_tool(agent_id, args.get("lead_id"), args.get("conversation_id"),
+                                 args.get("product_id") or "", args.get("message") or "")
+    elif name == "show_product_list":
+        return show_product_list_tool(agent_id, args.get("lead_id"), args.get("conversation_id"),
+                                      args.get("header") or "", args.get("products") or [])
+    elif name == "browse_catalog":
+        return browse_catalog_tool(agent_id, args.get("lead_id"), args.get("conversation_id"),
+                                   args.get("message") or "Browse our full catalog")
     # Own-agent actions a colleague needs on a call; an admin naming another agent ("Hairscope ka") works on that one.
     target = agent_id
     if role == "admin" and args.get("agent"):

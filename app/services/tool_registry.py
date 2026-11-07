@@ -52,6 +52,9 @@ _BUILTIN_RISK = {
     "track_shipment": "read",
     "request_review": "write",
     "transfer_to_department": "write",
+    "show_product": "write",
+    "show_product_list": "write",
+    "browse_catalog": "write",
 }
 
 
