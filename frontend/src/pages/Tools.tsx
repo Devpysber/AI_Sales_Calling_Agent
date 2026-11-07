@@ -9,6 +9,7 @@ import {
 import { api } from "@/lib/api"
 import { useAgent } from "@/lib/agent"
 import { formatDate } from "@/lib/utils"
+import type { ChannelAnalyticsReport } from "@/lib/types"
 
 type ToolRun = {
   id: number; status: "ok" | "error" | "denied" | "timeout" | "pending_confirm" | "confirmed"
@@ -60,6 +61,16 @@ export default function Tools() {
   const list = useQuery({ queryKey: key, queryFn: () => api<Tool[]>(`${base}/tools`) })
   const tools = list.data ?? []
 
+  // Reuses the channel-report aggregate (already grouped by tool_name server-side) for a usage badge +
+  // sort, instead of calling the per-tool /runs endpoint once per tool on page load.
+  const usage = useQuery({ queryKey: ["tools-usage", base], queryFn: () => api<ChannelAnalyticsReport>(`${base}/analytics/channels`) })
+  const usageMap: Record<string, { calls: number; success_rate: number | null }> = {}
+  for (const t of usage.data?.tools ?? []) usageMap[t.tool_name] = { calls: t.calls, success_rate: t.success_rate }
+  const usageDays = usage.data?.days ?? 14
+
+  const [sortBy, setSortBy] = useState<"name" | "usage">("name")
+  const [bulkCat, setBulkCat] = useState<string | null>(null)
+
   const [showAdd, setShowAdd] = useState(false)
   const [form, setForm] = useState(emptyForm)
   const [editing, setEditing] = useState<Tool | null>(null)
@@ -109,6 +120,16 @@ export default function Tools() {
     onError: (e) => toast.error(e.message),
   })
 
+  // Bulk enable/disable for a category: loops the existing single-tool PATCH endpoint rather than adding
+  // a new bulk backend route.
+  const bulkToggle = useMutation({
+    mutationFn: (vars: { ids: number[]; enabled: boolean }) =>
+      Promise.all(vars.ids.map((id) => api(`${base}/tools/${id}`, { method: "PATCH", json: { enabled: vars.enabled } }))),
+    onSuccess: () => invalidate(),
+    onError: (e) => toast.error(e.message),
+    onSettled: () => setBulkCat(null),
+  })
+
   const remove = useMutation({
     mutationFn: (id: number) => api(`${base}/tools/${id}`, { method: "DELETE" }),
     onSuccess: () => { toast.success("Tool deleted"); invalidate() },
@@ -128,7 +149,13 @@ export default function Tools() {
   return (
     <>
       <PageHeader eyebrow="Build" title="Tools" description="Builtin and custom actions this agent can call during a chat."
-        actions={<Button variant="primary" onClick={() => { setForm(emptyForm); setShowAdd(true) }}><Plus className="size-4" />Add custom tool</Button>} />
+        actions={<>
+          <Select value={sortBy} onChange={(e) => setSortBy(e.target.value as "name" | "usage")} className="w-auto">
+            <option value="name">Sort by: Name</option>
+            <option value="usage">Sort by: Usage</option>
+          </Select>
+          <Button variant="primary" onClick={() => { setForm(emptyForm); setShowAdd(true) }}><Plus className="size-4" />Add custom tool</Button>
+        </>} />
 
       {list.isLoading ? <Skeleton className="h-64" /> : tools.length === 0 ? (
         <Card><EmptyState icon={<Wrench />} title="No tools yet" description="Add a custom HTTP tool to let this agent call your own API." /></Card>
@@ -137,13 +164,22 @@ export default function Tools() {
           {CATEGORY_ORDER.map((cat) => {
             const group = tools.filter((t) => categoryFor(t) === cat)
             if (group.length === 0) return null
+            const sortedGroup = sortBy === "usage"
+              ? [...group].sort((a, b) => (usageMap[b.name]?.calls ?? -1) - (usageMap[a.name]?.calls ?? -1))
+              : group
+            const allEnabled = group.every((t) => t.enabled)
+            const bulkPending = bulkCat === cat && bulkToggle.isPending
             return (
               <Card key={cat}>
                 <CardHeader title={<span className="flex items-center gap-2 text-xs font-bold tracking-wide text-muted uppercase">
                   {cat} <Badge tone="neutral">{group.length}</Badge>
+                  <Button type="button" loading={bulkPending} onClick={() => {
+                    setBulkCat(cat)
+                    bulkToggle.mutate({ ids: group.map((t) => t.id), enabled: !allEnabled })
+                  }}>{allEnabled ? "Disable all" : "Enable all"}</Button>
                 </span>} />
                 <div className="divide-y divide-border">
-                  {group.map((t) => (
+                  {sortedGroup.map((t) => (
                     <div key={t.id} className="flex flex-wrap items-start justify-between gap-3 p-4 sm:p-5">
                       <div className="flex min-w-0 flex-1 items-start gap-2.5">
                         <RiskIcon risk={t.risk} />
@@ -153,6 +189,7 @@ export default function Tools() {
                             <Badge tone="neutral">{t.type}</Badge>
                             <Badge tone={t.risk === "read" ? "neutral" : t.risk === "write" ? "warning" : "danger"}>{t.risk}</Badge>
                             {!t.enabled && <Badge tone="neutral">Disabled</Badge>}
+                            {usageMap[t.name] && <Badge tone="neutral">{usageMap[t.name].calls} calls ({usageDays}d)</Badge>}
                           </div>
                           <p className="mt-1 line-clamp-2 text-xs text-muted">{t.description || "No description."}</p>
                           {t.type === "http" && t.config?.url && <p className="mt-1 truncate text-xs text-muted">{t.config.method} {t.config.url}</p>}
