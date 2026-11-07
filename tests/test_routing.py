@@ -303,8 +303,11 @@ def test_colleague_on_one_agent_goes_straight_there(client, base):
 def test_unknown_caller_asking_for_the_other_desk_reaches_that_desk(client, base, monkeypatch):
     from app.services import agents, llm
     from app.services.call_service import CallService
-    a = client.post("/api/agents", json={"name": "Cars A"}).json()
-    b = client.post("/api/agents", json={"name": "Hair B"}).json()
+    # A dedicated shared number, not the account's default line, so "other desks on this same number"
+    # lists only these two — not every other agent in the suite that also has no number of its own.
+    shared_line = "+919812300999"
+    a = client.post("/api/agents", json={"name": "Cars A", "phone_number": shared_line}).json()
+    b = client.post("/api/agents", json={"name": "Hair B", "phone_number": shared_line}).json()
     client.put(f"/api/agents/{a['id']}/profile", json={"company_name": "Acme Cars"})
     client.put(f"/api/agents/{b['id']}/profile", json={"company_name": "Hairscope", "team_members": [{"name": "Neha", "role": "Sales", "phone": "+919812399100", "email": "neha@hairscope.test"}]})
     from app.services import agent

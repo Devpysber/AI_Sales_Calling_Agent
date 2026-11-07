@@ -53,7 +53,7 @@ def test_lead_crud_and_import(client, base):
                          data={"skip_duplicates": "true", "tags": "campaign-1"}).json()
     assert result["created"] == 1 and result["skipped_duplicates"] == 1 and len(result["errors"]) == 1
 
-    page = client.get(f"{base}/leads", params={"search": "Priya"}).json()
+    page = client.get(f"{base}/leads", params={"search": "9000000001"}).json()
     assert page["total"] == 1 and page["items"][0]["language"] == "hi-IN"
     assert any(e["type"] == "lead.updated" for e in client.get(f"{base}/leads/{lead['id']}/activity").json())
 
