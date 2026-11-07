@@ -67,7 +67,7 @@ PROFILE_LIMITS = {
     "greeting_en": 200, "greeting_hi": 200, "company_tagline": 400, "call_to_action": 200,
     "objective": 600, "instructions": 3000, "objection_handling": 3000, "qualification_criteria": 1500,
     "forbidden_topics": 1500, "agent_name": 60, "company_name": 120, "agent_role": 60,
-    "customer_noun": 40, "website_url": 200, "sales_playbook": 2000,
+    "customer_noun": 40, "website_url": 200, "sales_playbook": 2000, "instagram_greeting": 150,
 }
 
 PROFILE_DEFAULTS = {
@@ -108,6 +108,8 @@ PROFILE_DEFAULTS = {
     "whatsapp_business_account_id": "",  # Meta WhatsApp Business Account (WABA) ID, needed to create/submit templates; empty = server default
     "whatsapp_catalog_id": "",         # Meta WhatsApp Business product catalog ID; empty = no catalog connected
     "instagram_account_id": "",        # Instagram-connected Page/IG account ID shown on the Channels tab (display only today; routing is still env-based, see instagram_service.resolve_agent)
+    "instagram_ice_breakers": [],      # up to 4 clickable starter prompts shown to a first-time IG visitor (Meta messenger_profile)
+    "instagram_greeting": "",          # persistent IG greeting text; Meta substitutes the literal {{user_first_name}} token
     "team_members": [],
     "inbound_mode": "ai",              # ai | forward (ring the transfer number directly)
     "transfer_on_request": True,       # AI hands over when the caller asks for a person
@@ -547,6 +549,8 @@ def _update_group(agent_id: int, group: str, values: dict, label: str, actor: st
 
 MAX_INBOUND_COLLECT = 4   # every detail is one more question on a paid call; name + need + two more is the ceiling
 MAX_CUSTOM_TOPICS = 8   # business-specific topics on top of the fixed coverage set
+MAX_ICE_BREAKERS = 4    # Meta's own cap on Instagram messenger_profile ice breakers
+MAX_ICE_BREAKER_LEN = 80  # Meta's per-question limit
 
 
 def _ordered_collect(fields) -> list[str]:
@@ -627,6 +631,11 @@ def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
                 seen.add(name.lower())
                 cleaned.append(name)
         values["custom_topics"] = cleaned[:MAX_CUSTOM_TOPICS]
+    if "instagram_ice_breakers" in values:
+        if not isinstance(values["instagram_ice_breakers"], list):
+            raise ValueError("instagram_ice_breakers must be a list")
+        cleaned_ib = [str(q or "").strip()[:MAX_ICE_BREAKER_LEN] for q in values["instagram_ice_breakers"]]
+        values["instagram_ice_breakers"] = [q for q in cleaned_ib if q][:MAX_ICE_BREAKERS]
     if "inbound_collect" in values:
         if not isinstance(values["inbound_collect"], list):
             raise ValueError("inbound_collect must be a list")

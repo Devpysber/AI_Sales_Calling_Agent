@@ -126,3 +126,11 @@ def resume(chat_id: int, agent_id: int = Depends(workspace)):
         _chat(db, agent_id, chat_id)
     ig.set_ai_paused(chat_id, False)
     return {"ok": True}
+
+
+@router.post("/messenger-profile/sync")
+async def sync_messenger_profile(agent_id: int = Depends(workspace)):
+    result = await ig.sync_messenger_profile(agent_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "Instagram is not configured for this agent.")
+    return result

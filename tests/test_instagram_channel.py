@@ -407,3 +407,68 @@ def test_send_brochure_tool_routes_to_instagram(agent_id, monkeypatch):
     out = agent_tools.send_brochure_tool(agent_id, lead["id"], conv_id, "https://example.com/brochure.pdf")
     assert out == "Brochure sent."
     assert calls == [("ig-doc", "https://example.com/brochure.pdf")]
+
+
+def test_sync_messenger_profile_posts_correct_payload(agent_id, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from app.services import agents
+
+    agents.update_profile(agent_id, {
+        "instagram_ice_breakers": ["What are your hours?", "Book an appointment"],
+        "instagram_greeting": "Hi {{user_first_name}}! Thanks for reaching out.",
+    })
+
+    class Res:
+        status_code = 200
+        text = ""
+        def json(self): return {}
+
+    class Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, **k):
+            captured["url"] = url
+            captured["json"] = k.get("json")
+            return Res()
+
+    captured = {}
+    monkeypatch.setattr(ig, "settings", SimpleNamespace(instagram_token="t", instagram_page_id="PAGE-1"))
+    monkeypatch.setattr(ig.httpx, "AsyncClient", Client)
+    out = asyncio.run(ig.sync_messenger_profile(agent_id))
+    assert out["ok"] is True
+    assert "PAGE-1/messenger_profile" in captured["url"]
+    payload = captured["json"]
+    assert payload["ice_breakers"] == [{"call_to_actions": [
+        {"question": "What are your hours?", "payload": "ICE_BREAKER_0"},
+        {"question": "Book an appointment", "payload": "ICE_BREAKER_1"},
+    ]}]
+    assert payload["greeting"] == {"text": "Hi {{user_first_name}}! Thanks for reaching out."}
+
+
+def test_sync_messenger_profile_not_configured(agent_id, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(ig, "settings", SimpleNamespace(instagram_token="", instagram_page_id=""))
+    out = asyncio.run(ig.sync_messenger_profile(agent_id))
+    assert out == {"ok": False, "error": "Instagram credentials not configured"}
+
+
+def test_instagram_ice_breakers_validation_caps_count_and_length(agent_id):
+    from app.services import agents
+
+    profile = agents.update_profile(agent_id, {
+        "instagram_ice_breakers": ["a" * 200, "q2", "q3", "q4", "q5 should be dropped"],
+    })
+    assert len(profile["instagram_ice_breakers"]) == 4
+    assert len(profile["instagram_ice_breakers"][0]) == 80
+    assert "q5 should be dropped" not in profile["instagram_ice_breakers"]
+
+
+def test_messenger_profile_sync_endpoint_400_when_not_configured(agent_id, client, base, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(ig, "settings", SimpleNamespace(instagram_token="", instagram_page_id=""))
+    res = client.post(f"{base}/instagram/messenger-profile/sync")
+    assert res.status_code == 400

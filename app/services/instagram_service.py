@@ -303,6 +303,38 @@ async def send_instagram_document(to: str, agent_id: int | None, lead_id: int | 
         return {"ok": False, "error": str(e)}
 
 
+async def sync_messenger_profile(agent_id: int) -> dict:
+    """Push this agent's Instagram ice breakers + persistent greeting to Meta's messenger_profile
+    endpoint (a one-time profile configuration, not a chat reply): see module docstring for the
+    inbound-side note on how a tapped ice breaker arrives (plain text message)."""
+    from app.services import agents
+    token = settings.instagram_token
+    page_id = settings.instagram_page_id
+    if not (token and page_id):
+        return {"ok": False, "error": "Instagram credentials not configured"}
+    profile = agents.get_profile(agent_id) or {}
+    ice_breakers = profile.get("instagram_ice_breakers") or []
+    greeting = profile.get("instagram_greeting") or ""
+    payload: dict = {}
+    if ice_breakers:
+        payload["ice_breakers"] = [{"call_to_actions": [
+            {"question": q, "payload": f"ICE_BREAKER_{i}"} for i, q in enumerate(ice_breakers)
+        ]}]
+    if greeting:
+        payload["greeting"] = {"text": greeting}
+    url = f"https://graph.facebook.com/v19.0/{page_id}/messenger_profile"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(url, params={"access_token": token}, json=payload)
+            if res.status_code in (200, 201):
+                return {"ok": True, "provider": "meta", "data": res.json()}
+            log.warning("Instagram messenger_profile sync response %s: %s", res.status_code, res.text)
+            return {"ok": False, "error": f"Meta HTTP {res.status_code}: {res.text}"}
+    except Exception as e:
+        log.exception("Instagram messenger_profile sync error: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
