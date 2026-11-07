@@ -119,14 +119,20 @@ class BulkUpdate(Ids):
 def list_leads(search: str | None = None, status: str | None = None, call_status: str | None = None,
                qualification: str | None = None, sort: str = "id", order: str = "desc",
                page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=500), view: str | None = None,
-               source: str | None = None, agent_id: int = Depends(workspace)):
-    return CRMService(agent_id).list_leads(search, status, call_status, qualification, sort, order, page, page_size, view, source)
+               source: str | None = None, tag: str | None = None, agent_id: int = Depends(workspace)):
+    return CRMService(agent_id).list_leads(search, status, call_status, qualification, sort, order, page, page_size, view, source, tag)
 
 
 @router.get("/views")
 def lead_views(agent_id: int = Depends(workspace)):
     """Counts for the saved views on the Leads page."""
     return CRMService(agent_id).view_counts()
+
+
+@router.get("/tags")
+def lead_tags(agent_id: int = Depends(workspace)):
+    """Distinct tags in use on this agent's leads, for the Tags filter."""
+    return {"tags": CRMService(agent_id).distinct_tags()}
 
 
 @router.get("/stats")
@@ -136,18 +142,18 @@ def stats(agent_id: int = Depends(workspace)):
 
 @router.get("/board")
 def board(search: str | None = None, qualification: str | None = None, per_column: int = Query(50, ge=1, le=200),
-          agent_id: int = Depends(workspace)):
-    return CRMService(agent_id).board(BOARD_STATUSES, search, qualification, per_column)
+          tag: str | None = None, agent_id: int = Depends(workspace)):
+    return CRMService(agent_id).board(BOARD_STATUSES, search, qualification, per_column, tag)
 
 
 @router.get("/export", dependencies=[Depends(require("leads.export", legacy_team=True))])
 def export(search: str | None = None, status: str | None = None, call_status: str | None = None,
            qualification: str | None = None, view: str | None = None, source: str | None = None,
-           agent_id: int = Depends(workspace)):
+           tag: str | None = None, agent_id: int = Depends(workspace)):
     """The filtered view, not the whole book: the button sits next to the filters that produced it."""
     slug = "".join(c if c.isalnum() else "-" for c in agents.get(agent_id)["name"].lower()).strip("-") or "agent"
     csv = CRMService(agent_id).export_csv(search=search, status=status, call_status=call_status,
-                                          qualification=qualification, view=view, source=source)
+                                          qualification=qualification, view=view, source=source, tag=tag)
     return Response(csv, media_type="text/csv",
                     headers={"Content-Disposition": f"attachment; filename={slug}-leads.csv"})
 
@@ -155,10 +161,11 @@ def export(search: str | None = None, status: str | None = None, call_status: st
 @router.get("/ids")
 def matching_ids(search: str | None = None, status: str | None = None, call_status: str | None = None,
                  qualification: str | None = None, view: str | None = None, source: str | None = None,
+                 tag: str | None = None,
                  limit: int = Query(MAX_BULK_IDS, ge=1, le=MAX_BULK_IDS), agent_id: int = Depends(workspace)):
     """Every id the current filters select, so a bulk action can cover the result set, not one page."""
     ids = CRMService(agent_id).matching_ids(limit=limit, search=search, status=status, call_status=call_status,
-                                            qualification=qualification, view=view, source=source)
+                                            qualification=qualification, view=view, source=source, tag=tag)
     return {"ids": ids, "limit": limit}
 
 

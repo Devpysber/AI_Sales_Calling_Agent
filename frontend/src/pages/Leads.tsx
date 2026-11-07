@@ -85,7 +85,7 @@ export default function Leads() {
   const [search, setSearch] = useState(params.get('search') ?? '')
   const [filters, setFilters] = useState({
     status: params.get('status') ?? '', call_status: params.get('call_status') ?? '',
-    qualification: params.get('qualification') ?? '', view: params.get('view') ?? '',
+    qualification: params.get('qualification') ?? '', view: params.get('view') ?? '', tag: params.get('tag') ?? '',
   })
   const [sort, setSort] = useState<Sort>({ key: 'id', order: 'desc' })
   const [page, setPage] = useState(1)
@@ -109,7 +109,7 @@ export default function Leads() {
   useEffect(() => {
     const fromUrl = {
       status: params.get('status') ?? '', call_status: params.get('call_status') ?? '',
-      qualification: params.get('qualification') ?? '', view: params.get('view') ?? '',
+      qualification: params.get('qualification') ?? '', view: params.get('view') ?? '', tag: params.get('tag') ?? '',
     }
     setFilters((prev) => (Object.keys(fromUrl) as (keyof typeof fromUrl)[]).every((k) => prev[k] === fromUrl[k]) ? prev : fromUrl)
     const urlSearch = params.get('search') ?? ''
@@ -133,6 +133,7 @@ export default function Leads() {
   }, [isError, error, data])
   const stats = useQuery({ queryKey: ['leads', 'stats', base], queryFn: () => api<LeadStats>(`${base}/leads/stats`), refetchInterval: 15000 })
   const views = useQuery({ queryKey: ['leads', 'views', base], queryFn: () => api<Record<string, number>>(`${base}/leads/views`), refetchInterval: 15000 })
+  const tagsQ = useQuery({ queryKey: ['leads', 'tags', base], queryFn: () => api<{ tags: string[] }>(`${base}/leads/tags`), refetchInterval: 30000 })
   // Without this the tiles show '—', every chip shows 0 and saved views vanish with no explanation.
   useEffect(() => {
     if (!stats.isError && !views.isError) return
@@ -191,13 +192,13 @@ export default function Leads() {
   const sortBy = (key: string) => setSort((prev) => ({ key, order: prev.key === key && prev.order === 'desc' ? 'asc' : 'desc' }))
   const activeFilters = Object.values(filters).filter(Boolean).length
   const busy = bulk.isPending || bulkUpdate.isPending
-  const clearFilters = () => { setFilters({ status: '', call_status: '', qualification: '', view: '' }); setSearch('') }
+  const clearFilters = () => { setFilters({ status: '', call_status: '', qualification: '', view: '', tag: '' }); setSearch('') }
 
   const summary: [typeof Users, string, number | undefined, () => void, boolean][] = [
     [Users, 'All leads', s?.total, clearFilters, activeFilters === 0],
-    [Clock, 'Waiting to call', s?.pending, () => setFilters({ status: '', call_status: '', qualification: '', view: 'waiting' }), filters.view === 'waiting'],
-    [Flame, 'Hot', s ? s.by_qualification?.Hot ?? 0 : undefined, () => setFilters({ status: '', call_status: '', qualification: 'Hot', view: '' }), filters.qualification === 'Hot'],
-    [CalendarCheck, 'Meetings', s?.meetings, () => setFilters({ status: 'Meeting Booked', call_status: '', qualification: '', view: '' }), filters.status === 'Meeting Booked'],
+    [Clock, 'Waiting to call', s?.pending, () => setFilters({ status: '', call_status: '', qualification: '', view: 'waiting', tag: '' }), filters.view === 'waiting'],
+    [Flame, 'Hot', s ? s.by_qualification?.Hot ?? 0 : undefined, () => setFilters({ status: '', call_status: '', qualification: 'Hot', view: '', tag: '' }), filters.qualification === 'Hot'],
+    [CalendarCheck, 'Meetings', s?.meetings, () => setFilters({ status: 'Meeting Booked', call_status: '', qualification: '', view: '', tag: '' }), filters.status === 'Meeting Booked'],
   ]
 
   return (
@@ -272,6 +273,11 @@ export default function Leads() {
           <Select value={filters.qualification} onChange={(e) => setFilters({ ...filters, qualification: e.target.value })} className="w-auto" aria-label="Temperature">
             <option value="">Any temperature</option>{QUALIFICATIONS.map((x) => <option key={x}>{x}</option>)}
           </Select>
+          {(tagsQ.data?.tags.length ?? 0) > 0 && (
+            <Select value={filters.tag} onChange={(e) => setFilters({ ...filters, tag: e.target.value })} className="w-auto" aria-label="Tag">
+              <option value="">Any tag</option>{tagsQ.data!.tags.map((x) => <option key={x}>{x}</option>)}
+            </Select>
+          )}
           <Select value={`${sort.key}:${sort.order}`} onChange={(e) => { const [key, order] = e.target.value.split(':'); setSort({ key: key!, order: order as 'asc' | 'desc' }) }} className="w-auto" aria-label="Sort">
             {SORT_OPTIONS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
             {/* Column-header sorts (e.g. Stage, Temp., Name Z–A) have no preset above: keep the select truthful with the current one. */}
@@ -387,16 +393,25 @@ export default function Leads() {
                   <td className="px-4 text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-1.5">
                       {l.phone && (
-                        <a
-                          href={`https://wa.me/${l.phone.replace(/[^0-9]/g, '')}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex h-8 items-center gap-1 rounded-md border border-[#25D366]/40 bg-[#25D366]/10 px-2.5 text-xs font-semibold text-[#25D366] hover:bg-[#25D366]/20 transition-colors"
-                          title="Open direct WhatsApp chat"
-                        >
-                          <MessageSquare className="size-3.5" />
-                          <span>WhatsApp</span>
-                        </a>
+                        <>
+                          <Link
+                            to={path(`/whatsapp-cloud?lead=${l.id}`)}
+                            className="inline-flex h-8 items-center gap-1 rounded-md border border-[#25D366]/40 bg-[#25D366]/10 px-2.5 text-xs font-semibold text-[#25D366] hover:bg-[#25D366]/20 transition-colors"
+                            title="Open this lead's WhatsApp conversation"
+                          >
+                            <MessageSquare className="size-3.5" />
+                            <span>WhatsApp</span>
+                          </Link>
+                          <a
+                            href={`https://wa.me/${l.phone.replace(/[^0-9]/g, '')}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted hover:text-fg transition-colors"
+                            title="Message their personal WhatsApp directly"
+                          >
+                            <ArrowUpRight className="size-3.5" />
+                          </a>
+                        </>
                       )}
                       <Button size="sm" variant="primary" disabled={l.do_not_call || l.phone_valid === false} loading={startCall.isPending && startCall.variables === l.id}
                         onClick={() => startCall.mutate(l.id)}><PhoneCall />Call</Button>

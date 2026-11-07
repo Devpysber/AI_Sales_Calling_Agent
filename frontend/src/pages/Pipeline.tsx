@@ -87,6 +87,7 @@ export default function Pipeline() {
   const [search, setSearch] = useState('')
   const q = useDebounced(search)
   const [qualification, setQualification] = useState('')
+  const [tag, setTag] = useState('')
   const [scope, setScope] = useState<'open' | 'all'>('open')
   const [dragging, setDragging] = useState<{ id: number; from: string } | null>(null)
   const [over, setOver] = useState<string | null>(null)
@@ -139,10 +140,11 @@ export default function Pipeline() {
   // Pause the live refetch while a move is in flight so a stale response can't overwrite the optimistic board.
   // This is React state (not a ref) so tanstack re-evaluates refetchInterval immediately and clears any timer already scheduled.
   const [moving, setMoving] = useState(0)
-  const boardKey = ['leads', 'board', q, qualification]
+  const tagsQ = useQuery({ queryKey: ['leads', 'tags', base], queryFn: () => api<{ tags: string[] }>(`${base}/leads/tags`), refetchInterval: 30000 })
+  const boardKey = ['leads', 'board', q, qualification, tag]
   const board = useQuery({
     queryKey: boardKey,
-    queryFn: () => api<Board>(`${base}/leads/board`, { params: { search: q, qualification, per_column: 100 } }),
+    queryFn: () => api<Board>(`${base}/leads/board`, { params: { search: q, qualification, tag, per_column: 100 } }),
     placeholderData: keepPreviousData,
     // Live board: the AI moves leads after every call; faster while a call is running
     refetchInterval: (query) => {
@@ -183,7 +185,7 @@ export default function Pipeline() {
   useEffect(() => {
     if (board.isError && data) toast.error('Could not refresh the pipeline', { id: 'board-stale', description: board.error.message })
   }, [board.isError, board.error, data])
-  const filtered = Boolean(q || qualification)
+  const filtered = Boolean(q || qualification || tag)
   const totals = useMemo(() => {
     if (!data) return null
     const all = Object.values(data).reduce((n, c) => n + c.total, 0)
@@ -209,6 +211,11 @@ export default function Pipeline() {
           <Select aria-label="Temperature" value={qualification} onChange={(e) => setQualification(e.target.value)} className="w-auto">
             <option value="">Any temperature</option>{QUALIFICATIONS.map((x) => <option key={x}>{x}</option>)}
           </Select>
+          {(tagsQ.data?.tags.length ?? 0) > 0 && (
+            <Select aria-label="Tag" value={tag} onChange={(e) => setTag(e.target.value)} className="w-auto">
+              <option value="">Any tag</option>{tagsQ.data!.tags.map((x) => <option key={x}>{x}</option>)}
+            </Select>
+          )}
           {totals && (
             <Stagger className="ml-auto flex flex-wrap gap-2 text-[13px]" step={60}>
               {[['In pipeline', totals.open], ['Meetings', totals.meetings], ['Won', totals.won], ['Win rate', `${totals.winRate}%`]].map(([l, v]) => (
@@ -291,9 +298,9 @@ export default function Pipeline() {
         <Card className="mt-2 p-8 text-center">
           <p className="font-bold">No leads match your filters</p>
           <p className="mt-1 text-sm break-words text-muted">
-            Nothing {q ? <>matches “{q}”</> : 'here'}{qualification ? <>{q ? ' with' : ' is'} temperature {qualification}</> : null}. Clear the filters to see the whole board.
+            Nothing {q ? <>matches “{q}”</> : 'here'}{qualification ? <>{q ? ' with' : ' is'} temperature {qualification}</> : null}{tag ? <>{q || qualification ? ' and' : ' is'} tag “{tag}”</> : null}. Clear the filters to see the whole board.
           </p>
-          <Button variant="primary" className="mt-4" onClick={() => { setSearch(''); setQualification('') }}>Clear filters</Button>
+          <Button variant="primary" className="mt-4" onClick={() => { setSearch(''); setQualification(''); setTag('') }}>Clear filters</Button>
         </Card>
       ) : (
         <Card className="mt-2 p-8 text-center">

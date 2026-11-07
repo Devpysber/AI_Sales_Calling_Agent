@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { CheckCheck, ExternalLink, MessageCircle, Phone, Send, Sparkles, User, Video } from "lucide-react"
 import { Fragment, useEffect, useRef, useState } from "react"
 import type { ReactNode } from "react"
-import { Link } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton, Textarea } from "@/components/ui"
 import { api } from "@/lib/api"
@@ -33,12 +33,20 @@ const time = (iso?: string | null) => (iso ? new Date(iso).toLocaleString(undefi
 export default function WhatsApp() {
   const { base, path } = useAgent()
   const qc = useQueryClient()
+  const [params] = useSearchParams()
   const [selected, setSelected] = useState<number | null>(null)
   const [text, setText] = useState("")
   const endRef = useRef<HTMLDivElement>(null)
 
   const list = useQuery({ queryKey: ["wa-chats", base], queryFn: () => api<{ items: Chat[] }>(`${base}/whatsapp/chats`), refetchInterval: 5000 })
   const items = list.data?.items ?? []
+  // Arriving from a lead's "WhatsApp" quick action: jump straight to that lead's chat once it's loaded.
+  useEffect(() => {
+    const leadId = Number(params.get("lead"))
+    if (!leadId) return
+    const match = items.find((c) => c.lead_id === leadId)
+    if (match) setSelected(match.id)
+  }, [params, items])
   const activeId = selected ?? items[0]?.id ?? null
   const detail = useQuery({
     queryKey: ["wa-chat", base, activeId], enabled: activeId != null, refetchInterval: 5000,

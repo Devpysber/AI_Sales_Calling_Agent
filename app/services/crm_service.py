@@ -199,7 +199,16 @@ class CRMService:
             return {v: db.scalar(select(func.count()).select_from(self._view(self._scoped(select(Lead)), v).subquery())) or 0
                     for v in ("website", "new_callers", "never_called", "hot_uncalled", "callbacks", "meetings", "attention", "dnc")}
 
-    def _filtered(self, search=None, status=None, call_status=None, qualification=None, view=None, source=None):
+    def distinct_tags(self) -> list[str]:
+        """Every tag actually in use on this agent's leads, for the Tags filter chip."""
+        with get_db() as db:
+            rows = db.scalars(self._scoped(select(Lead.tags)).where(Lead.tags.is_not(None), Lead.tags != ""))
+            tags: set[str] = set()
+            for raw in rows:
+                tags.update(t.strip() for t in raw.split(",") if t.strip())
+            return sorted(tags, key=str.lower)
+
+    def _filtered(self, search=None, status=None, call_status=None, qualification=None, view=None, source=None, tag=None):
         """The leads a set of filters selects, before ordering or paging."""
         query = self._view(self._scoped(select(Lead)), view)
         if source:
@@ -212,6 +221,8 @@ class CRMService:
             query = query.where(Lead.call_status == call_status)
         if qualification:
             query = query.where(Lead.qualification == qualification)
+        if tag:
+            query = query.where(Lead.tags.ilike(f"%{tag}%"))
         return query
 
     def matching_ids(self, limit: int = 5000, **filters) -> list[int]:
@@ -221,10 +232,10 @@ class CRMService:
             return list(db.scalars(query.with_only_columns(Lead.id)).all())
 
     def list_leads(self, search=None, status=None, call_status=None, qualification=None, sort="id", order="desc",
-                   page=1, page_size=25, view=None, source=None) -> dict:
+                   page=1, page_size=25, view=None, source=None, tag=None) -> dict:
         with get_db() as db:
             query = self._filtered(search=search, status=status, call_status=call_status,
-                                   qualification=qualification, view=view, source=source)
+                                   qualification=qualification, view=view, source=source, tag=tag)
             total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
             column = SORTABLE.get(sort, Lead.id)
             query = query.order_by(column.desc().nulls_last() if order == "desc" else column.asc().nulls_last())
@@ -238,7 +249,7 @@ class CRMService:
                 item.update(counts.get(item["id"], {"total_calls": 0, "connected_calls": 0}))
             return {"items": items, "total": total, "page": page, "page_size": page_size}
 
-    def board(self, statuses: list[str], search=None, qualification=None, per_column: int = 50) -> dict:
+    def board(self, statuses: list[str], search=None, qualification=None, per_column: int = 50, tag=None) -> dict:
         """Leads grouped by status for the pipeline board: the most recently active per column plus totals."""
         with get_db() as db:
             base = self._scoped(select(Lead))
@@ -246,6 +257,8 @@ class CRMService:
                 base = base.where(lead_search_filter(search))
             if qualification:
                 base = base.where(Lead.qualification == qualification)
+            if tag:
+                base = base.where(Lead.tags.ilike(f"%{tag}%"))
             columns = {}
             for status in statuses:
                 query = base.where(Lead.status == status)
