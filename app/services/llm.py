@@ -11,6 +11,7 @@ shared pooled HTTP client.
 
 import json
 import re
+import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
@@ -204,7 +205,12 @@ def _compact(messages: list[dict]) -> list[dict]:
     return ([out[system[0]]] if system else []) + rest
 
 
-def _openrouter_model(model: str, messages: list[dict], json_mode: bool, max_tokens: int, temperature: float, shrunk: int = 0) -> LLMResult:
+def _openrouter_model(model: str, messages: list[dict], json_mode: bool, max_tokens: int, temperature: float,
+                      shrunk: int = 0, cancel: threading.Event | None = None) -> LLMResult:
+    if cancel is not None and cancel.is_set():
+        # Another hedged model already answered; this attempt hasn't made its POST yet (still queued,
+        # or about to retry with a trimmed prompt after a cap error) -- skip the billed call entirely.
+        raise LLMError("cancelled: another model already answered")
     body = {
         "model": model,
         "messages": messages,
@@ -229,7 +235,7 @@ def _openrouter_model(model: str, messages: list[dict], json_mode: bool, max_tok
         trimmed = _fit_to_cap(messages, message, passes=shrunk) if shrunk < MAX_CAP_TRIMS else None
         if trimmed is not None:
             log.warning("OpenRouter %s prompt over cap (%s), retrying with trimmed system prompt (pass %d)", model, message[:80], shrunk + 1)
-            return _openrouter_model(model, trimmed, json_mode, max_tokens, temperature, shrunk=shrunk + 1)
+            return _openrouter_model(model, trimmed, json_mode, max_tokens, temperature, shrunk=shrunk + 1, cancel=cancel)
         raise LLMError(message)
     text = (data["choices"][0]["message"].get("content") or "").strip()
     if not text:
@@ -256,15 +262,26 @@ def _openrouter(messages: list[dict], json_mode: bool, max_tokens: int, temperat
     timeout = timeout or settings.llm_timeout_seconds
     deadline = time.monotonic() + timeout
     pending, errors, launched = set(), [], 0
+    # Shared across every hedged future for this call: set the instant one wins, so any other model
+    # still queued (or mid cap-trim-retry, between its own HTTP calls) skips its next billed POST
+    # instead of running it to completion for a result that's thrown away. Can't abort an already
+    # in-flight request this way (sync httpx has no cross-thread cancel) -- that residual cost is
+    # accepted, but this kills the retry-compounding and not-yet-started waste.
+    cancel = threading.Event()
 
     def launch():
         nonlocal launched
         model = models[launched]
         launched += 1
-        future = _hedge_pool.submit(_openrouter_model, model, messages, json_mode, max_tokens, temperature)
+        future = _hedge_pool.submit(_openrouter_model, model, messages, json_mode, max_tokens, temperature, cancel=cancel)
         future.model = model
         future.started = time.monotonic()
         pending.add(future)
+
+    def _abandon(remaining_futures):
+        cancel.set()
+        for f in remaining_futures:
+            f.cancel()  # no-op if already running, but frees anything still queued behind pool capacity
 
     if models:
         launch()
@@ -279,7 +296,9 @@ def _openrouter(messages: list[dict], json_mode: bool, max_tokens: int, temperat
         for future in done:
             pending.discard(future)
             try:
-                return future.result()
+                result = future.result()
+                _abandon(pending)
+                return result
             except Exception as e:
                 errors.append(f"{future.model}: {e}")
                 log.warning("OpenRouter %s failed: %s", future.model, e)
@@ -291,6 +310,7 @@ def _openrouter(messages: list[dict], json_mode: bool, max_tokens: int, temperat
                     launched = len(models)
         if launched < len(models) and (not done or not pending):
             launch()
+    _abandon(pending)  # deadline hit or every model exhausted: stop billing whatever's still mid-flight
     # Last-resort tier: free models with a compact prompt, tried one at a time.
     compact = None
     for model in _fallback_models():
