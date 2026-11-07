@@ -16,6 +16,7 @@ from app.core.database import get_db
 from app.core.logging import get_logger
 from app.models.document import Document, DocumentChunk
 from app.services import llm
+from app.services.agents import get_profile
 from app.services.settings_service import SettingsService
 
 log = get_logger(__name__)
@@ -73,8 +74,17 @@ TOPIC_QUERIES = {
 PASSAGES_PER_TOPIC = 6
 
 
-def _corpus(agent_id: int) -> tuple[str, list[str]]:
-    """Passages that speak to each of the six topics, gathered by searching for them.
+def _topics(agent_id: int) -> dict[str, str]:
+    """The fixed six topics plus any an agent's operator added for their own business."""
+    topics = dict(TOPICS)
+    for name in get_profile(agent_id).get("custom_topics") or []:
+        key = f"custom:{name}"
+        topics[key] = f"{name} (custom topic the operator asked to track)"
+    return topics
+
+
+def _corpus(agent_id: int, topics: dict[str, str]) -> tuple[str, list[str]]:
+    """Passages that speak to each of the topics, gathered by searching for them.
 
     Returns the text put in front of the model and the document titles it may cite.
     """
@@ -87,7 +97,8 @@ def _corpus(agent_id: int) -> tuple[str, list[str]]:
         return "", []
 
     parts, seen = [], set()
-    for topic, query in TOPIC_QUERIES.items():
+    for topic, label in topics.items():
+        query = TOPIC_QUERIES.get(topic, label)   # custom topics have no preset query: search their own name/label
         hits = rag.search(agent_id, query, top_k=PASSAGES_PER_TOPIC, use_embeddings=False)
         lines = []
         for hit in hits:
@@ -97,7 +108,7 @@ def _corpus(agent_id: int) -> tuple[str, list[str]]:
             seen.add(text)
             lines.append(f"- ({hit.get('title') or 'document'}) {text[:CHARS_PER_PASSAGE]}")
         if lines:
-            parts.append(f"\n=== Passages about {TOPICS[topic]} ===\n" + "\n".join(lines))
+            parts.append(f"\n=== Passages about {label} ===\n" + "\n".join(lines))
     if not parts:
         # A short or unusually worded knowledge base can match none of the topic queries. Reading it
         # straight through beats reporting an empty corpus for documents that plainly have content.
@@ -113,14 +124,15 @@ def _corpus(agent_id: int) -> tuple[str, list[str]]:
 
 
 def rebuild(agent_id: int) -> dict:
-    corpus, titles = _corpus(agent_id)
+    topics = _topics(agent_id)
+    corpus, titles = _corpus(agent_id, topics)
     state = SettingsService()
     if not corpus.strip():
         profile = {"status": "empty", "topics": {}, "updated_at": datetime.now().isoformat(timespec="seconds")}
         state.set_state(_key(agent_id), profile)
         return profile
     state.set_state(_key(agent_id), {**get(agent_id), "status": "analyzing"})
-    system = PROMPT.format(topics="\n".join(f"- {k}: {v}" for k, v in TOPICS.items()))
+    system = PROMPT.format(topics="\n".join(f"- {k}: {v}" for k, v in topics.items()))
 
     def audit(text: str):
         result = llm.complete(
@@ -137,15 +149,15 @@ def rebuild(agent_id: int) -> dict:
             log.warning("Knowledge coverage: full corpus refused for agent %s (%s); retrying on %s characters",
                         agent_id, str(e)[:120], RETRY_CHARS)
             result, data = audit(corpus[:RETRY_CHARS])
-        topics = {}
-        for key in TOPICS:
+        result_topics = {}
+        for key in topics:
             item = data.get(key) or {}
             if isinstance(item, str):
                 item = {"summary": item}
             summary = str(item.get("summary") or "").strip()[:500]
             docs = [d for d in (item.get("documents") or []) if isinstance(d, str) and d in titles]
-            topics[key] = {"summary": summary, "documents": docs or (titles[:1] if summary else [])}
-        profile = {"status": "ready", "topics": topics, "documents": titles, "model": f"{result.provider}/{result.model}",
+            result_topics[key] = {"summary": summary, "documents": docs or (titles[:1] if summary else [])}
+        profile = {"status": "ready", "topics": result_topics, "documents": titles, "model": f"{result.provider}/{result.model}",
                    "updated_at": datetime.now().isoformat(timespec="seconds")}
     except Exception as e:  # noqa: BLE001 - coverage is advisory
         log.warning("Knowledge coverage failed for agent %s: %s", agent_id, e)

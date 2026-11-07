@@ -16,7 +16,7 @@ from app.core import store
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.logging import get_logger
-from app.models.agent import Agent
+from app.models.agent import Agent, PersonaSnapshot
 from app.models.call import Call
 from app.models.document import Document, DocumentChunk
 from app.models.event import Event
@@ -118,6 +118,7 @@ PROFILE_DEFAULTS = {
     "detect_voicemail": False,
     "agent_password": "",
     "industry_pack": "",               # key of the last-applied industry pack (industry_packs.py), if any
+    "custom_topics": [],               # extra topics the operator asked the knowledge coverage audit to track
 }
 
 DEFAULTS = {"profile": PROFILE_DEFAULTS, "automation": AUTOMATION_DEFAULTS}
@@ -541,6 +542,7 @@ def _update_group(agent_id: int, group: str, values: dict, label: str, actor: st
 
 
 MAX_INBOUND_COLLECT = 4   # every detail is one more question on a paid call; name + need + two more is the ceiling
+MAX_CUSTOM_TOPICS = 8   # business-specific topics on top of the fixed coverage set
 
 
 def _ordered_collect(fields) -> list[str]:
@@ -572,8 +574,55 @@ def _validate_profile_values(values: dict) -> dict:
     return values
 
 
+MAX_PERSONA_SNAPSHOTS = 20   # enough rollback history without the table growing without bound
+
+
+def _snapshot_persona(agent_id: int, instructions: str, actor: str) -> None:
+    """Record what `instructions` held just before it was overwritten, pruning beyond the cap."""
+    if not instructions:
+        return
+    with get_db() as db:
+        db.add(PersonaSnapshot(agent_id=agent_id, instructions=instructions, created_by=actor))
+        db.flush()
+        stale = db.execute(
+            select(PersonaSnapshot.id).where(PersonaSnapshot.agent_id == agent_id)
+            .order_by(PersonaSnapshot.id.desc()).offset(MAX_PERSONA_SNAPSHOTS)
+        ).scalars().all()
+        if stale:
+            db.query(PersonaSnapshot).filter(PersonaSnapshot.id.in_(stale)).delete(synchronize_session=False)
+
+
+def persona_history(agent_id: int, limit: int = MAX_PERSONA_SNAPSHOTS) -> list[dict]:
+    with get_db() as db:
+        rows = db.execute(
+            select(PersonaSnapshot).where(PersonaSnapshot.agent_id == agent_id)
+            .order_by(PersonaSnapshot.id.desc()).limit(limit)
+        ).scalars().all()
+        return [r.to_dict() for r in rows]
+
+
+def restore_persona_snapshot(agent_id: int, snapshot_id: int, actor: str = "admin") -> dict:
+    with get_db() as db:
+        snap = db.get(PersonaSnapshot, snapshot_id)
+        if not snap or snap.agent_id != agent_id:
+            raise ValueError("Persona history entry not found.")
+        restored_text = snap.instructions
+    return update_profile(agent_id, {"instructions": restored_text}, actor=actor)
+
+
 def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
     values = _validate_profile_values(dict(values))
+    if "custom_topics" in values:
+        if not isinstance(values["custom_topics"], list):
+            raise ValueError("custom_topics must be a list")
+        # Dedupe case-insensitively, keep first-seen casing; cap count and length so this stays a short list, not a second corpus.
+        seen, cleaned = set(), []
+        for t in values["custom_topics"]:
+            name = str(t or "").strip()[:60]
+            if name and name.lower() not in seen:
+                seen.add(name.lower())
+                cleaned.append(name)
+        values["custom_topics"] = cleaned[:MAX_CUSTOM_TOPICS]
     if "inbound_collect" in values:
         if not isinstance(values["inbound_collect"], list):
             raise ValueError("inbound_collect must be a list")
@@ -628,7 +677,13 @@ def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
         # allowed when they have a number even if the agent lists nobody of its own.
         if not number and not team_service.transfer_digits({}, agent_id):
             raise ValueError("Add a transfer number before forwarding calls to it.")
-    return _update_group(agent_id, "profile", values, "Agent profile", actor)
+    prev_instructions = None
+    if "instructions" in values:
+        prev_instructions = get_profile(agent_id).get("instructions")
+    result = _update_group(agent_id, "profile", values, "Agent profile", actor)
+    if "instructions" in values and prev_instructions and prev_instructions != values["instructions"]:
+        _snapshot_persona(agent_id, prev_instructions, actor)
+    return result
 
 
 def get_automation(agent_id: int) -> dict:

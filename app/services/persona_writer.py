@@ -144,7 +144,7 @@ def draft(agent_id: int) -> dict:
     evidence = "\n".join(f"{label}: {text}" for label, text in covered.items() if text)
     if not evidence:
         # Coverage has not run or found nothing: read the documents directly rather than refusing.
-        evidence = knowledge_profile._corpus(agent_id)[0][:8000]
+        evidence = knowledge_profile._corpus(agent_id, knowledge_profile._topics(agent_id))[0][:8000]
     if not evidence.strip():
         return {"fields": {}, "reason": "The documents have not been read yet. Try again in a moment.",
                 "sources": []}

@@ -148,6 +148,7 @@ export interface AgentProfile {
   notify_missed_calls: boolean
   inbound_collect: string[]
   team_members: { name: string; phone: string; email: string }[]
+  custom_topics: string[]
 }
 
 export interface AutomationSettings {

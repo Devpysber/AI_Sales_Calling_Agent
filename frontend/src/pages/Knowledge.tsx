@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, PageHeader, Sheet, ShowMore, Skeleton, Tabs, Textarea, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
-import type { KnowledgeDoc } from '@/lib/types'
+import type { AgentProfile, KnowledgeDoc } from '@/lib/types'
 import { cn, formatDate, timeAgo } from '@/lib/utils'
 import { useAgent } from '@/lib/agent'
 
@@ -52,6 +52,7 @@ export default function Knowledge() {
   const [filter, setFilter] = useState<Filter>('all')
   const [find, setFind] = useState('')
   const [uploads, setUploads] = useState<UploadItem[]>([])
+  const [selected, setSelected] = useState<Set<number>>(new Set())
 
   const list = useQuery({
     queryKey: ['knowledge'],
@@ -75,6 +76,19 @@ export default function Knowledge() {
       if (viewId === d.id) setViewId(null)
     }
   }
+
+  // No batch-delete endpoint: looping the single-document delete is fine — it is a plain DB delete.
+  const bulkRemove = useMutation({
+    mutationFn: (ids: number[]) => Promise.all(ids.map((id) => api(`${base}/knowledge/${id}`, { method: 'DELETE' }))),
+    onSuccess: (_r, ids) => {
+      toast.success(`Removed ${ids.length} document(s)`)
+      setSelected(new Set())
+      if (viewId !== null && ids.includes(viewId)) setViewId(null)
+      qc.invalidateQueries({ queryKey: ['knowledge'] })
+    },
+    onError: (e) => toast.error('Could not remove all documents', { description: e.message }),
+  })
+  const toggleSelected = (id: number) => setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
 
   const uploadFiles = async (fl: FileList | null) => {
     const files = Array.from(fl ?? [])
@@ -114,7 +128,36 @@ export default function Knowledge() {
       : cov?.status === 'ready' ? undefined : docs.find((d) => d.status === 'ready' && t.match.test(`${d.title} ${d.filename ?? ''}`))
     return { ...t, summary: fromAi?.summary ?? '', doc }
   })
-  const covered = coverage.filter((c) => c.summary || c.doc).length
+
+  // Custom topics an operator added on top of the fixed six; stored on the agent profile and
+  // threaded into the same coverage computation (app/services/knowledge_profile.py: `custom:<name>` keys).
+  const profileQ = useQuery({ queryKey: ['agent-profile', agent?.id], queryFn: () => api<{ profile: AgentProfile }>(`${base}/profile`) })
+  const customTopics = profileQ.data?.profile.custom_topics ?? []
+  const saveCustomTopics = useMutation({
+    mutationFn: (topics: string[]) => api(`${base}/profile`, { method: 'PUT', json: { custom_topics: topics } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['agent-profile', agent?.id] })
+      // The new topic has no coverage yet until the documents are re-read for it.
+      void api(`${base}/knowledge/coverage`, { method: 'POST' }).then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ['knowledge'] }), 800))
+    },
+    onError: (e) => toast.error('Could not save topic', { description: e.message }),
+  })
+  const [newTopic, setNewTopic] = useState('')
+  const addCustomTopic = () => {
+    const name = newTopic.trim()
+    if (!name || customTopics.some((t) => t.toLowerCase() === name.toLowerCase())) return
+    saveCustomTopics.mutate([...customTopics, name])
+    setNewTopic('')
+  }
+  const removeCustomTopic = (name: string) => saveCustomTopics.mutate(customTopics.filter((t) => t !== name))
+  const customCoverage = customTopics.map((name) => {
+    const key = `custom:${name}`
+    const fromAi = cov?.topics?.[key]
+    const doc = fromAi?.summary ? docs.find((d) => (fromAi.documents ?? []).includes(d.title)) : undefined
+    return { key, label: name, hint: 'Added by you', template: `${name}\n…`, summary: fromAi?.summary ?? '', doc }
+  })
+  const allCoverage = [...coverage, ...customCoverage]
+  const covered = allCoverage.filter((c) => c.summary || c.doc).length
   // Keep Refresh disabled from the click until the list has been refetched afterwards, so a second rebuild can't start
   // in the gap between the POST resolving and coverage.status turning 'analyzing'
   const [refreshedAt, setRefreshedAt] = useState<number | null>(null)
@@ -152,7 +195,7 @@ export default function Knowledge() {
           sub={!stats || !stats.documents ? 'Add a document to switch it on'
             : stats.semantic ? 'Meaning + keyword, across languages' : 'Exact words only — embeddings unavailable for these documents'} />
         <Stat label="Topic coverage"
-          value={list.isLoading || list.isError ? '—' : analyzing ? <span className="inline-flex items-center gap-2">{covered}/{TOPICS.length}<Loader2 className="size-4 animate-spin text-muted" /></span> : `${covered}/${TOPICS.length}`}
+          value={list.isLoading || list.isError ? '—' : analyzing ? <span className="inline-flex items-center gap-2">{covered}/{allCoverage.length}<Loader2 className="size-4 animate-spin text-muted" /></span> : `${covered}/${allCoverage.length}`}
           sub={list.isLoading ? 'Loading…' : list.isError ? 'Unavailable' : analyzing ? 'AI is reading your documents…' : lastUpdate ? `Last added ${timeAgo(lastUpdate)}` : 'Nothing added yet'} />
       </div>
 
@@ -192,6 +235,18 @@ export default function Knowledge() {
                 .map((f) => ({ value: f, label: `${f[0]!.toUpperCase()}${f.slice(1)} ${counts[f]}` }))} />
             </div>
 
+            {isAdmin && selected.size > 0 && (
+              <div className="sticky top-12 z-10 flex flex-wrap items-center gap-2 border-b border-border bg-surface-2 px-4 py-2.5 text-sm text-fg lg:top-0">
+                <span className="font-bold">{selected.size} selected</span>
+                <Button size="sm" variant="ghost" disabled={bulkRemove.isPending} onClick={() => setSelected(new Set())}>Clear</Button>
+                <div className="flex-1" />
+                <Button size="sm" variant="danger" disabled={bulkRemove.isPending} loading={bulkRemove.isPending} onClick={async () => {
+                  if (await confirm({ title: `Delete ${selected.size} document(s)?`, description: 'The agent stops using them on the next call. This cannot be undone.', confirmLabel: 'Delete', danger: true }))
+                    bulkRemove.mutate([...selected])
+                }}><Trash2 />Delete selected</Button>
+              </div>
+            )}
+
             {list.isLoading ? <div className="space-y-2 p-5">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-14" />)}</div>
               : list.isError ? (
                 <EmptyState icon={<CircleAlert />} title="Could not load documents" description={list.error.message}
@@ -209,6 +264,7 @@ export default function Knowledge() {
                 <ul className="divide-y divide-border">
                   {shown.map((d) => (
                     <li key={d.id} className="group flex items-center gap-3 px-4 py-3 sm:gap-4 sm:px-5 sm:py-3.5">
+                      {isAdmin && <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggleSelected(d.id)} aria-label={`Select ${d.title}`} className="size-4 shrink-0 cursor-pointer accent-[var(--fg)]" />}
                       <FileIcon doc={d} />
                       <button className="min-w-0 flex-1 text-left disabled:cursor-default" disabled={d.status !== 'ready'} onClick={() => setViewId(d.id)}>
                         <div className="truncate font-medium group-hover:text-brand">{d.title}</div>
@@ -256,7 +312,7 @@ export default function Knowledge() {
                 </ul>
               ) : (
             <ul className="divide-y divide-border">
-              {coverage.map((c) => {
+              {allCoverage.map((c) => {
                 const filled = Boolean(c.summary || c.doc)
                 return (
                   <li key={c.key} className="flex gap-3 px-4 py-3 sm:px-5">
@@ -279,6 +335,26 @@ export default function Knowledge() {
             </ul>
               )}
           </Card>
+
+          {isAdmin && (
+            <Card>
+              <CardHeader title="Custom topics" description="Add a topic specific to your business; the agent re-reads your documents for it too." />
+              <form className="flex min-w-0 gap-2 px-4 pt-4" onSubmit={(e) => { e.preventDefault(); addCustomTopic() }}>
+                <Input value={newTopic} onChange={(e) => setNewTopic(e.target.value)} placeholder="e.g. Warranty terms" maxLength={60} />
+                <Button type="submit" variant="primary" disabled={!newTopic.trim() || saveCustomTopics.isPending} loading={saveCustomTopics.isPending}>Add</Button>
+              </form>
+              {customTopics.length > 0 && (
+                <ul className="flex flex-wrap gap-1.5 p-4">
+                  {customTopics.map((t) => (
+                    <li key={t} className="flex items-center gap-1 rounded-full border border-border bg-surface-2 px-3 py-1 text-xs font-medium text-fg-2">
+                      {t}
+                      <button type="button" aria-label={`Remove topic ${t}`} disabled={saveCustomTopics.isPending} onClick={() => removeCustomTopic(t)} className="text-muted hover:text-danger disabled:opacity-50"><X className="size-3" /></button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+          )}
         </div>
       </div>
 
