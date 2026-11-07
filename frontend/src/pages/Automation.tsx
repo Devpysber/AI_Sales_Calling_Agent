@@ -2,12 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CalendarClock, Copy, Globe, HeartHandshake, Mail, PhoneForwarded, Play, RefreshCw, RotateCcw, Save, ShieldCheck, Zap } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { Badge, Button, Card, EmptyState, Field, Input, PageHeader, Select, Skeleton, Switch, useConfirm } from '@/components/ui'
+import { Badge, Button, Card, EmptyState, Field, Input, PageHeader, Select, Skeleton, Switch, Tabs, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
 import { Stagger } from '@/lib/motion'
 import type { AutomationSettings } from '@/lib/types'
 import { cn, DAYS, timeAgo } from '@/lib/utils'
 import { useAgent } from '@/lib/agent'
+import AutomationRules from '@/pages/AutomationRules'
 
 type Resp = { settings: AutomationSettings; within_calling_hours: boolean; jobs: Record<string, { label: string; at?: string; result?: string }> }
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
@@ -60,6 +61,7 @@ export default function Automation() {
   const qc = useQueryClient()
   const confirm = useConfirm()
   const { data, isError, error, refetch, isFetching } = useQuery({ queryKey: ['automation'], queryFn: () => api<Resp>(`${base}/automation`), refetchInterval: 10000 })
+  const [tab, setTab] = useState<'autopilot' | 'rules'>('autopilot')
   const [form, setForm] = useState<Draft | null>(null)
   // The settings the form was last synced from. While the user has no unsaved edits, a background
   // refetch (another tab, a toggle elsewhere) flows into the form; once they edit, their draft wins.
@@ -132,12 +134,13 @@ export default function Automation() {
     <>
       <PageHeader eyebrow={<><CalendarClock className="size-3.5" />{agent?.name} · Autopilot</>} title="Automation"
         description="Let this agent work through its own pipeline on a schedule, inside the hours you allow. Other agents keep their own schedules."
-        actions={<>
+        actions={tab === 'autopilot' ? <>
           {dirty && <Button disabled={save.isPending} onClick={() => setForm(data.settings)}><RotateCcw />Discard</Button>}
           <Button variant="primary" disabled={!dirty || !!problem} loading={save.isPending} title={problem ?? undefined} onClick={saveAll}><Save />Save changes</Button>
-        </>}>
-        {problem && <p className="mb-3 flex items-center gap-1.5 text-xs font-semibold text-warning"><AlertTriangle className="size-3.5 shrink-0" />{problem}</p>}
-        <Stagger className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-6" step={60}>
+        </> : undefined}>
+        <div className="mb-3"><Tabs value={tab} onChange={setTab} items={[{ value: 'autopilot', label: 'Autopilot' }, { value: 'rules', label: 'Rules' }]} /></div>
+        {tab === 'autopilot' && problem && <p className="mb-3 flex items-center gap-1.5 text-xs font-semibold text-warning"><AlertTriangle className="size-3.5 shrink-0" />{problem}</p>}
+        {tab === 'autopilot' && <Stagger className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-6" step={60}>
           {([
             ['Auto-dial', form.auto_dial_enabled, form.auto_dial_enabled ? `Every ${fmt(form.auto_dial_interval_minutes)} min · ${fmt(form.max_calls_per_run)}/run` : 'Off', 'auto_dial'],
             ['Retries', form.retry_enabled, form.retry_enabled ? `Up to ${fmt(form.max_retries)} tries · ${fmt(form.retry_min_gap_minutes)} min apart` : 'Off', 'retry_calls'],
@@ -154,10 +157,12 @@ export default function Automation() {
               <div className="mt-1 truncate text-[11px] text-muted">{data.jobs?.[job]?.at ? `Last run ${timeAgo(data.jobs[job].at)}` : 'Never run'}</div>
             </div>
           ))}
-        </Stagger>
+        </Stagger>}
       </PageHeader>
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      {tab === 'rules' && <AutomationRules />}
+
+      {tab === 'autopilot' && <div className="grid gap-4 xl:grid-cols-2">
         <JobCard icon={<PhoneForwarded />} title="Auto-dial new leads" description="Calls leads that are New (never called) or queued as Pending."
           enabled={form.auto_dial_enabled} onToggle={(v) => toggleNow('auto_dial_enabled', v)}
           busy={save.isPending} footer={<>{last('auto_dial')}{runBtn('auto_dial', true)}</>}>
@@ -227,8 +232,8 @@ export default function Automation() {
         </JobCard>
 
         <WebsiteIntake />
-      </div>
-      <p className="mt-4 flex items-start gap-1.5 text-xs break-words text-muted"><span className="mt-0.5 shrink-0"><SchedulerPulse /></span>The scheduler checks every 20 seconds. Toggles save instantly; field edits need Save.</p>
+      </div>}
+      {tab === 'autopilot' && <p className="mt-4 flex items-start gap-1.5 text-xs break-words text-muted"><span className="mt-0.5 shrink-0"><SchedulerPulse /></span>The scheduler checks every 20 seconds. Toggles save instantly; field edits need Save.</p>}
     </>
   )
 }
