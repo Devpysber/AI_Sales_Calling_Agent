@@ -10,6 +10,7 @@ from app.api.deps import require_admin, workspace
 from app.core.auth import actor
 from app.core.permissions import require
 from app.services import agents, events, team_service
+from app.api.plivo import _run
 from app.services.call_service import CallError, CallService, within_calling_hours
 from app.services.voice_stream import LIVE
 
@@ -24,7 +25,7 @@ class StartCall(BaseModel):
 @router.post("", dependencies=[Depends(require("calls.start", legacy_team=True))])
 async def start(body: StartCall, request: Request, agent_id: int = Depends(workspace)):
     try:
-        return await asyncio.to_thread(CallService(agent_id).start, body.lead_id, "manual", actor(request), body.purpose)
+        return await _run(CallService(agent_id).start, body.lead_id, "manual", actor(request), body.purpose)
     except CallError as e:
         raise HTTPException(400, str(e))
 
@@ -59,7 +60,7 @@ def get(call_id: int, agent_id: int = Depends(workspace)):
 @router.post("/{call_id}/hangup")
 async def hangup(call_id: int, agent_id: int = Depends(workspace)):
     try:
-        await asyncio.to_thread(CallService(agent_id).hangup, call_id)
+        await _run(CallService(agent_id).hangup, call_id)
         return {"ok": True}
     except CallError as e:
         raise HTTPException(400, str(e))
@@ -88,7 +89,7 @@ async def monitor_call(websocket: WebSocket, call_id: int, agent_id: int):
     await websocket.accept()
     if not stream:
         from app.services import live_bridge
-        owned = await asyncio.to_thread(CallService(agent_id).get, call_id) is not None
+        owned = await _run(CallService(agent_id).get, call_id) is not None
         if owned and await live_bridge.is_live_elsewhere(call_id):
             with contextlib.suppress(WebSocketDisconnect, RuntimeError):
                 await live_bridge.relay(websocket, call_id)  # call runs on another replica

@@ -9,6 +9,7 @@ ring / hangup / recording -> lifecycle updates
 """
 
 import asyncio
+import functools
 
 import plivo.utils
 from fastapi import APIRouter, HTTPException, Query, Request, Response, WebSocket
@@ -18,7 +19,15 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services import agent, agents, call_session, events, tts
-from app.services.call_service import CallService, session_agent
+from app.services.call_service import CallService, _turn_pool, session_agent
+
+
+async def _run(func, *args, **kwargs):
+    """Like asyncio.to_thread, but on the dedicated turn pool instead of asyncio's small
+    process-wide default executor, which every other asyncio.to_thread call in the process shares."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_turn_pool, functools.partial(func, *args, **kwargs))
+
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/api/plivo", tags=["plivo-webhooks"], include_in_schema=False)
@@ -220,9 +229,9 @@ async def answer(request: Request):
     p = await verified(request)
     calls = CallService()
     if p.get("sid") and p.get("cid"):
-        session = await asyncio.to_thread(calls.on_answer, int(p["cid"]), p.get("CallUUID"))
+        session = await _run(calls.on_answer, int(p["cid"]), p.get("CallUUID"))
     else:
-        session = await asyncio.to_thread(calls.create_inbound, p.get("From", ""), p.get("To", ""), p.get("CallUUID", ""))
+        session = await _run(calls.create_inbound, p.get("From", ""), p.get("To", ""), p.get("CallUUID", ""))
 
     r = plivoxml.ResponseElement()
     if not session:
@@ -246,7 +255,7 @@ async def answer(request: Request):
         if route == "forward" and not transfer_targets(persona, session):
             route = "ai"
         if route == "forward":
-            await asyncio.to_thread(calls.mark_transferred, session["call_id"],
+            await _run(calls.mark_transferred, session["call_id"],
                                     "Forwarded to " + calls.transfer_label(transfer_line(persona, agent_id)),
                                     "forward", transfer_line(persona, agent_id))
             
@@ -254,7 +263,7 @@ async def answer(request: Request):
             text = TRANSFER_LINES[key]
             call_session.add_turn(session, "assistant", text)
             call_session.save(session)
-            audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
+            audio_id = await _run(synthesize_to_id, text, session)
             speak(r, session, text, audio_id=audio_id)
             
             if persona["record_calls"]:
@@ -269,7 +278,7 @@ async def answer(request: Request):
                 else "हम अभी बंद हैं। कृपया बीप के बाद अपना संदेश छोड़ें।")
             call_session.add_turn(session, "assistant", text)
             call_session.save(session)
-            audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
+            audio_id = await _run(synthesize_to_id, text, session)
             speak(r, session, text, audio_id=audio_id)
             r.add(plivoxml.RecordElement(action=f"{settings.base_url}/api/plivo/voicemail?cid={session['call_id']}",
                                          method="POST", max_length=120, play_beep=True))
@@ -290,8 +299,8 @@ async def answer(request: Request):
 
     # Pre-synthesise greeting audio BEFORE building XML so that a slow or
     # failed TTS call cannot leave the response element half-built.
-    greeting_audio_id = await asyncio.to_thread(synthesize_to_id, greeting_text, session)
-    await asyncio.to_thread(listen, r, session, text=greeting_text if not greeting_audio_id else None, audio_id=greeting_audio_id)
+    greeting_audio_id = await _run(synthesize_to_id, greeting_text, session)
+    await _run(listen, r, session, text=greeting_text if not greeting_audio_id else None, audio_id=greeting_audio_id)
     return xml(r)
 
 
@@ -342,7 +351,7 @@ async def _reply_or_hold(session_id: str, max_wait: float) -> plivoxml.ResponseE
             r.add(plivoxml.PlayElement(tts.audio_url(pending["audio_id"])))
             r.add(plivoxml.HangupElement())
         else:
-            await asyncio.to_thread(listen, r, session, audio_id=pending["audio_id"])
+            await _run(listen, r, session, audio_id=pending["audio_id"])
     elif pending.get("state") == "error":
         call_session.update(session_id, pending=None)
         agent_id = session_agent(session)
@@ -353,11 +362,11 @@ async def _reply_or_hold(session_id: str, max_wait: float) -> plivoxml.ResponseE
             speak(r, session, PROMPTS["handover"][lang_key(session)])
             handed_over = dial_human(r, persona, agents.caller_id(agent_id), session)
             if handed_over and session.get("call_id"):
-                await asyncio.to_thread(CallService().mark_transferred, int(session["call_id"]),
+                await _run(CallService().mark_transferred, int(session["call_id"]),
                                         "Handed to team after an AI error", "error",
                                         transfer_line(persona, agent_id))
         if not handed_over:
-            await asyncio.to_thread(hangup_with, r, session, PROMPTS["error"][lang_key(session)])
+            await _run(hangup_with, r, session, PROMPTS["error"][lang_key(session)])
     else:
         # Still thinking: short silence (no hold tone), then poll again
         r.add(plivoxml.WaitElement(length=1))
@@ -386,13 +395,13 @@ async def silence(request: Request):
     call_session.save(session)
     if session["silent_prompts"] > MAX_SILENT_PROMPTS:
         text = PROMPTS["goodbye"][lang_key(session)]
-        audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
+        audio_id = await _run(synthesize_to_id, text, session)
         speak(r, session, text, audio_id=audio_id)
         r.add(plivoxml.HangupElement())
     else:
         text = PROMPTS["repeat"][lang_key(session)]
-        audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
-        await asyncio.to_thread(listen, r, session, text=text if not audio_id else None, audio_id=audio_id)
+        audio_id = await _run(synthesize_to_id, text, session)
+        await _run(listen, r, session, text=text if not audio_id else None, audio_id=audio_id)
     return xml(r)
 
 
@@ -420,7 +429,7 @@ async def ring(request: Request):
     p = await verified(request)
     cid = int_or_none(p.get("cid"))
     if cid:
-        await asyncio.to_thread(CallService().on_ring, cid)
+        await _run(CallService().on_ring, cid)
     return {"ok": True}
 
 
@@ -438,7 +447,7 @@ async def hangup(request: Request):
             duration = int(float(p.get("Duration") or p.get("BillDuration") or 0))
         except ValueError:
             duration = 0
-        await asyncio.to_thread(CallService().on_hangup, int(call_id), p.get("CallStatus", ""), duration,
+        await _run(CallService().on_hangup, int(call_id), p.get("CallStatus", ""), duration,
                                 p.get("HangupCauseName") or p.get("HangupCause"), p.get("CallUUID"))
     return {"ok": True}
 
@@ -448,7 +457,7 @@ async def recording(request: Request):
     p = await verified(request)
     cid = int_or_none(p.get("cid"))
     if cid and p.get("RecordUrl"):
-        await asyncio.to_thread(CallService().on_recording, cid, p["RecordUrl"])
+        await _run(CallService().on_recording, cid, p["RecordUrl"])
     return {"ok": True}
 
 
@@ -464,7 +473,7 @@ async def transfer(request: Request):
     if not dial_human(r, persona, agents.caller_id(agent_id), dial_session):
         # No reachable team number: say something instead of cutting the caller off mid-sentence.
         if session:
-            await asyncio.to_thread(hangup_with, r, session, PROMPTS["error"][lang_key(session)])
+            await _run(hangup_with, r, session, PROMPTS["error"][lang_key(session)])
         else:
             r.add(plivoxml.HangupElement())
         return xml(r)
@@ -558,7 +567,7 @@ async def transfer_done(request: Request):
 
     cid = int_or_none(p.get("cid") or session.get("call_id"))
     if cid:
-        await asyncio.to_thread(CallService().mark_transferred, cid, f"Team did not answer ({status})", None)
+        await _run(CallService().mark_transferred, cid, f"Team did not answer ({status})", None)
     if session:
         # Off the reply path: the caller hears the fallback line while the callback and the email are made.
         loop = asyncio.get_running_loop()
@@ -576,8 +585,8 @@ async def transfer_done(request: Request):
                 stream_url = settings.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1) + f"/api/plivo/stream?sid={session['id']}"
                 r.add(plivoxml.StreamElement(stream_url, bidirectional=True, keepCallAlive=True, contentType="audio/x-mulaw;rate=8000"))
                 return xml(r)
-            audio_id = await asyncio.to_thread(synthesize_to_id, greeting, session)
-            await asyncio.to_thread(listen, r, session, text=greeting if not audio_id else None, audio_id=audio_id)
+            audio_id = await _run(synthesize_to_id, greeting, session)
+            await _run(listen, r, session, text=greeting if not audio_id else None, audio_id=audio_id)
             return xml(r)
 
     # AI fallback off: the caller is told the request is with the team and the call ends; the callback and
@@ -586,7 +595,7 @@ async def transfer_done(request: Request):
     if session:
         call_session.add_turn(session, "assistant", text)
         call_session.save(session)
-        audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
+        audio_id = await _run(synthesize_to_id, text, session)
         speak(r, session, text, audio_id=audio_id)
         r.add(plivoxml.HangupElement())
     else:
@@ -614,7 +623,7 @@ async def voicemail(request: Request):
     cid = int_or_none(p.get("cid") or request.query_params.get("cid"))
     url = p.get("RecordUrl")
     if cid and url:
-        await asyncio.to_thread(_attach_voicemail, cid, url)
+        await _run(_attach_voicemail, cid, url)
     # Plivo plays nothing after <Record>, so the call would sit in silence until it times out.
     r = plivoxml.ResponseElement()
     r.add(plivoxml.HangupElement())
@@ -631,7 +640,7 @@ async def plivo_team_alert(request: Request, sid: str = Query(None)):
     text = f"Urgent alert from AI Sales Agent. A customer needs immediate attention. They said: {session.get('team_action')}. Press any key to accept, or hang up."
 
     r = plivoxml.ResponseElement()
-    audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
+    audio_id = await _run(synthesize_to_id, text, session)
     # The keypress is what "accept" means, so the message plays *inside* <GetDigits>: a plain
     # <Speak> followed by a redirect fired the callback whether or not anybody accepted.
     gd = plivoxml.GetDigitsElement(action=f"{settings.base_url}/api/plivo/team-alert-done?sid={session['id']}",
@@ -667,7 +676,7 @@ async def plivo_team_alert_done(request: Request, sid: str = Query(None)):
     accepted = bool((p.get("Digits") or "").strip())
     if accepted and session.get("customer_phone"):
         try:
-            await asyncio.to_thread(_dial_customer_back, session)
+            await _run(_dial_customer_back, session)
         except Exception as e:  # noqa: BLE001 - never fail the team member's call over the callback
             log.error("Failed to dial customer back call: %s", e)
     elif not accepted:
@@ -687,7 +696,7 @@ async def plivo_customer_alert(request: Request, sid: str = Query(None)):
 
     text = "Hi, this is the AI assistant calling back. I have informed the team about your urgent request, and they are acting on it now. Thank you."
     r = plivoxml.ResponseElement()
-    audio_id = await asyncio.to_thread(synthesize_to_id, text, session)
+    audio_id = await _run(synthesize_to_id, text, session)
     speak(r, session, text, audio_id=audio_id)
     r.add(plivoxml.HangupElement())
     return xml(r)
