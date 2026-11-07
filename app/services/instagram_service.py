@@ -423,12 +423,12 @@ def _apply_chat_outcome(conv_id: int, agent_id: int, lead_id: int | None, histor
 
 
 def _submit_chat_summary(conv_id: int, agent_id: int, lead_id: int | None, history: list[dict]) -> None:
-    from app.services.call_service import _turn_pool
+    from app.services.call_service import _background_pool
 
     def _done(f):
         if f.exception() is not None:
             log.error("Post-chat summary for conversation %s crashed: %r", conv_id, f.exception())
-    _turn_pool.submit(_apply_chat_outcome, conv_id, agent_id, lead_id, history).add_done_callback(_done)
+    _background_pool.submit(_apply_chat_outcome, conv_id, agent_id, lead_id, history).add_done_callback(_done)
 
 
 def _lead_ig_id(agent_id: int | None, lead_id: int | None) -> str | None:

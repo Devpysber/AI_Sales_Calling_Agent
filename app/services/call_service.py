@@ -30,8 +30,13 @@ RETRIABLE = ("No Answer", "Busy", "Failed")
 PLIVO_STATUS = {"completed": "Completed", "busy": "Busy", "no-answer": "No Answer", "timeout": "No Answer",
                 "failed": "Failed", "cancel": "Canceled", "canceled": "Canceled", "machine": "No Answer"}
 
-# Bounded worker pool for AI turns (LLM + TTS are network-bound)
-_turn_pool = ThreadPoolExecutor(max_workers=64, thread_name_prefix="turn")
+# Bounded worker pool for the one latency-critical path: an active call's in-flight turn (LLM + TTS
+# are network-bound). Kept separate from _background_pool so chat/call background work can never
+# delay a real caller waiting on a reply.
+_turn_pool = ThreadPoolExecutor(max_workers=settings.turn_pool_workers, thread_name_prefix="turn")
+# Everything else: post-call/post-chat summarization, history compaction, audio prewarming -- none
+# of it blocks a caller or customer waiting on the current reply.
+_background_pool = ThreadPoolExecutor(max_workers=settings.background_pool_workers, thread_name_prefix="bg")
 
 
 class CallError(Exception):
@@ -685,7 +690,7 @@ class CallService:
         def _done(f):
             if f.exception() is not None:
                 log.error("Post-call summary for call %s crashed: %r", call_id, f.exception())
-        _turn_pool.submit(self._summarize, call_id, lead_id, history).add_done_callback(_done)
+        _background_pool.submit(self._summarize, call_id, lead_id, history).add_done_callback(_done)
 
     def resummarize_pending(self, hours: int = 48, max_attempts: int = 3, force: bool = False) -> int:
         """
@@ -1204,7 +1209,7 @@ class CallService:
             if summary:
                 call_session.update(session_id, summary=summary, compacted_at=turns)
 
-        _turn_pool.submit(run)
+        _background_pool.submit(run)
 
     def _apply_turn_signals(self, session: dict, result: dict):
         apply_turn_signals(self.crm, session.get("lead_id"), result, call_id=session.get("call_id"))

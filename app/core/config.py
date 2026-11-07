@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     # ---------------- Infrastructure ----------------
     database_url: str = Field("sqlite:///data/voiceagent.db", alias="DATABASE_URL")
     db_pool_size: int = Field(10, alias="DB_POOL_SIZE")
+    # Thread pool a live call's turn-processing is submitted to -- the single most latency-critical
+    # path in the whole system (a real caller is waiting). Kept separate from background_pool so a
+    # burst of chat-summary/compaction/prewarm work can never queue behind it.
+    turn_pool_workers: int = Field(128, alias="TURN_POOL_WORKERS")
+    # Non-latency-critical background work: post-call/post-chat summarization, history compaction,
+    # audio prewarming. Shared across voice calls and WhatsApp/Instagram chat outcome processing.
+    background_pool_workers: int = Field(64, alias="BACKGROUND_POOL_WORKERS")
     # Required when running more than one API instance
     redis_url: str = Field("", alias="REDIS_URL")
     # Run the scheduler inside the API process (single-instance setups).
