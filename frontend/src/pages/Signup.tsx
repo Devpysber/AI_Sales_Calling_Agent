@@ -2,7 +2,7 @@ import { Mail, UserPlus } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Field, Input } from '@/components/ui'
-import { api, ApiError } from '@/lib/api'
+import { api } from '@/lib/api'
 
 export default function Signup() {
   const [error, setError] = useState('')
@@ -41,7 +41,7 @@ export default function Signup() {
       await api('/api/auth/resend', { method: 'POST', json: { email } })
       setResent(true)
     } catch (err) {
-      setError(err instanceof ApiError && err.message ? err.message : 'Could not resend the email. Please try again.')
+      setError(err instanceof Error && err.message ? err.message : 'Could not resend the email. Please try again.')
     } finally {
       setResending(false)
     }
