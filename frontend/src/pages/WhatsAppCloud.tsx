@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { CheckCheck, ExternalLink, MessageCircle, Phone, Send, Sparkles, User, Video } from "lucide-react"
+import { ExternalLink, MessageCircle, Phone, Send, Sparkles, User, Video } from "lucide-react"
 import { Fragment, useEffect, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import { Link, useSearchParams } from "react-router-dom"
@@ -8,8 +8,9 @@ import { Badge, Button, Card, EmptyState, PageHeader, Skeleton, Textarea } from 
 import { api } from "@/lib/api"
 import { useAgent } from "@/lib/agent"
 import { cn } from "@/lib/utils"
+import { StatusTicks, type MessageStatus } from "@/lib/messageStatus"
 
-type Turn = { role: "customer" | "assistant" | "human"; text: string; at?: string; by?: string }
+type Turn = { role: "customer" | "assistant" | "human"; text: string; at?: string; by?: string; status?: MessageStatus; error?: string }
 
 // Very small WhatsApp-style plain-text markup renderer: *bold*, **bold**, _italic_, ~strike~
 function renderFormatted(text: string): ReactNode[] {
@@ -152,7 +153,7 @@ export default function WhatsApp() {
                         {renderFormatted(t.text)}
                         <span className="float-right ml-2 mt-1.5 flex items-center gap-0.5 text-[11px] text-[#667781]">
                           {time(t.at)}
-                          {t.role !== "customer" && <CheckCheck className="size-[14px] text-[#53bdeb]" />}
+                          {t.role !== "customer" && <StatusTicks status={t.status} error={t.error} />}
                         </span>
                       </div>
                     </div>

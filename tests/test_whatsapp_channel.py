@@ -102,6 +102,18 @@ def test_parse_webhook():
     assert wa.parse_webhook(statuses) == []
 
 
+def test_parse_status_updates():
+    payload = {"entry": [{"changes": [{"value": {"statuses": [
+        {"id": "wamid.OUT1", "status": "delivered"},
+        {"id": "wamid.OUT2", "status": "failed", "errors": [{"code": 131, "title": "Rate limit hit"}]},
+    ]}}]}]}
+    assert wa.parse_status_updates(payload) == [
+        {"wamid": "wamid.OUT1", "status": "delivered", "error": None},
+        {"wamid": "wamid.OUT2", "status": "failed", "error": "131: Rate limit hit"},
+    ]
+    assert wa.parse_status_updates({"entry": [{"changes": [{"value": {"metadata": {}, "messages": []}}]}]}) == []
+
+
 def test_inbound_creates_chat_dedupes_and_closes(agent_id, fakes):
     sent, summaries, state = fakes
     [m] = wa.parse_webhook(_payload(wamid="wamid.A", wa_id="919811100002"))
@@ -277,3 +289,47 @@ def test_phone_number_id_skips_composio(monkeypatch):
     assert out["provider"] == "meta" and "555/messages" in urls[0]
     out = asyncio.run(wa.send_whatsapp_message("+919811100001", "hi"))
     assert out["provider"] == "composio"
+
+
+# ---- apply_status_update: placed at the end of the file, not near test_parse_webhook, because
+# test_inbound_creates_chat_dedupes_and_closes above asserts len(_chats(agent_id)) == 1 for the
+# shared session-scoped `agent_id` -- any Conversation row created earlier in the module for that
+# same agent_id would break that count.
+
+def _out_message(agent_id, wamid, status="sent"):
+    with get_db() as db:
+        conv = Conversation(agent_id=agent_id, lead_id=None, channel="whatsapp", status="open", ai_paused=False)
+        db.add(conv)
+        db.flush()
+        msg = Message(conversation_id=conv.id, agent_id=agent_id, direction="out", sender_type="ai",
+                      type="text", text="hello", external_id=wamid, status=status)
+        db.add(msg)
+        db.flush()
+        return msg.id
+
+
+def _status_of(msg_id):
+    with get_db() as db:
+        m = db.get(Message, msg_id)
+        return m.status, m.error
+
+
+def test_apply_status_update_progresses_forward_only(agent_id):
+    mid = _out_message(agent_id, "wamid.OUT.A")
+    assert wa.apply_status_update("wamid.OUT.A", "delivered")
+    assert _status_of(mid) == ("delivered", None)
+    assert wa.apply_status_update("wamid.OUT.A", "read")
+    assert _status_of(mid) == ("read", None)
+    # A late "delivered" arriving after "read" must not downgrade it.
+    assert wa.apply_status_update("wamid.OUT.A", "delivered")
+    assert _status_of(mid) == ("read", None)
+
+
+def test_apply_status_update_failed_always_applies(agent_id):
+    mid = _out_message(agent_id, "wamid.OUT.B", status="read")
+    assert wa.apply_status_update("wamid.OUT.B", "failed", "131: Rate limit hit")
+    assert _status_of(mid) == ("failed", "131: Rate limit hit")
+
+
+def test_apply_status_update_unknown_wamid_is_noop(agent_id):
+    assert wa.apply_status_update("wamid.does-not-exist", "delivered") is False

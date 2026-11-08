@@ -59,6 +59,13 @@ def _turn(m: Message) -> dict:
     turn = {"role": role, "text": m.text or "", "at": m.created_at.isoformat() if m.created_at else None}
     if m.sender_name:
         turn["by"] = m.sender_name
+    if role != "customer":
+        # Instagram Messaging has no delivery/read receipt webhook (unlike WhatsApp Cloud API's
+        # statuses[]), so this is always "sent"/"failed" -- never "delivered"/"read". Still surfaced
+        # as `status` for type parity with WhatsApp's Turn.
+        turn["status"] = m.status
+        if m.error:
+            turn["error"] = m.error
     return turn
 
 

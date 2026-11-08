@@ -1,0 +1,248 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, Eye, Megaphone, Plus, RocketIcon, RefreshCw, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import { toast } from 'sonner'
+import { Badge, Button, Card, Dialog, EmptyState, Field, Input, Select, Sheet, Skeleton, Textarea, useConfirm } from '@/components/ui'
+import { api } from '@/lib/api'
+import { useAgent } from '@/lib/agent'
+import { LEAD_STATUSES, QUALIFICATIONS } from '@/lib/utils'
+
+type Segment = { status?: string[]; qualification?: string[]; tags?: string[]; source?: string }
+type Stats = { targeted?: number; sent?: number; skipped?: number; failed?: number }
+type Campaign = {
+  id: number; agent_id: number; name: string; channel: 'call' | 'email' | 'whatsapp'
+  status: 'draft' | 'running' | 'completed'; segment: Segment | null
+  subject: string | null; message: string | null; stats: Stats | null
+  started_at: string | null; created_at: string
+}
+type PreviewResult = { count: number; sample: { id: number; name: string; phone: string | null; email: string | null; status: string }[] }
+type Draft = { name: string; channel: Campaign['channel']; status: string[]; qualification: string[]; tags: string; source: string; subject: string; message: string }
+
+const CHANNEL_LABEL: Record<string, string> = { call: 'Call', email: 'Email', whatsapp: 'WhatsApp' }
+
+const emptyDraft = (): Draft => ({ name: '', channel: 'whatsapp', status: [], qualification: [], tags: '', source: '', subject: '', message: '' })
+
+const toDraft = (c: Campaign): Draft => ({
+  name: c.name, channel: c.channel,
+  status: c.segment?.status ?? [], qualification: c.segment?.qualification ?? [],
+  tags: (c.segment?.tags ?? []).join(', '), source: c.segment?.source ?? '',
+  subject: c.subject ?? '', message: c.message ?? '',
+})
+
+const segmentOf = (d: Draft): Segment => ({
+  status: d.status.length ? d.status : undefined,
+  qualification: d.qualification.length ? d.qualification : undefined,
+  tags: d.tags.trim() ? d.tags.split(',').map((t) => t.trim()).filter(Boolean) : undefined,
+  source: d.source.trim() || undefined,
+})
+
+function statsLine(c: Campaign): string | null {
+  const s = c.stats
+  if (!s || Object.keys(s).length === 0) return null
+  return `${s.targeted ?? 0} targeted · ${s.sent ?? 0} sent · ${s.failed ?? 0} failed · ${s.skipped ?? 0} skipped`
+}
+
+function Chips({ options, value, onChange }: { options: string[]; value: string[]; onChange: (v: string[]) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {options.map((opt) => {
+        const active = value.includes(opt)
+        return (
+          <button key={opt} type="button" onClick={() => onChange(active ? value.filter((v) => v !== opt) : [...value, opt])}
+            className={active ? 'rounded-full border border-brand bg-brand px-3 py-1 text-xs font-semibold text-brand-fg'
+              : 'rounded-full border border-border bg-surface px-3 py-1 text-xs font-semibold text-fg-2 hover:border-border-strong'}>
+            {opt}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+export default function Campaigns() {
+  const { base } = useAgent()
+  const qc = useQueryClient()
+  const confirm = useConfirm()
+  const campaignsQ = useQuery({
+    queryKey: ['campaigns', base],
+    queryFn: () => api<Campaign[]>(`${base}/crm/campaigns`),
+    refetchInterval: (q) => (q.state.data ?? []).some((c) => c.status === 'running') ? 3000 : false,
+  })
+  const [editing, setEditing] = useState<Campaign | 'new' | null>(null)
+  const [previewing, setPreviewing] = useState<{ segment: Segment; channel: Campaign['channel'] } | null>(null)
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['campaigns', base] })
+  const remove = useMutation({
+    mutationFn: (id: number) => api(`${base}/crm/campaigns/${id}`, { method: 'DELETE' }),
+    onSuccess: () => { toast.success('Campaign deleted'); invalidate() }, onError: (e: Error) => toast.error(e.message),
+  })
+  const run = useMutation({
+    mutationFn: (id: number) => api(`${base}/crm/campaigns/${id}/run`, { method: 'POST' }),
+    onSuccess: () => { toast.success('Campaign launched'); invalidate() }, onError: (e: Error) => toast.error(e.message),
+  })
+
+  if (campaignsQ.isError) {
+    return <Card><EmptyState icon={<AlertTriangle />} title="Couldn't load campaigns" description={campaignsQ.error?.message}
+      action={<Button onClick={() => campaignsQ.refetch()}><RefreshCw />Try again</Button>} /></Card>
+  }
+  if (!campaignsQ.data) return <div className="grid gap-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-24" />)}</div>
+
+  const campaigns = campaignsQ.data
+
+  return (
+    <>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="min-w-0 text-sm text-muted">Reach a segment of leads in bulk by call, email or WhatsApp.</p>
+        <Button variant="primary" onClick={() => setEditing('new')}><Plus />New campaign</Button>
+      </div>
+      {campaigns.length === 0 ? (
+        <Card><EmptyState icon={<Megaphone />} title="No campaigns yet" description="Build a segment and blast it by call, email or WhatsApp."
+          action={<Button variant="primary" onClick={() => setEditing('new')}><Plus />New campaign</Button>} /></Card>
+      ) : (
+        <div className="grid gap-3">
+          {campaigns.map((c) => (
+            <Card key={c.id} className="flex flex-col gap-3 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-bold break-words">{c.name}</h3>
+                    <Badge tone="neutral">{CHANNEL_LABEL[c.channel] ?? c.channel}</Badge>
+                    <Badge tone={c.status === 'completed' ? 'success' : c.status === 'running' ? 'brand' : 'neutral'}>{c.status}</Badge>
+                  </div>
+                  <p className="mt-1 text-xs break-words text-muted">
+                    {statsLine(c) ?? 'Not launched yet'}
+                    {c.started_at ? ` · started ${new Date(c.started_at).toLocaleString()}` : ` · created ${new Date(c.created_at).toLocaleString()}`}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" onClick={() => setPreviewing({ segment: c.segment ?? {}, channel: c.channel })}><Eye />Preview audience</Button>
+                {c.status === 'draft' && <Button size="sm" onClick={() => setEditing(c)}>Edit</Button>}
+                {c.status === 'draft' && (
+                  <Button size="sm" variant="primary" loading={run.isPending} onClick={async () => {
+                    const preview = await api<PreviewResult>(`${base}/crm/campaigns/preview`, { method: 'POST', json: { segment: c.segment ?? {}, channel: c.channel } })
+                    if (await confirm({
+                      title: 'Launch this campaign?',
+                      description: `This will reach ${preview.count} lead(s) by ${CHANNEL_LABEL[c.channel] ?? c.channel}. This can't be undone.`,
+                      confirmLabel: 'Launch', danger: false,
+                    })) run.mutate(c.id)
+                  }}><RocketIcon />Launch campaign</Button>
+                )}
+                {c.status === 'draft' && (
+                  <Button size="sm" variant="ghost" onClick={async () => {
+                    if (await confirm({ title: 'Delete this campaign?', description: `"${c.name}" will be removed.`, confirmLabel: 'Delete', danger: true })) remove.mutate(c.id)
+                  }}><Trash2 />Delete</Button>
+                )}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {editing && <CampaignForm campaign={editing === 'new' ? null : editing} onClose={() => setEditing(null)}
+        onSaved={() => { setEditing(null); invalidate() }} onPreview={(segment, channel) => setPreviewing({ segment, channel })} />}
+      {previewing && <PreviewDialog segment={previewing.segment} channel={previewing.channel} onClose={() => setPreviewing(null)} />}
+    </>
+  )
+}
+
+function CampaignForm({ campaign, onClose, onSaved, onPreview }: {
+  campaign: Campaign | null; onClose: () => void; onSaved: () => void
+  onPreview: (segment: Segment, channel: Campaign['channel']) => void
+}) {
+  const { base } = useAgent()
+  const [draft, setDraft] = useState<Draft>(() => campaign ? toDraft(campaign) : emptyDraft())
+
+  const save = useMutation({
+    mutationFn: () => {
+      const payload: Record<string, unknown> = { name: draft.name, channel: draft.channel, segment: segmentOf(draft) }
+      if (draft.channel === 'email') payload.subject = draft.subject
+      if (draft.channel === 'email' || draft.channel === 'whatsapp') payload.message = draft.message
+      return campaign ? api<Campaign>(`${base}/crm/campaigns/${campaign.id}`, { method: 'PATCH', json: payload })
+        : api<Campaign>(`${base}/crm/campaigns`, { method: 'POST', json: payload })
+    },
+    onSuccess: () => { toast.success(campaign ? 'Campaign updated' : 'Campaign created'); onSaved() },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const problem = !draft.name.trim() ? 'Name is required' : null
+
+  return (
+    <Sheet open onClose={onClose} title={campaign ? `Edit "${campaign.name}"` : 'New campaign'}
+      description="Pick a segment of leads, then reach them by call, email or WhatsApp."
+      footer={<>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={() => onPreview(segmentOf(draft), draft.channel)}><Eye />Preview audience</Button>
+        <Button variant="primary" loading={save.isPending} disabled={!!problem} title={problem ?? undefined} onClick={() => save.mutate()}>
+          {campaign ? 'Save changes' : 'Create campaign'}
+        </Button>
+      </>}>
+      <div className="grid gap-4">
+        <Field label="Name"><Input value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} placeholder="e.g. Spring re-engagement" /></Field>
+        <Field label="Channel">
+          <Select value={draft.channel} onChange={(e) => setDraft((d) => ({ ...d, channel: e.target.value as Draft['channel'] }))}>
+            <option value="call">Call</option>
+            <option value="email">Email</option>
+            <option value="whatsapp">WhatsApp</option>
+          </Select>
+        </Field>
+
+        <div>
+          <h4 className="mb-2 text-sm font-semibold">Audience segment</h4>
+          <div className="grid gap-3">
+            <Field label="Stage" hint="Leave empty to include every stage">
+              <Chips options={LEAD_STATUSES} value={draft.status} onChange={(v) => setDraft((d) => ({ ...d, status: v }))} />
+            </Field>
+            <Field label="Temperature" hint="Leave empty to include every temperature">
+              <Chips options={QUALIFICATIONS} value={draft.qualification} onChange={(v) => setDraft((d) => ({ ...d, qualification: v }))} />
+            </Field>
+            <Field label="Tags" hint="Comma-separated, matches any">
+              <Input value={draft.tags} onChange={(e) => setDraft((d) => ({ ...d, tags: e.target.value }))} placeholder="e.g. vip, newsletter" />
+            </Field>
+            <Field label="Source" hint="Exact match, e.g. website:demo">
+              <Input value={draft.source} onChange={(e) => setDraft((d) => ({ ...d, source: e.target.value }))} placeholder="e.g. website" />
+            </Field>
+          </div>
+        </div>
+
+        {draft.channel === 'email' && (
+          <Field label="Subject"><Input value={draft.subject} onChange={(e) => setDraft((d) => ({ ...d, subject: e.target.value }))} placeholder="e.g. We miss you, {name}!" /></Field>
+        )}
+        {(draft.channel === 'email' || draft.channel === 'whatsapp') && (
+          <Field label="Message" hint={draft.channel === 'whatsapp'
+            ? 'Supports {name}/{company} placeholders. Used only for replies inside the 24h WhatsApp window — outside it, an approved Meta template is sent automatically instead.'
+            : 'Supports {name}/{company} placeholders.'}>
+            <Textarea rows={5} value={draft.message} onChange={(e) => setDraft((d) => ({ ...d, message: e.target.value }))} placeholder="Hi {name}, ..." />
+          </Field>
+        )}
+      </div>
+    </Sheet>
+  )
+}
+
+function PreviewDialog({ segment, channel, onClose }: { segment: Segment; channel: Campaign['channel']; onClose: () => void }) {
+  const { base } = useAgent()
+  const previewQ = useQuery({
+    queryKey: ['campaigns', 'preview', base, JSON.stringify(segment), channel],
+    queryFn: () => api<PreviewResult>(`${base}/crm/campaigns/preview`, { method: 'POST', json: { segment, channel } }),
+  })
+  return (
+    <Dialog open onClose={onClose} title="Audience preview" description={`Who this campaign would reach by ${CHANNEL_LABEL[channel] ?? channel}, based on the current segment.`}
+      footer={<Button onClick={onClose}>Close</Button>}>
+      {previewQ.isLoading ? <Skeleton className="h-24" /> : previewQ.isError ? (
+        <p className="text-sm text-danger">{(previewQ.error as Error).message}</p>
+      ) : (
+        <div className="grid gap-3">
+          <p className="text-sm font-semibold">{previewQ.data!.count} lead(s) match</p>
+          {previewQ.data!.sample.length > 0 && (
+            <ul className="grid gap-1 text-sm text-muted">
+              {previewQ.data!.sample.map((l) => (
+                <li key={l.id}>• {l.name} — {l.phone || l.email || '—'} <span className="text-xs">({l.status})</span></li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </Dialog>
+  )
+}

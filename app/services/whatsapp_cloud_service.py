@@ -370,6 +370,51 @@ def parse_webhook(payload: dict) -> list[dict]:
     return out
 
 
+def parse_status_updates(payload: dict) -> list[dict]:
+    """Meta delivery/read receipts for messages THIS business sent: value.statuses[] (separate from
+    value.messages[], which parse_webhook handles). {"wamid", "status", "error"} per entry."""
+    out = []
+    for entry in (payload or {}).get("entry") or []:
+        for change in entry.get("changes") or []:
+            value = change.get("value") or {}
+            for s in value.get("statuses") or []:
+                errors = s.get("errors") or []
+                error = "; ".join(f"{e.get('code')}: {e.get('title')}" for e in errors) if errors else None
+                out.append({"wamid": s.get("id"), "status": s.get("status") or "", "error": error})
+    return out
+
+
+# Forward-only progression: a late "sent"/"delivered" arriving after "read" was already recorded must
+# never regress it. "failed" is handled separately below (always applied, any time).
+_STATUS_RANK = {"received": 0, "queued": 0, "sent": 1, "delivered": 2, "read": 3}
+
+
+def apply_status_update(wamid: str | None, status: str, error: str | None = None) -> bool:
+    """Update the Message row (matched by external_id == wamid, the wamid of our own outbound send)
+    with a delivery/read/failed status from a Meta statuses[] webhook entry. Status only moves forward
+    (sent -> delivered -> read); "failed" always applies, since it can arrive at any point and is
+    terminal. Returns False when no matching Message row was found (e.g. wamid not yet persisted, or
+    a status for a message outside what we track)."""
+    if not wamid or not status:
+        return False
+    with get_db() as db:
+        msg = db.scalars(select(Message).where(Message.external_id == wamid)).first()
+        if msg is None:
+            log.warning("WhatsApp status update for unknown wamid %s: %s", wamid, status)
+            return False
+        if status == "failed":
+            msg.status = "failed"
+            msg.error = error
+            if error:
+                log.warning("WhatsApp message %s failed: %s", wamid, error)
+            return True
+        if status not in _STATUS_RANK:
+            return False
+        if _STATUS_RANK[status] > _STATUS_RANK.get(msg.status, 0):
+            msg.status = status
+        return True
+
+
 def resolve_agent(phone_number_id: str | None, display_phone_number: str | None) -> int | None:
     digits = re.sub(r"\D", "", display_phone_number or "")
     if phone_number_id:

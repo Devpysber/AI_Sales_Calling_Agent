@@ -36,6 +36,10 @@ async def inbound(request: Request, background: BackgroundTasks):
         payload = await request.json()
     except ValueError:
         return {"ok": True}
+    # Delivery/read receipts for our own outbound sends: a plain DB write, no per-contact ordering
+    # needed, so handled synchronously here rather than through the inbound-message queue.
+    for upd in wa.parse_status_updates(payload):
+        wa.apply_status_update(upd["wamid"], upd["status"], upd.get("error"))
     for msg in wa.parse_webhook(payload):
         # enqueue_inbound: RPUSH to the durable Redis queue when configured, else process inline
         # (sync function: Starlette runs it in a worker thread either way).
@@ -61,6 +65,10 @@ def _turn(m: Message) -> dict:
     turn = {"role": role, "text": m.text or "", "at": m.created_at.isoformat() if m.created_at else None}
     if m.sender_name:
         turn["by"] = m.sender_name
+    if role != "customer":
+        turn["status"] = m.status
+        if m.error:
+            turn["error"] = m.error
     return turn
 
 

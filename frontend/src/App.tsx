@@ -57,6 +57,7 @@ const Dashboard = lazy(page(() => import('@/pages/Dashboard')))
 const Leads = lazy(page(() => import('@/pages/Leads')))
 const LeadDetail = lazy(page(() => import('@/pages/LeadDetail')))
 const Pipeline = lazy(page(() => import('@/pages/Pipeline')))
+const Accounts = lazy(page(() => import('@/pages/Accounts')))
 const Analytics = lazy(page(() => import('@/pages/Analytics')))
 const Import = lazy(page(() => import('@/pages/Import')))
 const Calls = lazy(page(() => import('@/pages/Calls')))
@@ -64,6 +65,7 @@ const ActivityPage = lazy(page(() => import('@/pages/Activity')))
 const Agent = lazy(page(() => import('@/pages/Agent')))
 const Knowledge = lazy(page(() => import('@/pages/Knowledge')))
 const Automation = lazy(page(() => import('@/pages/Automation')))
+const Campaigns = lazy(page(() => import('@/pages/Campaigns')))
 const WhatsApp = lazy(page(() => import('@/pages/WhatsApp')))
 const WhatsAppCloud = lazy(page(() => import('@/pages/WhatsAppCloud')))
 const Templates = lazy(page(() => import('@/pages/Templates')))
@@ -76,6 +78,7 @@ const Emails = lazy(page(() => import('@/pages/Emails')))
 const InstagramPage = lazy(page(() => import('@/pages/Instagram')))
 const Channels = lazy(page(() => import('@/pages/Channels')))
 const ToolsPage = lazy(page(() => import('@/pages/Tools')))
+const TasksPage = lazy(page(() => import('@/pages/Tasks')))
 const ForgotPassword = lazy(page(() => import('@/pages/ForgotPassword')))
 const ResetPassword = lazy(page(() => import('@/pages/ResetPassword')))
 const AcceptInvite = lazy(page(() => import('@/pages/AcceptInvite')))
@@ -141,6 +144,7 @@ export default function App() {
         <Route path="a/:agentId" element={shell}>
           <Route index element={<Dashboard />} />
           <Route path="pipeline" element={<Pipeline />} />
+          <Route path="accounts" element={<Accounts />} />
           <Route path="analytics" element={<Analytics />} />
           <Route path="leads" element={<Leads />} />
           <Route path="leads/:leadId" element={<LeadDetail />} />
@@ -156,9 +160,11 @@ export default function App() {
           <Route path="channels" element={<Channels />} />
           <Route path="tools" element={<ToolsPage />} />
           <Route path="activity" element={<ActivityPage />} />
+          <Route path="tasks" element={<TasksPage />} />
           <Route path="agent" element={<Agent />} />
           <Route path="knowledge" element={<Knowledge />} />
           <Route path="automation" element={<Automation />} />
+          <Route path="campaigns" element={<Campaigns />} />
           <Route path="settings" element={<AgentSettings />} />
           <Route path="*" element={<Navigate to="." replace />} />
         </Route>

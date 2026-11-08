@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Activity, BarChart3, BookOpen, Bot, CalendarClock, Check, ChevronsLeft, ChevronsRight, ChevronsUpDown, Columns3,
-  Download, Camera, Keyboard, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Lock, Mail, Menu, MessageCircle, MessageSquare, MessageSquareText, Moon, Pause, PhoneCall, Plug, Plus, FileText, Search, Settings,
+  Activity, BarChart3, BookOpen, Bot, Building2, CalendarClock, Check, ChevronsLeft, ChevronsRight, ChevronsUpDown, Columns3,
+  Download, Camera, Keyboard, ListTodo, Megaphone, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Lock, Mail, Menu, MessageCircle, MessageSquare, MessageSquareText, Moon, Pause, PhoneCall, Plug, Plus, FileText, Search, Settings,
   SlidersHorizontal, Sparkles, Sun, Upload, UserPlus, Users, Wrench, X,
 } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -27,6 +27,7 @@ const AGENT_NAV: { section: string; items: NavItem[] }[] = [
       { to: '/', label: 'Overview', icon: LayoutDashboard, key: 'o' },
       { to: '/leads', label: 'Leads', icon: Users, key: 'l', count: (a) => a.stats.leads || null },
       { to: '/pipeline', label: 'Pipeline', icon: Columns3, key: 'p', count: (a) => a.stats.hot ? <span className="text-danger">{a.stats.hot} hot</span> : null },
+      { to: '/accounts', label: 'Accounts', icon: Building2, key: 'd' },
       { to: '/calls', label: 'Calls', icon: PhoneCall, key: 'c', count: (a) => a.stats.live ? <span className="rounded-full bg-success px-1.5 text-white">{a.stats.live} live</span> : a.stats.calls_today || null },
       { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, key: 'w' },
       { to: '/instagram', label: 'Instagram', icon: Camera, key: 'n' },
@@ -36,6 +37,7 @@ const AGENT_NAV: { section: string; items: NavItem[] }[] = [
   {
     section: 'Insights', items: [
       { to: '/analytics', label: 'Analytics', icon: BarChart3, key: 'a' },
+      { to: '/tasks', label: 'Tasks', icon: ListTodo, key: 'j' },
       { to: '/activity', label: 'History', icon: Activity, key: 'h' },
       { to: '/emails', label: 'Email service', icon: Mail, key: 'm' },
     ],
@@ -48,6 +50,7 @@ const AGENT_NAV: { section: string; items: NavItem[] }[] = [
       { to: '/templates', label: 'Message templates', icon: FileText, key: 'e' },
       { to: '/whatsapp-flows', label: 'WhatsApp Flows', icon: LayoutGrid, key: 'f' },
       { to: '/automation', label: 'Automation', icon: CalendarClock, key: 'u', count: (a) => a.automation_on ? <span className="text-success">On</span> : null },
+      { to: '/campaigns', label: 'Campaigns', icon: Megaphone, key: 'z' },
       { to: '/channels', label: 'Channels', icon: Plug, key: 'x' },
       { to: '/tools', label: 'Tools', icon: Wrench, key: 't' },
       { to: '/settings', label: 'Agent settings', icon: SlidersHorizontal, key: 's' },
