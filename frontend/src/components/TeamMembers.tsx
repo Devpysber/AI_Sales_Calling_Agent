@@ -88,7 +88,7 @@ export default function TeamMembers() {
     onError: (e: Error) => toast.error(e.message),
   })
 
-  const closeAdd = () => { if (!add.isPending) setOpen(false) }
+  const closeAdd = () => { if (add.isPending) return; setOpen(false); resetForm() }
   const closePw = () => { if (changePwd.isPending) return; setChangePwId(null); setNewPassword('') }
 
   const onRemove = async (m: TeamMember) => {
