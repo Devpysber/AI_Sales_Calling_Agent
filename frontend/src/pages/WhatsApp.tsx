@@ -30,8 +30,13 @@ export default function WhatsApp() {
   const status = statusQ.data?.status ?? (statusQ.isError ? 'disconnected' : 'initializing')
   const isConnected = status === 'connected'
   // Asking for a QR starts a browser on the server (~450 MB), so it only happens once someone clicks Link.
+  // 'initializing' is both the real backend status for "launching the browser" AND this line's own
+  // placeholder before statusQ's first response ever lands -- without gating on settled, that placeholder
+  // was indistinguishable from the real thing, firing the QR request on every page load before anyone
+  // clicked Link.
   const [linking, setLinking] = useState(false)
-  const waiting = linking && !isConnected || WAITING.includes(status)
+  const settled = statusQ.isSuccess || statusQ.isError
+  const waiting = linking && !isConnected || (settled && WAITING.includes(status))
 
   // Polls only while the bridge is waiting for a scan; react-query stops it on unmount.
   const qrQ = useQuery({
