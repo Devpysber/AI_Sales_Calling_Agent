@@ -116,6 +116,15 @@ def test_call_campaign_queues_audience(client, base):
     assert client.get(f"{base}/crm/campaigns/{camp['id']}").json()["status"] == "completed"
 
 
+def test_email_campaign_requires_subject_before_launch(client, base):
+    client.post(f"{base}/leads", json={"name": "Camp Email", "email": "campemail@x.test", "tags": ["nosubj"]})
+    camp = client.post(f"{base}/crm/campaigns", json={"name": "No Subject", "channel": "email",
+                                                       "segment": {"tags": ["nosubj"]}, "message": "Hi {name}"}).json()
+    res = client.post(f"{base}/crm/campaigns/{camp['id']}/run")
+    assert res.status_code == 400 and "subject" in res.json()["detail"].lower()
+    assert client.get(f"{base}/crm/campaigns/{camp['id']}").json()["status"] == "draft"
+
+
 def test_board_counts_match_per_status_with_filters(client):
     agent_id = client.post("/api/agents", json={"name": "BoardCounts", "profile": {"company_name": "BoardCounts"}}).json()["id"]
     base = f"/api/agents/{agent_id}"

@@ -148,6 +148,8 @@ def run(agent_id: int, campaign_id: int, actor: str = "admin") -> dict:
         raise ValueError("This campaign is already running.")
     if campaign["channel"] in ("email", "whatsapp") and not (campaign.get("message") or "").strip():
         raise ValueError("Write the message before launching.")
+    if campaign["channel"] == "email" and not (campaign.get("subject") or "").strip():
+        raise ValueError("Write a subject line before launching.")
     if campaign["channel"] == "whatsapp":
         from app.services.whatsapp_cloud_service import is_whatsapp_configured
         if not is_whatsapp_configured():

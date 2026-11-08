@@ -36,6 +36,16 @@ const segmentOf = (d: Draft): Segment => ({
   source: d.source.trim() || undefined,
 })
 
+function segmentSummary(s: Segment | null): string {
+  if (!s || (!s.status?.length && !s.qualification?.length && !s.tags?.length && !s.source)) return 'Everyone'
+  const parts: string[] = []
+  if (s.status?.length) parts.push(s.status.join('/'))
+  if (s.qualification?.length) parts.push(s.qualification.join('/'))
+  if (s.tags?.length) parts.push(`tags: ${s.tags.join(', ')}`)
+  if (s.source) parts.push(`source: ${s.source}`)
+  return parts.join(' · ')
+}
+
 function statsLine(c: Campaign): string | null {
   const s = c.stats
   if (!s || Object.keys(s).length === 0) return null
@@ -109,7 +119,8 @@ export default function Campaigns() {
                     <Badge tone="neutral">{CHANNEL_LABEL[c.channel] ?? c.channel}</Badge>
                     <Badge tone={c.status === 'completed' ? 'success' : c.status === 'running' ? 'brand' : 'neutral'}>{c.status}</Badge>
                   </div>
-                  <p className="mt-1 text-xs break-words text-muted">
+                  <p className="mt-1 text-xs break-words text-muted">Targets: {segmentSummary(c.segment)}</p>
+                  <p className="mt-0.5 text-xs break-words text-muted">
                     {statsLine(c) ?? 'Not launched yet'}
                     {c.started_at ? ` · started ${new Date(c.started_at).toLocaleString()}` : ` · created ${new Date(c.created_at).toLocaleString()}`}
                   </p>
