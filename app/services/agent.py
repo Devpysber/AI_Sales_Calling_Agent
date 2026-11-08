@@ -1025,7 +1025,7 @@ def build_messages(agent_id: int, history: list[dict], customer_text: str, lead:
     def render(brief_lines=None, calls_lines=None, chat_lines=None) -> str:
         system = _system_prompt(persona, lead, knowledge, agent_id, brief_lines=brief_lines, calls_lines=calls_lines,
                                 channel=channel, chat_lines=chat_lines)
-        if channel == "whatsapp":
+        if channel != "call":
             system = chat_prompt(system)
         if live_budget:
             # Only when an operator has set LIVE_PROMPT_CHAR_BUDGET, and only for a customer call: a

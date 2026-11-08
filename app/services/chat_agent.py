@@ -204,7 +204,7 @@ def respond(agent_id: int, conversation_id: int, history: list[dict], customer_t
     `history` excludes `customer_text`, same contract as agent.respond(). Returns {"reply", "end_call",
     "tools_used"} — the subset of agent.respond()'s shape whatsapp_service's call site actually reads.
     """
-    messages, _ = agent_svc.build_messages(agent_id, history, customer_text, lead, use_embeddings=True)
+    messages, _ = agent_svc.build_messages(agent_id, history, customer_text, lead, use_embeddings=True, channel=channel)
     messages[0]["content"] += "\n\n" + CHAT_GUIDANCE_BY_CHANNEL.get(channel, CHAT_GUIDANCE)
     if (agents.get_profile(agent_id) or {}).get("sales_mode", True):
         # The shared system prompt already carries the sales directive and any business sales_playbook
