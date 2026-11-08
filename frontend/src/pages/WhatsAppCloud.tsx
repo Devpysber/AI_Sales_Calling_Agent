@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ExternalLink, MessageCircle, Phone, Send, Sparkles, User, Video } from "lucide-react"
+import { ExternalLink, MessageCircle, Phone, Send, Sparkles, User } from "lucide-react"
 import { Fragment, useEffect, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton, Textarea } from "@/components/ui"
+import { useStartCall } from "@/components/LeadSheets"
 import { api } from "@/lib/api"
 import { useAgent } from "@/lib/agent"
 import { cn } from "@/lib/utils"
@@ -70,6 +71,7 @@ export default function WhatsApp() {
     onSuccess: () => { toast.success("AI resumed"); refresh() },
     onError: (e) => toast.error(e.message),
   })
+  const startCall = useStartCall()
 
   const turns = detail.data?.transcript ?? []
   useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }) }, [turns.length, activeId])
@@ -130,8 +132,13 @@ export default function WhatsApp() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    <Video className="size-[18px] text-[#54656f] dark:text-[#aebac1]" />
-                    <Phone className="size-[17px] text-[#54656f] dark:text-[#aebac1]" />
+                    {chat.lead_id && chat.lead_phone && (
+                      <button type="button" title="Call this lead" aria-label="Call this lead" disabled={startCall.isPending}
+                        onClick={() => startCall.mutate(chat.lead_id!)}
+                        className="grid size-8 place-items-center rounded-full text-[#54656f] transition hover:bg-black/5 disabled:opacity-50 dark:text-[#aebac1] dark:hover:bg-white/10">
+                        <Phone className="size-[17px]" />
+                      </button>
+                    )}
                     {chat.ai_paused && <Button onClick={() => resume.mutate()} loading={resume.isPending}>Resume AI</Button>}
                     {chat.lead_id && <Link to={path(`/leads/${chat.lead_id}`)}><Button type="button"><ExternalLink className="size-4" />Lead</Button></Link>}
                   </div>
