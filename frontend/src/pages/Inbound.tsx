@@ -16,7 +16,7 @@ import { callParty, cn, formatDuration, timeAgo } from '@/lib/utils'
 
 type ProfileResponse = { profile: AgentProfile; transfer_contacts?: { phone: string; name: string | null; source?: 'agent' | 'workspace' }[]; transfer_from_workspace?: boolean }
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
-const hourLabel = (h: number) => `${((h + 11) % 12) + 1}:00 ${h < 12 ? 'AM' : 'PM'}`
+const hourLabel = (h: number) => (h === 24 ? '12:00 AM (midnight)' : `${((h + 11) % 12) + 1}:00 ${h < 12 ? 'AM' : 'PM'}`)
 type Routing = Pick<AgentProfile, 'transfer_number' | 'team_members' | 'inbound_mode' | 'transfer_on_request' | 'after_hours_mode' | 'after_hours_message' | 'forward_fallback' | 'notify_missed_calls' | 'inbound_collect'>
 const KEYS: (keyof Routing)[] = ['transfer_number', 'team_members', 'inbound_mode', 'transfer_on_request', 'after_hours_mode', 'after_hours_message', 'forward_fallback', 'notify_missed_calls', 'inbound_collect']
 
@@ -382,7 +382,7 @@ export default function Inbound() {
                       </select>
                       <span>to</span>
                       <select value={cfg.calling_hours_end} disabled={saveHours.isPending} aria-label="Closing hour" onChange={(e) => { const end = +e.target.value; saveHours.mutate({ calling_hours_start: Math.min(cfg.calling_hours_start, end - 1), calling_hours_end: end }) }} className="min-h-10 rounded-md border border-border bg-bg px-2 py-1 text-xs text-fg disabled:opacity-50">
-                        {HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
+                        {[...HOURS.slice(1), 24].map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
                       </select>
                     </div>
                   )}
