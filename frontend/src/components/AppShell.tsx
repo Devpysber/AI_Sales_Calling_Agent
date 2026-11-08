@@ -8,6 +8,7 @@ import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate, useNavigationType, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import AlertsBell from '@/components/AlertsBell'
+import AssistantWidget from '@/components/AssistantWidget'
 import IncomingCall, { PREVIEW_EVENT } from '@/components/IncomingCall'
 import { CommandPalette, type Command } from '@/components/CommandPalette'
 import NewAgentSheet from '@/components/NewAgentSheet'
@@ -666,7 +667,7 @@ export default function AppShell({ user, role, canCreateAgent }: { user: string;
   if (agent.locked) return frame(<UnlockModal agent={agent} />)
   
   // key: remount the whole workspace on switch so no state from the previous agent survives
-  return <AgentProvider key={id} id={id} agent={agent}>{frame(<Outlet />)}</AgentProvider>
+  return <AgentProvider key={id} id={id} agent={agent}>{frame(<Outlet />)}<AssistantWidget /></AgentProvider>
 }
 
 function UnlockModal({ agent }: { agent: { id: number; name: string; persona: { company_name: string } } }) {
