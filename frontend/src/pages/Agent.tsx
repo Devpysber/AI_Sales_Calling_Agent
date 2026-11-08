@@ -266,7 +266,12 @@ function ProfileEditor({ section, draft, setDraft, data }: {
   const applyPack = useMutation({
     mutationFn: (key: string) => api<{ pack: string; enabled_tools: string[]; playbook_snippet: string }>(`${base}/industry-packs/${key}/apply`, { method: 'POST' }),
     onSuccess: (result) => {
-      setDraft((d) => (d ? { ...d, instructions: `${d.instructions ? d.instructions + '\n\n' : ''}${result.playbook_snippet}` } : d))
+      // Re-applying the same pack (or clicking Apply twice) must not duplicate the same snippet text.
+      setDraft((d) => {
+        if (!d) return d
+        if (d.instructions.includes(result.playbook_snippet)) return d
+        return { ...d, instructions: `${d.instructions ? d.instructions + '\n\n' : ''}${result.playbook_snippet}` }
+      })
       toast.success('Industry pack applied', {
         description: `Enabled ${result.enabled_tools.length} tool${result.enabled_tools.length === 1 ? '' : 's'} on the Tools tab and added playbook text below — read it through, then Save.`,
       })
