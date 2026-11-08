@@ -23,6 +23,10 @@ type Contact = {
 // Server-enforced list (app/models/crm.py DEAL_STAGES) -- must match exactly.
 const DEAL_STAGES = ['Prospecting', 'Qualified', 'Proposal', 'Negotiation', 'Won', 'Lost'] as const
 type DealStage = typeof DEAL_STAGES[number]
+// Mirrors crm_records.py's update()'s own stage -> probability mapping, which only applies when a PATCH
+// omits probability (e.g. the Kanban drag/drop). The form always sends probability, so it has to apply
+// this itself on a stage change, or dragging a card to "Won" sets 100% but editing it to "Won" doesn't.
+const STAGE_PROBABILITY: Record<DealStage, number> = { Prospecting: 10, Qualified: 30, Proposal: 50, Negotiation: 75, Won: 100, Lost: 0 }
 type Deal = {
   id: number; agent_id: number; title: string; stage: string; value: number; probability: number
   lead_id: number | null; contact_id: number | null; company_id: number | null; owner: string | null
@@ -395,7 +399,10 @@ function DealForm({ deal, companies, contacts, leads, onClose, onSaved }: {
           {customStage ? (
             <Input value={draft.stage} onChange={(e) => setDraft((d) => ({ ...d, stage: e.target.value }))} placeholder="Custom stage name" />
           ) : (
-            <Select value={draft.stage} onChange={(e) => setDraft((d) => ({ ...d, stage: e.target.value }))}>
+            <Select value={draft.stage} onChange={(e) => {
+              const stage = e.target.value as DealStage
+              setDraft((d) => ({ ...d, stage, probability: STAGE_PROBABILITY[stage] }))
+            }}>
               {DEAL_STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
             </Select>
           )}
