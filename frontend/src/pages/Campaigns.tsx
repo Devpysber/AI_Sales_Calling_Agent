@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Eye, Megaphone, Plus, RocketIcon, RefreshCw, Trash2 } from 'lucide-react'
+import { AlertTriangle, Copy, Eye, Mail, Megaphone, MessageCircle, Phone, Plus, RocketIcon, RefreshCw, Trash2, TrendingUp, Users } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Badge, Button, Card, Dialog, EmptyState, Field, Input, Select, Sheet, Skeleton, Textarea, useConfirm } from '@/components/ui'
+import { Badge, Button, Card, Dialog, EmptyState, Field, Input, Meter, Select, Sheet, Skeleton, StatTile, Tabs, Textarea, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
 import { useAgent } from '@/lib/agent'
 import { LEAD_STATUSES, QUALIFICATIONS } from '@/lib/utils'
@@ -19,6 +19,7 @@ type PreviewResult = { count: number; sample: { id: number; name: string; phone:
 type Draft = { name: string; channel: Campaign['channel']; status: string[]; qualification: string[]; tags: string; source: string; subject: string; message: string }
 
 const CHANNEL_LABEL: Record<string, string> = { call: 'Call', email: 'Email', whatsapp: 'WhatsApp' }
+const CHANNEL_ICON: Record<string, typeof Phone> = { call: Phone, email: Mail, whatsapp: MessageCircle }
 
 const emptyDraft = (): Draft => ({ name: '', channel: 'whatsapp', status: [], qualification: [], tags: '', source: '', subject: '', message: '' })
 
@@ -80,6 +81,7 @@ export default function Campaigns() {
   })
   const [editing, setEditing] = useState<Campaign | 'new' | null>(null)
   const [previewing, setPreviewing] = useState<{ segment: Segment; channel: Campaign['channel'] } | null>(null)
+  const [tab, setTab] = useState<'all' | 'draft' | 'running' | 'completed'>('all')
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['campaigns', base] })
   const remove = useMutation({
@@ -90,6 +92,12 @@ export default function Campaigns() {
     mutationFn: (id: number) => api(`${base}/crm/campaigns/${id}/run`, { method: 'POST' }),
     onSuccess: () => { toast.success('Campaign launched'); invalidate() }, onError: (e: Error) => toast.error(e.message),
   })
+  const duplicate = useMutation({
+    mutationFn: (c: Campaign) => api<Campaign>(`${base}/crm/campaigns`, { method: 'POST', json: {
+      name: `${c.name} (copy)`, channel: c.channel, segment: c.segment ?? {}, subject: c.subject ?? undefined, message: c.message ?? undefined,
+    } }),
+    onSuccess: () => { toast.success('Campaign duplicated'); invalidate() }, onError: (e: Error) => toast.error(e.message),
+  })
 
   if (campaignsQ.isError) {
     return <Card><EmptyState icon={<AlertTriangle />} title="Couldn't load campaigns" description={campaignsQ.error?.message}
@@ -98,55 +106,104 @@ export default function Campaigns() {
   if (!campaignsQ.data) return <div className="grid gap-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-24" />)}</div>
 
   const campaigns = campaignsQ.data
+  const totalSent = campaigns.reduce((sum, c) => sum + (c.stats?.sent ?? 0), 0)
+  const totalFailed = campaigns.reduce((sum, c) => sum + (c.stats?.failed ?? 0), 0)
+  const activeNow = campaigns.filter((c) => c.status === 'running').length
+  const successRate = totalSent + totalFailed > 0 ? (totalSent / (totalSent + totalFailed)) * 100 : null
+  const successTone = successRate === null ? 'neutral' : successRate >= 80 ? 'success' : successRate >= 40 ? 'warning' : 'danger'
+  const tabCounts = {
+    all: campaigns.length,
+    draft: campaigns.filter((c) => c.status === 'draft').length,
+    running: activeNow,
+    completed: campaigns.filter((c) => c.status === 'completed').length,
+  }
+  const filtered = tab === 'all' ? campaigns : campaigns.filter((c) => c.status === tab)
 
   return (
     <>
+      {campaigns.length > 0 && (
+        <div className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <StatTile label="Campaigns" count={campaigns.length} icon={<Megaphone />} tone="neutral" />
+          <StatTile label="Active now" count={activeNow} icon={<RocketIcon />} tone="brand" />
+          <StatTile label="Leads reached" count={totalSent} icon={<Users />} tone="success" />
+          <StatTile label="Success rate" value={successRate === null ? '—' : `${successRate.toFixed(1)}%`} icon={<TrendingUp />} tone={successTone} />
+        </div>
+      )}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <p className="min-w-0 text-sm text-muted">Reach a segment of leads in bulk by call, email or WhatsApp.</p>
         <Button variant="primary" onClick={() => setEditing('new')}><Plus />New campaign</Button>
       </div>
+      {campaigns.length > 0 && (
+        <div className="mb-3">
+          <Tabs value={tab} onChange={setTab} items={[
+            { value: 'all', label: `All (${tabCounts.all})` },
+            { value: 'draft', label: `Draft (${tabCounts.draft})` },
+            { value: 'running', label: `Running (${tabCounts.running})` },
+            { value: 'completed', label: `Completed (${tabCounts.completed})` },
+          ]} />
+        </div>
+      )}
       {campaigns.length === 0 ? (
         <Card><EmptyState icon={<Megaphone />} title="No campaigns yet" description="Build a segment and blast it by call, email or WhatsApp."
           action={<Button variant="primary" onClick={() => setEditing('new')}><Plus />New campaign</Button>} /></Card>
+      ) : filtered.length === 0 ? (
+        <Card><EmptyState icon={<Megaphone />} title="No campaigns match this filter" description="Try a different status tab." /></Card>
       ) : (
         <div className="grid gap-3">
-          {campaigns.map((c) => (
-            <Card key={c.id} className="flex flex-col gap-3 p-4">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="font-bold break-words">{c.name}</h3>
-                    <Badge tone="neutral">{CHANNEL_LABEL[c.channel] ?? c.channel}</Badge>
-                    <Badge tone={c.status === 'completed' ? 'success' : c.status === 'running' ? 'brand' : 'neutral'}>{c.status}</Badge>
+          {filtered.map((c) => {
+            const ChannelIcon = CHANNEL_ICON[c.channel]
+            const sent = c.stats?.sent ?? 0, failed = c.stats?.failed ?? 0, skipped = c.stats?.skipped ?? 0
+            const successPct = sent + failed > 0 ? (sent / (sent + failed)) * 100 : null
+            return (
+              <Card key={c.id} className="flex flex-col gap-3 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-bold break-words">{c.name}</h3>
+                      {ChannelIcon && <ChannelIcon className="size-3.5 text-muted" />}
+                      <Badge tone="neutral">{CHANNEL_LABEL[c.channel] ?? c.channel}</Badge>
+                      <Badge tone={c.status === 'completed' ? 'success' : c.status === 'running' ? 'brand' : 'neutral'}>{c.status}</Badge>
+                    </div>
+                    <p className="mt-1 text-xs break-words text-muted">Targets: {segmentSummary(c.segment)}</p>
+                    {c.stats?.targeted ? (
+                      <div className="mt-1.5 max-w-xs">
+                        <Meter value={(sent + failed + skipped) / c.stats.targeted * 100} tone={c.status === 'completed' ? 'success' : 'brand'} />
+                        <p className="mt-1 text-xs break-words text-muted">
+                          {sent} sent · {failed} failed · {skipped} skipped
+                          {successPct !== null && ` (${successPct.toFixed(1)}% success)`}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="mt-0.5 text-xs break-words text-muted">{statsLine(c) ?? 'Not launched yet'}</p>
+                    )}
+                    <p className="mt-0.5 text-xs break-words text-muted">
+                      {c.started_at ? `Started ${new Date(c.started_at).toLocaleString()}` : `Created ${new Date(c.created_at).toLocaleString()}`}
+                    </p>
                   </div>
-                  <p className="mt-1 text-xs break-words text-muted">Targets: {segmentSummary(c.segment)}</p>
-                  <p className="mt-0.5 text-xs break-words text-muted">
-                    {statsLine(c) ?? 'Not launched yet'}
-                    {c.started_at ? ` · started ${new Date(c.started_at).toLocaleString()}` : ` · created ${new Date(c.created_at).toLocaleString()}`}
-                  </p>
                 </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button size="sm" onClick={() => setPreviewing({ segment: c.segment ?? {}, channel: c.channel })}><Eye />Preview audience</Button>
-                {c.status === 'draft' && <Button size="sm" onClick={() => setEditing(c)}>Edit</Button>}
-                {c.status === 'draft' && (
-                  <Button size="sm" variant="primary" loading={run.isPending} onClick={async () => {
-                    const preview = await api<PreviewResult>(`${base}/crm/campaigns/preview`, { method: 'POST', json: { segment: c.segment ?? {}, channel: c.channel } })
-                    if (await confirm({
-                      title: 'Launch this campaign?',
-                      description: `This will reach ${preview.count} lead(s) by ${CHANNEL_LABEL[c.channel] ?? c.channel}. This can't be undone.`,
-                      confirmLabel: 'Launch', danger: false,
-                    })) run.mutate(c.id)
-                  }}><RocketIcon />Launch campaign</Button>
-                )}
-                {c.status === 'draft' && (
-                  <Button size="sm" variant="ghost" onClick={async () => {
-                    if (await confirm({ title: 'Delete this campaign?', description: `"${c.name}" will be removed.`, confirmLabel: 'Delete', danger: true })) remove.mutate(c.id)
-                  }}><Trash2 />Delete</Button>
-                )}
-              </div>
-            </Card>
-          ))}
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" onClick={() => setPreviewing({ segment: c.segment ?? {}, channel: c.channel })}><Eye />Preview audience</Button>
+                  {c.status === 'draft' && <Button size="sm" onClick={() => setEditing(c)}>Edit</Button>}
+                  {c.status === 'draft' && (
+                    <Button size="sm" variant="primary" loading={run.isPending} onClick={async () => {
+                      const preview = await api<PreviewResult>(`${base}/crm/campaigns/preview`, { method: 'POST', json: { segment: c.segment ?? {}, channel: c.channel } })
+                      if (await confirm({
+                        title: 'Launch this campaign?',
+                        description: `This will reach ${preview.count} lead(s) by ${CHANNEL_LABEL[c.channel] ?? c.channel}. This can't be undone.`,
+                        confirmLabel: 'Launch', danger: false,
+                      })) run.mutate(c.id)
+                    }}><RocketIcon />Launch campaign</Button>
+                  )}
+                  <Button size="sm" loading={duplicate.isPending} onClick={() => duplicate.mutate(c)}><Copy />Duplicate</Button>
+                  {c.status === 'draft' && (
+                    <Button size="sm" variant="ghost" onClick={async () => {
+                      if (await confirm({ title: 'Delete this campaign?', description: `"${c.name}" will be removed.`, confirmLabel: 'Delete', danger: true })) remove.mutate(c.id)
+                    }}><Trash2 />Delete</Button>
+                  )}
+                </div>
+              </Card>
+            )
+          })}
         </div>
       )}
 
@@ -163,6 +220,11 @@ function CampaignForm({ campaign, onClose, onSaved, onPreview }: {
 }) {
   const { base } = useAgent()
   const [draft, setDraft] = useState<Draft>(() => campaign ? toDraft(campaign) : emptyDraft())
+
+  const livePreviewQ = useQuery({
+    queryKey: ['campaigns-live-preview', JSON.stringify(segmentOf(draft)), draft.channel],
+    queryFn: () => api<PreviewResult>(`${base}/crm/campaigns/preview`, { method: 'POST', json: { segment: segmentOf(draft), channel: draft.channel } }),
+  })
 
   const save = useMutation({
     mutationFn: () => {
@@ -199,7 +261,10 @@ function CampaignForm({ campaign, onClose, onSaved, onPreview }: {
         </Field>
 
         <div>
-          <h4 className="mb-2 text-sm font-semibold">Audience segment</h4>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <h4 className="text-sm font-semibold">Audience segment</h4>
+            <Badge tone="brand">{livePreviewQ.isLoading ? '…' : livePreviewQ.data?.count ?? '…'} lead(s) match</Badge>
+          </div>
           <div className="grid gap-3">
             <Field label="Stage" hint="Leave empty to include every stage">
               <Chips options={LEAD_STATUSES} value={draft.status} onChange={(v) => setDraft((d) => ({ ...d, status: v }))} />
