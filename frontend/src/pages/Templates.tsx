@@ -20,6 +20,7 @@ interface WaButton {
   text: string
   url?: string
   phone_number?: string
+  example?: string[]
 }
 
 interface WaComponent {
@@ -27,6 +28,7 @@ interface WaComponent {
   format?: HeaderFormat
   text?: string
   buttons?: WaButton[]
+  example?: { header_text?: string[]; body_text?: string[][] }
 }
 
 interface MessageTemplate {
@@ -92,23 +94,37 @@ function templateToForm(t: MessageTemplate): typeof emptyForm {
     category: (t.category as typeof emptyForm.category) ?? "MARKETING",
     headerFormat: (header?.format ?? "NONE") as HeaderFormat,
     headerText: header?.format === "TEXT" ? (header.text ?? "") : "",
-    headerExample: "",
+    headerExample: header?.example?.header_text?.[0] ?? "",
     bodyText: body?.text ?? "",
-    bodyExamples: [],
+    bodyExamples: body?.example?.body_text?.[0] ?? [],
     footerText: footer?.text ?? "",
     buttons: buttonsComp?.buttons ?? [],
   }
 }
 
+/** Meta rejects template creation outright if a {{n}} variable has no "example" value to show reviewers
+ * — falls back to a generic placeholder so a template is never blocked just because the builder's
+ * optional example fields were left blank. */
+const placeholder = (v: string | undefined, i: number) => v?.trim() || `Example${i + 1}`
+
 function buildComponents(form: typeof emptyForm): WaComponent[] {
   const comps: WaComponent[] = []
   if (form.headerFormat !== "NONE") {
-    if (form.headerFormat === "TEXT") comps.push({ type: "HEADER", format: "TEXT", text: form.headerText.trim() })
-    else comps.push({ type: "HEADER", format: form.headerFormat })
+    if (form.headerFormat === "TEXT") {
+      const header: WaComponent = { type: "HEADER", format: "TEXT", text: form.headerText.trim() }
+      if (varCount(form.headerText) > 0) header.example = { header_text: [placeholder(form.headerExample, 0)] }
+      comps.push(header)
+    } else comps.push({ type: "HEADER", format: form.headerFormat })
   }
-  comps.push({ type: "BODY", text: form.bodyText })
+  const body: WaComponent = { type: "BODY", text: form.bodyText }
+  const bodyN = varCount(form.bodyText)
+  if (bodyN > 0) body.example = { body_text: [Array.from({ length: bodyN }, (_, i) => placeholder(form.bodyExamples[i], i))] }
+  comps.push(body)
   if (form.footerText.trim()) comps.push({ type: "FOOTER", text: form.footerText.trim() })
-  if (form.buttons.length) comps.push({ type: "BUTTONS", buttons: form.buttons })
+  if (form.buttons.length) {
+    const buttons = form.buttons.map((b) => (b.type === "URL" && varCount(b.url) > 0) ? { ...b, example: [placeholder(undefined, 0)] } : b)
+    comps.push({ type: "BUTTONS", buttons })
+  }
   return comps
 }
 
