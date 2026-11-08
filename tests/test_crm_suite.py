@@ -125,6 +125,37 @@ def test_email_campaign_requires_subject_before_launch(client, base):
     assert client.get(f"{base}/crm/campaigns/{camp['id']}").json()["status"] == "draft"
 
 
+def test_campaign_cancel_stops_before_next_lead(client, base):
+    from app.core.database import get_db
+    from app.models.crm import Campaign
+    from app.models.lead import Lead
+    from app.services import campaigns as campaigns_mod
+
+    agent_id = int(base.rsplit("/", 1)[1])
+    client.post(f"{base}/leads", json={"name": "CancelMe", "phone": "+919844446000", "tags": ["cancel-test"]})
+    camp = client.post(f"{base}/crm/campaigns", json={"name": "ToCancel", "channel": "whatsapp",
+                                                        "segment": {"tags": ["cancel-test"]}, "message": "hi {name}"}).json()
+
+    res = client.post(f"{base}/crm/campaigns/{camp['id']}/cancel")
+    assert res.status_code == 400  # a draft has nothing to cancel
+
+    with get_db() as db:
+        db.get(Campaign, camp["id"]).status = "running"
+    res = client.post(f"{base}/crm/campaigns/{camp['id']}/cancel")
+    assert res.status_code == 200
+    with get_db() as db:
+        assert db.get(Campaign, camp["id"]).status == "cancelling"
+
+    with get_db() as db:
+        lead_row = db.query(Lead).filter(Lead.agent_id == agent_id, Lead.phone == "+919844446000").first()
+    campaigns_mod._save(camp["id"], stats_json='{"targeted": 1, "sent": 0, "failed": 0, "skipped": 0}')
+    campaigns_mod._send({"id": camp["id"], "agent_id": agent_id, "name": "ToCancel", "channel": "whatsapp",
+                         "message": "hi {name}"}, [lead_row])
+    final = client.get(f"{base}/crm/campaigns/{camp['id']}").json()
+    assert final["status"] == "cancelled"
+    assert final["stats"]["sent"] == 0
+
+
 def test_board_counts_match_per_status_with_filters(client):
     agent_id = client.post("/api/agents", json={"name": "BoardCounts", "profile": {"company_name": "BoardCounts"}}).json()["id"]
     base = f"/api/agents/{agent_id}"

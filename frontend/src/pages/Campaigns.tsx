@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Copy, Eye, Mail, Megaphone, MessageCircle, Phone, Plus, RocketIcon, RefreshCw, Trash2, TrendingUp, Users } from 'lucide-react'
+import { AlertTriangle, Copy, Eye, Mail, Megaphone, MessageCircle, Phone, Plus, RocketIcon, RefreshCw, StopCircle, Trash2, TrendingUp, Users } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Badge, Button, Card, Dialog, EmptyState, Field, Input, Meter, Select, Sheet, Skeleton, StatTile, Tabs, Textarea, useConfirm } from '@/components/ui'
@@ -11,7 +11,7 @@ type Segment = { status?: string[]; qualification?: string[]; tags?: string[]; s
 type Stats = { targeted?: number; sent?: number; skipped?: number; failed?: number }
 type Campaign = {
   id: number; agent_id: number; name: string; channel: 'call' | 'email' | 'whatsapp'
-  status: 'draft' | 'running' | 'completed'; segment: Segment | null
+  status: 'draft' | 'running' | 'cancelling' | 'cancelled' | 'completed'; segment: Segment | null
   subject: string | null; message: string | null; stats: Stats | null
   started_at: string | null; created_at: string
 }
@@ -77,7 +77,7 @@ export default function Campaigns() {
   const campaignsQ = useQuery({
     queryKey: ['campaigns', base],
     queryFn: () => api<Campaign[]>(`${base}/crm/campaigns`),
-    refetchInterval: (q) => (q.state.data ?? []).some((c) => c.status === 'running') ? 3000 : false,
+    refetchInterval: (q) => (q.state.data ?? []).some((c) => c.status === 'running' || c.status === 'cancelling') ? 3000 : false,
   })
   const [editing, setEditing] = useState<Campaign | 'new' | null>(null)
   const [previewing, setPreviewing] = useState<{ segment: Segment; channel: Campaign['channel'] } | null>(null)
@@ -98,6 +98,10 @@ export default function Campaigns() {
     } }),
     onSuccess: () => { toast.success('Campaign duplicated'); invalidate() }, onError: (e: Error) => toast.error(e.message),
   })
+  const cancel = useMutation({
+    mutationFn: (id: number) => api(`${base}/crm/campaigns/${id}/cancel`, { method: 'POST' }),
+    onSuccess: () => { toast.success('Stopping the campaign'); invalidate() }, onError: (e: Error) => toast.error(e.message),
+  })
 
   if (campaignsQ.isError) {
     return <Card><EmptyState icon={<AlertTriangle />} title="Couldn't load campaigns" description={campaignsQ.error?.message}
@@ -108,16 +112,19 @@ export default function Campaigns() {
   const campaigns = campaignsQ.data
   const totalSent = campaigns.reduce((sum, c) => sum + (c.stats?.sent ?? 0), 0)
   const totalFailed = campaigns.reduce((sum, c) => sum + (c.stats?.failed ?? 0), 0)
-  const activeNow = campaigns.filter((c) => c.status === 'running').length
+  const activeNow = campaigns.filter((c) => c.status === 'running' || c.status === 'cancelling').length
   const successRate = totalSent + totalFailed > 0 ? (totalSent / (totalSent + totalFailed)) * 100 : null
   const successTone = successRate === null ? 'neutral' : successRate >= 80 ? 'success' : successRate >= 40 ? 'warning' : 'danger'
   const tabCounts = {
     all: campaigns.length,
     draft: campaigns.filter((c) => c.status === 'draft').length,
     running: activeNow,
-    completed: campaigns.filter((c) => c.status === 'completed').length,
+    completed: campaigns.filter((c) => c.status === 'completed' || c.status === 'cancelled').length,
   }
-  const filtered = tab === 'all' ? campaigns : campaigns.filter((c) => c.status === tab)
+  const filtered = tab === 'all' ? campaigns
+    : tab === 'running' ? campaigns.filter((c) => c.status === 'running' || c.status === 'cancelling')
+    : tab === 'completed' ? campaigns.filter((c) => c.status === 'completed' || c.status === 'cancelled')
+    : campaigns.filter((c) => c.status === tab)
 
   return (
     <>
@@ -162,7 +169,9 @@ export default function Campaigns() {
                       <h3 className="font-bold break-words">{c.name}</h3>
                       {ChannelIcon && <ChannelIcon className="size-3.5 text-muted" />}
                       <Badge tone="neutral">{CHANNEL_LABEL[c.channel] ?? c.channel}</Badge>
-                      <Badge tone={c.status === 'completed' ? 'success' : c.status === 'running' ? 'brand' : 'neutral'}>{c.status}</Badge>
+                      <Badge tone={c.status === 'completed' ? 'success' : c.status === 'running' ? 'brand' : c.status === 'cancelling' ? 'warning' : c.status === 'cancelled' ? 'danger' : 'neutral'}>
+                        {c.status === 'cancelling' ? 'stopping…' : c.status}
+                      </Badge>
                     </div>
                     <p className="mt-1 text-xs break-words text-muted">Targets: {segmentSummary(c.segment)}</p>
                     {c.stats?.targeted ? (
@@ -193,6 +202,11 @@ export default function Campaigns() {
                         confirmLabel: 'Launch', danger: false,
                       })) run.mutate(c.id)
                     }}><RocketIcon />Launch campaign</Button>
+                  )}
+                  {c.status === 'running' && (
+                    <Button size="sm" variant="ghost" loading={cancel.isPending} onClick={async () => {
+                      if (await confirm({ title: 'Stop this campaign?', description: `"${c.name}" will stop sending after the lead currently in progress. Already-sent messages aren't recalled.`, confirmLabel: 'Stop', danger: true })) cancel.mutate(c.id)
+                    }}><StopCircle />Stop</Button>
                   )}
                   <Button size="sm" loading={duplicate.isPending} onClick={() => duplicate.mutate(c)}><Copy />Duplicate</Button>
                   {c.status === 'draft' && (

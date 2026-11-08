@@ -117,10 +117,21 @@ def _send_whatsapp_lead(campaign: dict, lead: Lead) -> dict | None:
                                               agent_id=agent_id, lead_id=lead.id, components=send_components))
 
 
+def _is_cancelling(campaign_id: int) -> bool:
+    with get_db() as db:
+        return db.scalar(select(Campaign.status).where(Campaign.id == campaign_id)) == "cancelling"
+
+
 def _send(campaign: dict, leads: list[Lead]):
+    # run() already wrote this same initial stats_json (targeted=len(leads), the rest 0) before starting
+    # the thread that calls this, so a cancellation before the first lead still has stats to show.
     stats = {"targeted": len(leads), "sent": 0, "failed": 0, "skipped": 0}
     from app.services.notification_service import email_sent, send_email
+    cancelled = False
     for lead in leads:
+        if _is_cancelling(campaign["id"]):
+            cancelled = True
+            break
         try:
             if campaign["channel"] == "email":
                 status = send_email(lead.email, render(campaign.get("subject") or "", _ctx(lead)), render(campaign.get("message") or "", _ctx(lead)),
@@ -136,9 +147,24 @@ def _send(campaign: dict, leads: list[Lead]):
             log.warning("Campaign %s to lead %s failed: %s", campaign["id"], lead.id, e)
             stats["failed"] += 1
         _save(campaign["id"], stats_json=json.dumps(stats))
-    _save(campaign["id"], status="completed")
-    events.record("campaign.completed", f"Campaign “{campaign['name']}” finished", f"{stats['sent']} sent, {stats['failed']} failed",
-                  agent_id=campaign["agent_id"], actor="system", data=stats)
+    _save(campaign["id"], status="cancelled" if cancelled else "completed")
+    if cancelled:
+        events.record("campaign.cancelled", f"Campaign “{campaign['name']}” cancelled", f"{stats['sent']} sent before stopping",
+                      agent_id=campaign["agent_id"], actor="user", data=stats)
+    else:
+        events.record("campaign.completed", f"Campaign “{campaign['name']}” finished", f"{stats['sent']} sent, {stats['failed']} failed",
+                      agent_id=campaign["agent_id"], actor="system", data=stats)
+
+
+def cancel(agent_id: int, campaign_id: int) -> dict:
+    """Ask a running email/WhatsApp campaign's send loop to stop before its next lead. A call campaign
+    has nothing to cancel -- run() queues the whole audience and marks itself completed synchronously."""
+    from app.services.crm_records import get
+    campaign = get(agent_id, "campaigns", campaign_id)
+    if campaign["status"] != "running":
+        raise ValueError("Only a running campaign can be cancelled.")
+    _save(campaign_id, status="cancelling")
+    return {"ok": True, "message": "Stopping after the lead currently being sent to."}
 
 
 def run(agent_id: int, campaign_id: int, actor: str = "admin") -> dict:

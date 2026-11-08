@@ -106,6 +106,15 @@ def campaign_run(campaign_id: int, request: Request, agent_id: int = Depends(wor
         _fail(e)
 
 
+@router.post("/campaigns/{campaign_id}/cancel")
+def campaign_cancel(campaign_id: int, request: Request, agent_id: int = Depends(workspace)):
+    _can_write(request, "campaigns")
+    try:
+        return campaigns.cancel(agent_id, campaign_id)
+    except (LookupError, ValueError) as e:
+        _fail(e)
+
+
 class RuleTest(BaseModel):
     lead_id: int | None = None
     run: bool = False
