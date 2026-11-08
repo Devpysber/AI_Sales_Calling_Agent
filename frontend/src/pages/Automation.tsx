@@ -119,17 +119,21 @@ export default function Automation() {
     if (p) { toast.error(p); return }
     save.mutate(finalize(form), { onSuccess: (s) => setForm(s) })
   }
-  const runJob = async (job: string, calls: boolean) => {
+  const runJob = async (job: string, warn: boolean | string) => {
     if (run.isPending) return
-    if (calls && !(await confirm({ title: 'Run now?', description: 'This places real phone calls immediately, even outside calling hours.', confirmLabel: 'Run now' }))) return
+    if (warn && !(await confirm({
+      title: 'Run now?',
+      description: typeof warn === 'string' ? warn : 'This places real phone calls immediately, even outside calling hours.',
+      confirmLabel: 'Run now',
+    }))) return
     run.mutate(job)
   }
   const last = (job: string) => {
     const j = data.jobs?.[job]
     return <span className="min-w-0 break-words text-xs text-muted">{j?.at ? <>Last run {timeAgo(j.at)}{j.result ? <> · {j.result}</> : null}</> : 'Never run'}</span>
   }
-  const runBtn = (job: string, calls: boolean, label = 'Run now') => (
-    <Button size="sm" loading={run.isPending && run.variables === job} disabled={run.isPending} onClick={() => runJob(job, calls)}><Play />{label}</Button>
+  const runBtn = (job: string, warn: boolean | string, label = 'Run now') => (
+    <Button size="sm" loading={run.isPending && run.variables === job} disabled={run.isPending} onClick={() => runJob(job, warn)}><Play />{label}</Button>
   )
 
   return (
@@ -189,7 +193,7 @@ export default function Automation() {
 
         <JobCard icon={<Bot />} title="AI follow-ups" description="The AI decides whether and how to re-engage each quiet lead -- call, WhatsApp or email -- instead of always calling."
           enabled={form.ai_nurture_enabled} onToggle={(v) => toggleNow('ai_nurture_enabled', v)}
-          busy={save.isPending} footer={<>{last('ai_nurture')}{runBtn('ai_nurture', true)}</>}>
+          busy={save.isPending} footer={<>{last('ai_nurture')}{runBtn('ai_nurture', 'This may call, WhatsApp or email matching leads immediately, based on what the AI decides for each one -- a call can go out even outside calling hours.')}</>}>
           <Field label="Check every (minutes)"><Input type="number" min={15} max={1440} value={form.ai_nurture_interval_minutes} onChange={(e) => set('ai_nurture_interval_minutes', num(e.target.value, form.ai_nurture_interval_minutes))} /></Field>
           <Field label="Leads per run"><Input type="number" min={1} max={50} value={form.ai_nurture_max_per_run} onChange={(e) => set('ai_nurture_max_per_run', num(e.target.value, form.ai_nurture_max_per_run))} /></Field>
         </JobCard>
