@@ -23,17 +23,35 @@ type TestResult = { matched: boolean; actions: { type: string; ok: boolean; erro
 type ActionDraft = { type: string; params: { key: string; value: string }[] }
 type Draft = { name: string; trigger: string; conditions: Condition[]; actions: ActionDraft[] }
 
-const toActionDraft = (a: Action): ActionDraft => ({
-  type: String(a.type ?? ''),
-  params: Object.entries(a).filter(([k]) => k !== 'type').map(([key, value]) => ({ key, value: typeof value === 'string' ? value : JSON.stringify(value) })),
-})
+// The real param names each action type reads (app/services/rules.py's _run_action) — shown inline since
+// there is no "automation docs" page to point to.
+const ACTION_PARAMS: Record<string, string> = {
+  create_task: 'title, kind (todo/call/email/meeting/follow_up), priority (low/medium/high), assignee, due_in_hours',
+  create_deal: 'title, value',
+  notify_team: 'subject, body',
+  update_lead: 'any lead field to set, e.g. status, qualification, notes',
+  add_tag: 'tag',
+  send_email: 'subject, body',
+  send_whatsapp: 'text',
+  queue_call: 'no params needed',
+}
+
+// update_lead is the one action whose params the backend reads nested under "fields" ({fields: {status:
+// "Hot"}}), not flat on the action itself like every other action type -- the generic param editor only
+// ever produces flat keys, so round-trip through a "fields" object transparently for this one type.
+const toActionDraft = (a: Action): ActionDraft => {
+  const type = String(a.type ?? '')
+  const source = type === 'update_lead' && a.fields && typeof a.fields === 'object'
+    ? a.fields as Record<string, unknown> : Object.fromEntries(Object.entries(a).filter(([k]) => k !== 'type'))
+  return { type, params: Object.entries(source).map(([key, value]) => ({ key, value: typeof value === 'string' ? value : JSON.stringify(value) })) }
+}
 const fromActionDraft = (a: ActionDraft): Action => {
-  const out: Action = { type: a.type }
+  const values: Record<string, unknown> = {}
   for (const { key, value } of a.params) {
     if (!key.trim()) continue
-    out[key.trim()] = value !== '' && !Number.isNaN(Number(value)) ? Number(value) : value
+    values[key.trim()] = value !== '' && !Number.isNaN(Number(value)) ? Number(value) : value
   }
-  return out
+  return a.type === 'update_lead' ? { type: a.type, fields: values } : { type: a.type, ...values }
 }
 
 export default function AutomationRules() {
@@ -188,7 +206,7 @@ function RuleForm({ meta, rule, onClose, onSaved }: { meta: Meta; rule: Rule | n
                   </Field>
                   <Button size="icon" variant="ghost" aria-label="Remove action" onClick={() => setDraft((d) => ({ ...d, actions: d.actions.filter((_, j) => j !== i) }))}><Trash2 /></Button>
                 </div>
-                <p className="mt-1 text-xs text-muted">Extra params this action needs (e.g. title, tag, text) — see the automation docs for each action's field names.</p>
+                <p className="mt-1 text-xs text-muted">Params this action reads: {ACTION_PARAMS[a.type] ?? 'e.g. title, tag, text'}.</p>
                 <div className="mt-2 grid gap-2">
                   {a.params.map((p, pi) => (
                     <div key={pi} className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
