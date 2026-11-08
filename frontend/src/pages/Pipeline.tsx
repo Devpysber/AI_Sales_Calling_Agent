@@ -278,7 +278,12 @@ export default function Pipeline() {
                         {dragging ? 'Drop here' : filtered ? 'No matches' : 'No leads'}
                       </div>
                     )}
-                  {col && col.total > col.items.length && <p className="text-center text-[11px] text-muted">+{col.total - col.items.length} more in Leads</p>}
+                  {col && col.total > col.items.length && (
+                    <button type="button" onClick={() => navigate(path(`/leads?status=${encodeURIComponent(stage)}`))}
+                      className="text-center text-[11px] font-semibold text-muted underline-offset-2 hover:text-fg hover:underline">
+                      +{col.total - col.items.length} more in Leads
+                    </button>
+                  )}
                 </div>
               </div>
             )
