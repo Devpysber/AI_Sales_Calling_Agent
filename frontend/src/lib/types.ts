@@ -176,6 +176,9 @@ export interface AutomationSettings {
   nurture_enabled: boolean
   nurture_after_days: number
   nurture_max_attempts: number
+  ai_nurture_enabled: boolean
+  ai_nurture_interval_minutes: number
+  ai_nurture_max_per_run: number
   whatsapp_auto_reply: boolean
 }
 

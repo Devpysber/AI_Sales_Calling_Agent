@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 
 from app.core import store
 from app.core.logging import get_logger
-from app.services import agents, events
+from app.services import agents, ai_nurture, events
 from app.services.call_service import IST, CallError, CallService, _clamp_callback, within_calling_hours
 from app.services.crm_service import CRMService
 from app.services.notification_service import send_email, email_sent
@@ -164,6 +164,13 @@ def job_nurture(agent_id, cfg, force=False):
     return f"{placed} follow-up call(s) placed" + (f", {len(skipped)} skipped ({skipped[0]})" if skipped else "")
 
 
+def job_ai_nurture(agent_id, cfg, force=False):
+    """Opt-in: let the LLM decide per stale lead whether/how to re-engage (call, WhatsApp, email, skip)."""
+    if not force and not within_calling_hours(cfg):
+        return "outside calling hours"
+    return ai_nurture.run(agent_id, cfg)
+
+
 def job_meeting_reminder(agent_id, cfg, force=False):
     persona = agents.get_profile(agent_id)
     tomorrow = (datetime.now(IST) + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -204,9 +211,9 @@ def job_whatsapp_summary(agent_id, cfg, force=False):
     return whatsapp_agent.summarise_quiet_chats(agent_id)
 
 
-JOBS = {"auto_dial": job_auto_dial, "retry_calls": job_retry_calls, "callbacks": job_callbacks, "nurture": job_nurture, "queue": job_queue,
+JOBS = {"auto_dial": job_auto_dial, "retry_calls": job_retry_calls, "callbacks": job_callbacks, "nurture": job_nurture, "ai_nurture": job_ai_nurture, "queue": job_queue,
         "meeting_reminder": job_meeting_reminder, "daily_report": job_daily_report, "whatsapp_summary": job_whatsapp_summary}
-LABELS = {"auto_dial": "Auto-dial", "retry_calls": "Retry calls", "callbacks": "Callbacks", "nurture": "Follow-ups", "queue": "Call queue", "meeting_reminder": "Meeting reminders",
+LABELS = {"auto_dial": "Auto-dial", "retry_calls": "Retry calls", "callbacks": "Callbacks", "nurture": "Follow-ups", "ai_nurture": "AI follow-ups", "queue": "Call queue", "meeting_reminder": "Meeting reminders",
           "daily_report": "Daily report", "whatsapp_summary": "WhatsApp summaries"}
 
 
@@ -215,7 +222,8 @@ def _state_key(agent_id: int, job: str) -> str:
 
 
 QUIET_RESULTS = ("outside calling hours", "no pending leads", "no leads to retry", "no callbacks due",
-                 "queue empty", "all call slots busy", "nothing to do", "no leads due", "no leads to follow up", "no chats to summarise")
+                 "queue empty", "all call slots busy", "nothing to do", "no leads due", "no leads to follow up", "no chats to summarise",
+                 "no leads to review")
 
 
 def _did_nothing(result: str) -> bool:
@@ -285,6 +293,7 @@ def _due(agent_id: int, cfg: dict) -> list[str]:
     for job, enabled, minutes in (("auto_dial", "auto_dial_enabled", "auto_dial_interval_minutes"),
                                   ("retry_calls", "retry_enabled", "retry_interval_minutes"),
                                   ("nurture", "nurture_enabled", "nurture_interval_minutes"),
+                                  ("ai_nurture", "ai_nurture_enabled", "ai_nurture_interval_minutes"),
                                   ("whatsapp_summary", "whatsapp_summary_enabled", "whatsapp_summary_interval_minutes")):
         if cfg[enabled] and (not last(job) or now - last(job) >= timedelta(minutes=cfg[minutes])):
             due.append(job)

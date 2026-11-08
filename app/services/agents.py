@@ -58,6 +58,11 @@ AUTOMATION_DEFAULTS = {
     "nurture_enabled": False,
     "nurture_after_days": 3,
     "nurture_max_attempts": 2,
+    # AI nurture: let the LLM itself decide, per stale lead, whether/how to re-engage (call, WhatsApp,
+    # email, or skip) -- opt-in and separate from the fixed-heuristic "nurture" job above.
+    "ai_nurture_enabled": False,
+    "ai_nurture_interval_minutes": 180,
+    "ai_nurture_max_per_run": 10,
 }
 
 LANGUAGE_CODES = ("en-IN", "hi-IN", "bn-IN", "ta-IN", "te-IN", "kn-IN", "ml-IN", "mr-IN", "gu-IN", "pa-IN", "od-IN")
@@ -720,6 +725,8 @@ AUTOMATION_LIMITS = {
     "speed_to_lead_max_seconds": ('Speed to lead "at most"', 0, 14400),
     "nurture_after_days": ("Call again after (days)", 1, 60),
     "nurture_max_attempts": ("Max follow-ups per lead", 1, 10),
+    "ai_nurture_interval_minutes": ("Check every (minutes)", 15, 1440),
+    "ai_nurture_max_per_run": ("Leads per run", 1, 50),
 }
 
 

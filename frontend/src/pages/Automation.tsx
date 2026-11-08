@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, CalendarClock, Copy, Globe, HeartHandshake, Mail, PhoneForwarded, Play, RefreshCw, RotateCcw, Save, ShieldCheck, Zap } from 'lucide-react'
+import { AlertTriangle, Bot, CalendarClock, Copy, Globe, HeartHandshake, Mail, PhoneForwarded, Play, RefreshCw, RotateCcw, Save, ShieldCheck, Zap } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { Badge, Button, Card, EmptyState, Field, Input, PageHeader, Select, Skeleton, Switch, Tabs, useConfirm } from '@/components/ui'
@@ -37,6 +37,8 @@ const LIMITS: Record<NumKey, [label: string, min: number, max: number]> = {
   speed_to_lead_max_seconds: ['Speed to lead "at most"', 0, 14400],
   nurture_after_days: ['Call again after (days)', 1, 60],
   nurture_max_attempts: ['Max follow-ups per lead', 1, 10],
+  ai_nurture_interval_minutes: ['Check every (minutes)', 15, 1440],
+  ai_nurture_max_per_run: ['Leads per run', 1, 50],
 }
 
 /** Things Save should refuse rather than send to the scheduler. */
@@ -103,7 +105,7 @@ export default function Automation() {
   const dirty = JSON.stringify(form) !== JSON.stringify(data.settings)
   const problem = dirty ? validate(form) : null
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setForm((f) => (f ? { ...f, [k]: v } : f))
-  const toggleNow = (k: 'auto_dial_enabled' | 'retry_enabled' | 'meeting_reminder_enabled' | 'daily_report_enabled' | 'speed_to_lead_enabled' | 'nurture_enabled', v: boolean) => {
+  const toggleNow = (k: 'auto_dial_enabled' | 'retry_enabled' | 'meeting_reminder_enabled' | 'daily_report_enabled' | 'speed_to_lead_enabled' | 'nurture_enabled' | 'ai_nurture_enabled', v: boolean) => {
     if (save.isPending) return
     // Persist only the switch on top of the saved settings; the (possibly invalid) draft stays local until Save.
     setForm((f) => (f ? { ...f, [k]: v } : f))
@@ -148,6 +150,7 @@ export default function Automation() {
             ['Daily report', form.daily_report_enabled, form.daily_report_enabled ? `At ${hourLabel(Number(form.daily_report_hour))}` : 'Off', 'daily_report'],
             ['Speed to lead', form.speed_to_lead_enabled, form.speed_to_lead_enabled ? `Calls ${minutes(form.speed_to_lead_min_seconds)}–${minutes(form.speed_to_lead_max_seconds)} min after the form` : 'Off', 'callbacks'],
             ['Follow-ups', form.nurture_enabled, form.nurture_enabled ? `After ${fmt(form.nurture_after_days)} days · ${fmt(form.nurture_max_attempts)}×` : 'Off', 'nurture'],
+            ['AI follow-ups', form.ai_nurture_enabled, form.ai_nurture_enabled ? `Every ${fmt(form.ai_nurture_interval_minutes)} min · ${fmt(form.ai_nurture_max_per_run)}/run` : 'Off', 'ai_nurture'],
           ] as const).map(([label, on, detail, job]) => (
             <div key={label} className={cn('glint relative overflow-hidden rounded-2xl border bg-surface p-4 shadow-card transition duration-300 hover:-translate-y-0.5 hover:shadow-pop', on ? 'border-success/30' : 'border-border')}>
               {/* A running job has a light travelling along its top edge; an idle one is still. */}
@@ -182,6 +185,13 @@ export default function Automation() {
           busy={save.isPending} footer={<>{last('nurture')}{runBtn('nurture', true)}</>}>
           <Field label="Call again after (days)"><Input type="number" min={1} max={60} value={form.nurture_after_days} onChange={(e) => set('nurture_after_days', num(e.target.value, form.nurture_after_days))} /></Field>
           <Field label="Max follow-ups per lead"><Input type="number" min={1} max={10} value={form.nurture_max_attempts} onChange={(e) => set('nurture_max_attempts', num(e.target.value, form.nurture_max_attempts))} /></Field>
+        </JobCard>
+
+        <JobCard icon={<Bot />} title="AI follow-ups" description="The AI decides whether and how to re-engage each quiet lead -- call, WhatsApp or email -- instead of always calling."
+          enabled={form.ai_nurture_enabled} onToggle={(v) => toggleNow('ai_nurture_enabled', v)}
+          busy={save.isPending} footer={<>{last('ai_nurture')}{runBtn('ai_nurture', true)}</>}>
+          <Field label="Check every (minutes)"><Input type="number" min={15} max={1440} value={form.ai_nurture_interval_minutes} onChange={(e) => set('ai_nurture_interval_minutes', num(e.target.value, form.ai_nurture_interval_minutes))} /></Field>
+          <Field label="Leads per run"><Input type="number" min={1} max={50} value={form.ai_nurture_max_per_run} onChange={(e) => set('ai_nurture_max_per_run', num(e.target.value, form.ai_nurture_max_per_run))} /></Field>
         </JobCard>
 
         <JobCard icon={<RefreshCw />} title="Retry unanswered calls" description="Re-dials leads whose last call was Busy, No Answer or Failed."
