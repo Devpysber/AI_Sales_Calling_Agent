@@ -51,7 +51,9 @@ def audience(agent_id: int, segment: dict | None, channel: str) -> list[Lead]:
     if channel == "whatsapp":
         from app.services.whatsapp_service import is_opted_out
         return [l for l in leads if l.phone and not is_opted_out(l.to_dict())]
-    return leads
+    # "call": run()'s call branch only queues leads with a phone, so the preview must agree -- it
+    # used to count phoneless leads as reachable, then silently report them "skipped" after launch.
+    return [l for l in leads if l.phone]
 
 
 def preview(agent_id: int, segment: dict | None, channel: str) -> dict:

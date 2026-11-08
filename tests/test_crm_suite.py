@@ -116,6 +116,13 @@ def test_call_campaign_queues_audience(client, base):
     assert client.get(f"{base}/crm/campaigns/{camp['id']}").json()["status"] == "completed"
 
 
+def test_call_campaign_preview_excludes_leads_with_no_phone(client, base):
+    client.post(f"{base}/leads", json={"name": "HasPhone", "phone": "+919844447000", "tags": ["call-preview"]})
+    client.post(f"{base}/leads", json={"name": "NoPhone", "email": "nophone@x.test", "tags": ["call-preview"]})
+    preview = client.post(f"{base}/crm/campaigns/preview", json={"segment": {"tags": ["call-preview"]}, "channel": "call"}).json()
+    assert preview["count"] == 1  # matches run()'s own phone filter, so the preview promises only what launch can deliver
+
+
 def test_email_campaign_requires_subject_before_launch(client, base):
     client.post(f"{base}/leads", json={"name": "Camp Email", "email": "campemail@x.test", "tags": ["nosubj"]})
     camp = client.post(f"{base}/crm/campaigns", json={"name": "No Subject", "channel": "email",
