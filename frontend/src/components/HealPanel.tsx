@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, CircleAlert, Copy, ExternalLink, Eye, EyeOff, HeartPulse, RefreshCw, Wrench } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Badge, Button, Card, CardHeader, EmptyState, Input, Textarea } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, EmptyState, Input, Textarea, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -89,6 +89,7 @@ function IssueRow({ issue, onHeal, onDismiss, healingId, dismissingId }: {
 
 export default function HealPanel() {
   const qc = useQueryClient()
+  const confirm = useConfirm()
   const [healingAll, setHealingAll] = useState(false)
   const [healingId, setHealingId] = useState<string | null>(null)
   const [dismissingId, setDismissingId] = useState<string | null>(null)
@@ -179,6 +180,11 @@ export default function HealPanel() {
   }
 
   const rotateToken = async () => {
+    if (!(await confirm({
+      title: 'Rotate the heal export token?',
+      description: 'The current token stops working immediately. The daily cloud fix agent will fail to read escalated issues until its routine is updated with the new one.',
+      confirmLabel: 'Rotate', danger: true,
+    }))) return
     setRotating(true)
     try {
       await api<{ token: string; export_url: string }>('/api/system/issues/token', { params: { rotate: true } })
