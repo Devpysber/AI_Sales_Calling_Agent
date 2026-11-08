@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Copy, Eye, Mail, Megaphone, MessageCircle, Phone, Plus, RocketIcon, RefreshCw, StopCircle, Trash2, TrendingUp, Users } from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, Dialog, EmptyState, Field, Input, Meter, Select, Sheet, Skeleton, StatTile, Tabs, Textarea, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
@@ -232,13 +233,19 @@ function CampaignForm({ campaign, onClose, onSaved, onPreview }: {
   campaign: Campaign | null; onClose: () => void; onSaved: () => void
   onPreview: (segment: Segment, channel: Campaign['channel']) => void
 }) {
-  const { base } = useAgent()
+  const { base, path } = useAgent()
   const [draft, setDraft] = useState<Draft>(() => campaign ? toDraft(campaign) : emptyDraft())
 
   const livePreviewQ = useQuery({
     queryKey: ['campaigns-live-preview', JSON.stringify(segmentOf(draft)), draft.channel],
     queryFn: () => api<PreviewResult>(`${base}/crm/campaigns/preview`, { method: 'POST', json: { segment: segmentOf(draft), channel: draft.channel } }),
   })
+  const templatesQ = useQuery({
+    queryKey: ['whatsapp-templates', base],
+    queryFn: () => api<{ is_meta_approved: boolean }[]>(`${base}/whatsapp/templates`),
+    enabled: draft.channel === 'whatsapp',
+  })
+  const hasApprovedTemplate = (templatesQ.data ?? []).some((t) => t.is_meta_approved)
 
   const save = useMutation({
     mutationFn: () => {
@@ -297,6 +304,12 @@ function CampaignForm({ campaign, onClose, onSaved, onPreview }: {
 
         {draft.channel === 'email' && (
           <Field label="Subject"><Input value={draft.subject} onChange={(e) => setDraft((d) => ({ ...d, subject: e.target.value }))} placeholder="e.g. We miss you, {name}!" /></Field>
+        )}
+        {draft.channel === 'whatsapp' && !templatesQ.isLoading && !hasApprovedTemplate && (
+          <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm text-warning">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            <span>No approved WhatsApp template yet. Leads outside the 24h reply window will be <strong>skipped</strong>, not sent — <Link to={path('/templates')} className="underline">create and submit one for approval</Link> first.</span>
+          </div>
         )}
         {(draft.channel === 'email' || draft.channel === 'whatsapp') && (
           <Field label="Message" hint={draft.channel === 'whatsapp'
