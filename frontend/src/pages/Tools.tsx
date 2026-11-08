@@ -274,6 +274,18 @@ export default function Tools() {
                   {r.duration_ms != null && <span>{r.duration_ms}ms</span>}
                 </div>
                 {r.error && <p className="mt-1 text-xs text-danger">{r.error}</p>}
+                {r.arguments && Object.keys(r.arguments).length > 0 && (
+                  <details className="mt-1.5">
+                    <summary className="cursor-pointer text-xs font-semibold text-muted">Arguments</summary>
+                    <pre className="mt-1 max-h-32 overflow-auto rounded-lg bg-surface-2 p-2 text-[11px]">{JSON.stringify(r.arguments, null, 2)}</pre>
+                  </details>
+                )}
+                {r.result && (
+                  <details className="mt-1.5">
+                    <summary className="cursor-pointer text-xs font-semibold text-muted">Result</summary>
+                    <pre className="mt-1 max-h-32 overflow-auto rounded-lg bg-surface-2 p-2 text-[11px] whitespace-pre-wrap">{r.result}</pre>
+                  </details>
+                )}
               </div>
             ))}
           </div>
