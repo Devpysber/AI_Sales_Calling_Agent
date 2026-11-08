@@ -83,11 +83,13 @@ function allFieldNames(screens: ScreenDef[]): string[] {
 
 /** Build Meta's real Flow `screens` array from the builder's state. */
 function buildScreens(screens: ScreenDef[]): Record<string, unknown>[] {
-  const names = allFieldNames(screens)
   return screens.map((screen, i) => {
+    // Only fields collected on this screen or an earlier one exist in `form.*` by the time this
+    // screen's footer fires -- a field defined on a later screen has no value to pass forward yet.
+    const namesSoFar = allFieldNames(screens.slice(0, i + 1))
     const children = screen.fields.map((f) => {
       if (f.type === "Footer") {
-        const payload = Object.fromEntries(names.map((n) => [n, `\${form.${n}}`]))
+        const payload = Object.fromEntries(namesSoFar.map((n) => [n, `\${form.${n}}`]))
         const next = screens[i + 1]
         return {
           type: "Footer", label: f.text || (screen.terminal ? "Done" : "Continue"),
