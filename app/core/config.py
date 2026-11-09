@@ -152,6 +152,7 @@ class Settings(BaseSettings):
     whatsapp_token: str = Field("", alias="WHATSAPP_TOKEN")
     whatsapp_phone_number_id: str = Field("", alias="WHATSAPP_PHONE_NUMBER_ID")
     whatsapp_business_account_id: str = Field("", alias="WHATSAPP_BUSINESS_ACCOUNT_ID")
+    whatsapp_app_id: str = Field("", alias="WHATSAPP_APP_ID")
     whatsapp_verify_token: str = Field("", alias="WHATSAPP_VERIFY_TOKEN")
     whatsapp_app_secret: str = Field("", alias="WHATSAPP_APP_SECRET")
     whatsapp_agent_id: int = Field(0, alias="WHATSAPP_AGENT_ID")  # fallback agent for inbound chats

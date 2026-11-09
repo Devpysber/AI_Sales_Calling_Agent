@@ -616,6 +616,41 @@ async def fetch_meta_template(whatsapp_template_id: str, agent_id: int | None = 
         return {"ok": False, "error": str(e)}
 
 
+async def upload_template_header_media(file_bytes: bytes, mime_type: str, agent_id: int | None = None) -> dict:
+    """Meta's Resumable Upload API: returns a one-time-use media handle for a template's
+    HEADER example.header_handle (required by Meta for any non-TEXT header format)."""
+    app_id = getattr(settings, "whatsapp_app_id", "")
+    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    if not app_id:
+        return {"ok": False, "error": "Meta App ID not configured (WHATSAPP_APP_ID)"}
+    if not whatsapp_token:
+        return {"ok": False, "error": "WhatsApp credentials not configured"}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            start = await client.post(
+                f"https://graph.facebook.com/v19.0/{app_id}/uploads",
+                params={"file_length": len(file_bytes), "file_type": mime_type, "access_token": whatsapp_token},
+            )
+            if start.status_code not in (200, 201):
+                return {"ok": False, "error": f"Meta upload session HTTP {start.status_code}: {start.text}"}
+            session_id = start.json().get("id")
+            if not session_id:
+                return {"ok": False, "error": "Meta did not return an upload session id"}
+            res = await client.post(
+                f"https://graph.facebook.com/v19.0/{session_id}",
+                headers={"Authorization": f"OAuth {whatsapp_token}", "file_offset": "0"},
+                content=file_bytes,
+            )
+            if res.status_code not in (200, 201):
+                return {"ok": False, "error": f"Meta upload HTTP {res.status_code}: {res.text}"}
+            handle = res.json().get("h")
+            if not handle:
+                return {"ok": False, "error": "Meta did not return a media handle"}
+            return {"ok": True, "handle": handle}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
 # ---------------- WhatsApp Flows (native multi-screen forms, navigate-only) ----------------
 
 async def create_meta_flow(agent_id: int, name: str, category: str = "LEAD_GENERATION",

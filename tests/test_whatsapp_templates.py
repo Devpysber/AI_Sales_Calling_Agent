@@ -336,6 +336,28 @@ def test_campaign_whatsapp_template_fills_body_variables(client):
             {"type": "text", "text": "Ravi"}, {"type": "text", "text": "Acme"}]}]
 
 
+def test_upload_template_media_returns_handle(client, base, monkeypatch):
+    async def fake_upload(file_bytes, mime_type, agent_id=None):
+        return {"ok": True, "handle": "fake-handle"}
+    monkeypatch.setattr(wa, "upload_template_header_media", fake_upload)
+
+    res = client.post(f"{base}/whatsapp/templates/media",
+                      files={"file": ("sample.jpg", b"fake-bytes", "image/jpeg")})
+    assert res.status_code == 200
+    assert res.json() == {"handle": "fake-handle"}
+
+
+def test_upload_template_media_error_returns_400(client, base, monkeypatch):
+    async def fake_upload(file_bytes, mime_type, agent_id=None):
+        return {"ok": False, "error": "Meta App ID not configured (WHATSAPP_APP_ID)"}
+    monkeypatch.setattr(wa, "upload_template_header_media", fake_upload)
+
+    res = client.post(f"{base}/whatsapp/templates/media",
+                      files={"file": ("sample.jpg", b"fake-bytes", "image/jpeg")})
+    assert res.status_code == 400
+    assert res.json()["detail"] == "Meta App ID not configured (WHATSAPP_APP_ID)"
+
+
 def test_campaign_whatsapp_template_skips_when_too_many_body_variables(client, caplog):
     import json as _json
     import logging

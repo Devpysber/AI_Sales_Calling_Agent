@@ -1,6 +1,6 @@
 """Meta WhatsApp Cloud API webhook: verification handshake and inbound messages (no session auth; signed by Meta)."""
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -228,6 +228,19 @@ def create_template(body: TemplateIn, agent_id: int = Depends(workspace)):
         db.add(row)
         db.flush()
         return row.to_dict()
+
+
+@router.post("/templates/media")
+async def upload_template_media(agent_id: int = Depends(workspace), file: UploadFile = File(...)):
+    MAX_BYTES = 16 * 1024 * 1024  # Meta's own cap for template header media
+    data = await file.read()
+    if len(data) > MAX_BYTES:
+        raise HTTPException(400, "File is larger than 16 MB.")
+    from app.services.whatsapp_cloud_service import upload_template_header_media
+    result = await upload_template_header_media(data, file.content_type or "application/octet-stream", agent_id=agent_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "Upload failed")
+    return {"handle": result["handle"]}
 
 
 @router.patch("/templates/{template_id}")

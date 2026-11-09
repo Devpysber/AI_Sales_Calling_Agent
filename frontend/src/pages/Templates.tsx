@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { FileText, Plus, RefreshCw, Send } from "lucide-react"
-import { useMemo, useState } from "react"
+import { AlertTriangle, FileText, Plus, RefreshCw, Send } from "lucide-react"
+import { useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { toast } from "sonner"
 import {
@@ -28,7 +28,7 @@ interface WaComponent {
   format?: HeaderFormat
   text?: string
   buttons?: WaButton[]
-  example?: { header_text?: string[]; body_text?: string[][] }
+  example?: { header_text?: string[]; body_text?: string[][]; header_handle?: string[] }
 }
 
 interface MessageTemplate {
@@ -76,7 +76,7 @@ const emptyButton = (): WaButton => ({ type: "QUICK_REPLY", text: "" })
 
 const emptyForm = {
   name: "", language: "en_US", category: "MARKETING" as "MARKETING" | "UTILITY" | "AUTHENTICATION",
-  headerFormat: "NONE" as HeaderFormat, headerText: "", headerExample: "",
+  headerFormat: "NONE" as HeaderFormat, headerText: "", headerExample: "", headerHandle: "",
   bodyText: "", bodyExamples: [] as string[],
   footerText: "", buttons: [] as WaButton[],
 }
@@ -95,6 +95,7 @@ function templateToForm(t: MessageTemplate): typeof emptyForm {
     headerFormat: (header?.format ?? "NONE") as HeaderFormat,
     headerText: header?.format === "TEXT" ? (header.text ?? "") : "",
     headerExample: header?.example?.header_text?.[0] ?? "",
+    headerHandle: header?.example?.header_handle?.[0] ?? "",
     bodyText: body?.text ?? "",
     bodyExamples: body?.example?.body_text?.[0] ?? [],
     footerText: footer?.text ?? "",
@@ -114,7 +115,11 @@ function buildComponents(form: typeof emptyForm): WaComponent[] {
       const header: WaComponent = { type: "HEADER", format: "TEXT", text: form.headerText.trim() }
       if (varCount(form.headerText) > 0) header.example = { header_text: [placeholder(form.headerExample, 0)] }
       comps.push(header)
-    } else comps.push({ type: "HEADER", format: form.headerFormat })
+    } else {
+      const header: WaComponent = { type: "HEADER", format: form.headerFormat }
+      if (form.headerHandle) header.example = { header_handle: [form.headerHandle] }
+      comps.push(header)
+    }
   }
   const body: WaComponent = { type: "BODY", text: form.bodyText }
   const bodyN = varCount(form.bodyText)
@@ -184,6 +189,18 @@ export default function Templates() {
   const [createdId, setCreatedId] = useState<number | null>(null)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [sending, setSending] = useState<MessageTemplate | null>(null)
+  const [headerFileName, setHeaderFileName] = useState("")
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const uploadMedia = useMutation({
+    mutationFn: (file: File) => {
+      const formData = new FormData()
+      formData.append("file", file)
+      return api<{ handle: string }>(`${base}/whatsapp/templates/media`, { method: "POST", body: formData })
+    },
+    onSuccess: (res, file) => { setForm((f) => ({ ...f, headerHandle: res.handle })); setHeaderFileName(file.name) },
+    onError: (e) => toast.error(e.message),
+  })
 
   const create = useMutation({
     mutationFn: () => api<MessageTemplate>(`${base}/whatsapp/templates`, {
@@ -215,7 +232,7 @@ export default function Templates() {
     onError: (e) => toast.error(e.message),
   })
 
-  const closeBuilder = () => { setShowBuilder(false); setForm(emptyForm); setCreatedId(null); setEditingId(null) }
+  const closeBuilder = () => { setShowBuilder(false); setForm(emptyForm); setCreatedId(null); setEditingId(null); setHeaderFileName("") }
 
   const bodyVarN = varCount(form.bodyText)
   const locked = !!createdId && !editingId
@@ -223,7 +240,7 @@ export default function Templates() {
   return (
     <>
       <PageHeader eyebrow="Build" title="WhatsApp templates" description="Meta-approved message templates for notifications and re-engagement outside the 24-hour chat window."
-        actions={<Button variant="primary" onClick={() => { setForm(emptyForm); setCreatedId(null); setEditingId(null); setShowBuilder(true) }}><Plus className="size-4" />New template</Button>} />
+        actions={<Button variant="primary" onClick={() => { setForm(emptyForm); setCreatedId(null); setEditingId(null); setHeaderFileName(""); setShowBuilder(true) }}><Plus className="size-4" />New template</Button>} />
 
       {list.isLoading ? <Skeleton className="h-64" /> : templates.length === 0 ? (
         <Card><EmptyState icon={<FileText />} title="No templates yet" description="Create a template, submit it to Meta for approval, then send it to leads." /></Card>
@@ -236,7 +253,7 @@ export default function Templates() {
                 description={t.body}
                 action={<div className="flex flex-wrap items-center gap-2">
                   {t.status === "pending" && <Button loading={syncStatus.isPending} onClick={() => syncStatus.mutate(t.id)}><RefreshCw className="size-4" />Sync status</Button>}
-                  {t.status === "draft" && <Button onClick={() => { setForm(templateToForm(t)); setCreatedId(null); setEditingId(t.id); setShowBuilder(true) }}>Edit</Button>}
+                  {t.status === "draft" && <Button onClick={() => { setForm(templateToForm(t)); setCreatedId(null); setEditingId(t.id); setHeaderFileName(""); setShowBuilder(true) }}>Edit</Button>}
                   {t.status === "draft" && <Button variant="primary" loading={submit.isPending} onClick={() => submit.mutate(t.id)}>Submit for approval</Button>}
                   {t.status === "approved" && <Button variant="primary" onClick={() => setSending(t)}><Send className="size-4" />Send</Button>}
                 </div>}
@@ -252,9 +269,9 @@ export default function Templates() {
         footer={<>
           <Button onClick={closeBuilder}>{createdId && !editingId ? "Close" : "Cancel"}</Button>
           {editingId ? (
-            <Button variant="primary" loading={patch.isPending} onClick={() => patch.mutate(editingId)} disabled={!form.name.trim() || !form.bodyText.trim()}>Save changes</Button>
+            <Button variant="primary" loading={patch.isPending} onClick={() => patch.mutate(editingId)} disabled={!form.name.trim() || !form.bodyText.trim() || !(form.headerFormat === "TEXT" || form.headerFormat === "NONE" || !!form.headerHandle)}>Save changes</Button>
           ) : !createdId ? (
-            <Button variant="primary" loading={create.isPending} onClick={() => create.mutate()} disabled={!form.name.trim() || !form.bodyText.trim()}>Save as draft</Button>
+            <Button variant="primary" loading={create.isPending} onClick={() => create.mutate()} disabled={!form.name.trim() || !form.bodyText.trim() || !(form.headerFormat === "TEXT" || form.headerFormat === "NONE" || !!form.headerHandle)}>Save as draft</Button>
           ) : (
             <Button variant="primary" loading={submit.isPending} onClick={() => submit.mutate(createdId, { onSuccess: closeBuilder })}>Submit for approval</Button>
           )}
@@ -287,7 +304,33 @@ export default function Templates() {
               </Field>
             )}
             {(form.headerFormat === "IMAGE" || form.headerFormat === "VIDEO" || form.headerFormat === "DOCUMENT") && (
-              <p className="text-xs text-muted">The actual {form.headerFormat.toLowerCase()} is supplied when you send the template, not here.</p>
+              <Field label={`Sample ${form.headerFormat.toLowerCase()}`} hint="Meta requires a sample media file to review this template; the real media is supplied when you send it.">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={form.headerFormat === "IMAGE" ? "image/*" : form.headerFormat === "VIDEO" ? "video/*" : ".pdf,.doc,.docx"}
+                  className="hidden"
+                  disabled={locked}
+                  onChange={(e) => { const file = e.target.files?.[0]; if (file) uploadMedia.mutate(file); e.target.value = "" }}
+                />
+                {form.headerHandle ? (
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="text-success">✓</span>
+                    <span className="truncate">{headerFileName || "Sample uploaded"}</span>
+                    <Button size="sm" loading={uploadMedia.isPending} disabled={locked} onClick={() => fileInputRef.current?.click()}>Replace</Button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm text-warning">
+                      <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                      <span>A sample {form.headerFormat.toLowerCase()} is required before Meta will accept this template.</span>
+                    </div>
+                    <Button size="sm" loading={uploadMedia.isPending} disabled={locked} onClick={() => fileInputRef.current?.click()}>
+                      Upload a sample {form.headerFormat.toLowerCase()}
+                    </Button>
+                  </>
+                )}
+              </Field>
             )}
 
             <Field label="Body" hint={`Use {{1}}, {{2}}… for variables. ${bodyVarN} variable${bodyVarN === 1 ? "" : "s"} used.`}>
