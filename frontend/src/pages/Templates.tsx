@@ -369,6 +369,9 @@ function SendDialog({ base, template, onClose }: { base: string; template: Messa
   })
 
   const slots = useMemo(() => sendSlots(template?.components ?? null), [template])
+  // Meta sends whatever text is given verbatim -- a blank variable produces a garbled message
+  // ("Hi , your order  has shipped.") instead of a clear upfront warning, so require every slot filled.
+  const allSlotsFilled = slots.every((s) => Array.from({ length: s.count }, (_, i) => values[s.key]?.[i] ?? "").every((v) => v.trim()))
 
   const send = useMutation({
     mutationFn: () => {
@@ -390,7 +393,7 @@ function SendDialog({ base, template, onClose }: { base: string; template: Messa
     <Dialog open={!!template} onClose={() => { reset(); onClose() }} title={`Send “${template?.name ?? ""}”`}
       footer={<>
         <Button onClick={() => { reset(); onClose() }}>Cancel</Button>
-        <Button variant="primary" loading={send.isPending} disabled={mode === "lead" ? !leadId : !phone.trim()} onClick={() => send.mutate()}><Send className="size-4" />Send</Button>
+        <Button variant="primary" loading={send.isPending} disabled={(mode === "lead" ? !leadId : !phone.trim()) || !allSlotsFilled} onClick={() => send.mutate()}><Send className="size-4" />Send</Button>
       </>}>
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-2">
