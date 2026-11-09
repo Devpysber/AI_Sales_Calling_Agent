@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Banknote, Eye, History, Pencil, Plus, Trash2, Wrench } from "lucide-react"
+import { Banknote, Eye, History, Pencil, Plus, Search, Trash2, Wrench } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
@@ -35,13 +35,17 @@ const CATEGORY_MAP: Record<string, string> = {
   get_my_details: "Customer info", update_lead_requirement: "Customer info", check_my_order_or_deal_status: "Customer info",
   set_language_preference: "Customer info",
   create_support_ticket: "Support", check_ticket_status: "Support", handoff_to_human: "Support", escalate_urgent: "Support",
+  collect_feedback: "Support", request_review: "Support", transfer_to_department: "Support",
   send_quick_replies: "Messaging & rich replies", send_options_list: "Messaging & rich replies", send_brochure: "Messaging & rich replies",
   share_location: "Messaging & rich replies", request_document_from_customer: "Messaging & rich replies",
+  send_cta_button: "Messaging & rich replies", request_customer_location: "Messaging & rich replies",
+  show_product: "Catalog & Flows", show_product_list: "Catalog & Flows", browse_catalog: "Catalog & Flows", send_flow: "Catalog & Flows",
+  check_availability: "Sales & Orders", apply_discount_code: "Sales & Orders", track_shipment: "Sales & Orders",
   search_knowledge: "Knowledge",
   send_payment_link: "Payments",
   opt_out: "Compliance",
 }
-const CATEGORY_ORDER = ["Custom tools", "Scheduling", "Customer info", "Support", "Messaging & rich replies", "Knowledge", "Payments", "Compliance", "Other"]
+const CATEGORY_ORDER = ["Custom tools", "Scheduling", "Customer info", "Support", "Messaging & rich replies", "Catalog & Flows", "Sales & Orders", "Knowledge", "Payments", "Compliance", "Other"]
 
 function categoryFor(t: Tool) {
   if (t.type !== "builtin") return "Custom tools"
@@ -70,6 +74,9 @@ export default function Tools() {
 
   const [sortBy, setSortBy] = useState<"name" | "usage">("name")
   const [bulkCat, setBulkCat] = useState<string | null>(null)
+  const [q, setQ] = useState("")
+  const needle = q.trim().toLowerCase()
+  const matches = (t: Tool) => !needle || t.name.toLowerCase().includes(needle) || t.description.toLowerCase().includes(needle)
 
   const [showAdd, setShowAdd] = useState(false)
   const [form, setForm] = useState(emptyForm)
@@ -154,6 +161,10 @@ export default function Tools() {
     <>
       <PageHeader eyebrow="Build" title="Tools" description="Builtin and custom actions this agent can call during a chat."
         actions={<>
+          <div className="relative w-auto">
+            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
+            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a tool…" aria-label="Find a tool" className="w-44 pl-9 sm:w-56" />
+          </div>
           <Select value={sortBy} onChange={(e) => setSortBy(e.target.value as "name" | "usage")} className="w-auto">
             <option value="name">Sort by: Name</option>
             <option value="usage">Sort by: Usage</option>
@@ -163,20 +174,25 @@ export default function Tools() {
 
       {list.isLoading ? <Skeleton className="h-64" /> : tools.length === 0 ? (
         <Card><EmptyState icon={<Wrench />} title="No tools yet" description="Add a custom HTTP tool to let this agent call your own API." /></Card>
+      ) : needle && !tools.some(matches) ? (
+        <Card><EmptyState icon={<Search />} title="No tools match" description={`Nothing found for "${q}".`}
+          action={<Button size="sm" onClick={() => setQ("")}>Clear search</Button>} /></Card>
       ) : (
         <div className="space-y-4">
           {CATEGORY_ORDER.map((cat) => {
             const group = tools.filter((t) => categoryFor(t) === cat)
             if (group.length === 0) return null
+            const shownGroup = group.filter(matches)
+            if (shownGroup.length === 0) return null
             const sortedGroup = sortBy === "usage"
-              ? [...group].sort((a, b) => (usageMap[b.name]?.calls ?? -1) - (usageMap[a.name]?.calls ?? -1))
-              : group
+              ? [...shownGroup].sort((a, b) => (usageMap[b.name]?.calls ?? -1) - (usageMap[a.name]?.calls ?? -1))
+              : shownGroup
             const allEnabled = group.every((t) => t.enabled)
             const bulkPending = bulkCat === cat && bulkToggle.isPending
             return (
               <Card key={cat}>
                 <CardHeader title={<span className="flex items-center gap-2 text-xs font-bold tracking-wide text-muted uppercase">
-                  {cat} <Badge tone="neutral">{group.length}</Badge>
+                  {cat} <Badge tone="neutral">{needle ? `${shownGroup.length}/${group.length}` : group.length}</Badge>
                   <Button type="button" loading={bulkPending} onClick={() => {
                     setBulkCat(cat)
                     bulkToggle.mutate({ ids: group.map((t) => t.id), enabled: !allEnabled })
