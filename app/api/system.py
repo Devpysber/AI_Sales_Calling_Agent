@@ -153,6 +153,12 @@ def _whatsapp():
         return {"ok": False, "key": _mask(settings.whatsapp_token), "detail": str(e)}
 
 
+@router.get("/system/whatsapp-embed-config", dependencies=[Depends(require_admin)])
+async def whatsapp_embed_config():
+    return {"app_id": settings.whatsapp_app_id, "config_id": settings.whatsapp_config_id,
+            "configured": bool(settings.whatsapp_app_id and settings.whatsapp_config_id)}
+
+
 @router.get("/system/status")
 async def status():
     plivo, openrouter, sarvam, public, whatsapp = await asyncio.gather(
@@ -252,7 +258,8 @@ class TeamMemberUpdate(BaseModel):
 CREDENTIAL_KEYS = {"resend_api_key", "email_from", "email_reply_to", "smtp_host", "smtp_port",
                    "smtp_username", "smtp_password", "smtp_from", "openrouter_api_key",
                    "sarvam_api_key", "plivo_auth_id", "plivo_auth_token", "plivo_phone_number",
-                   "composio_api_key", "whatsapp_token", "whatsapp_phone_number_id", "whatsapp_app_id"}
+                   "composio_api_key", "whatsapp_token", "whatsapp_phone_number_id", "whatsapp_app_id",
+                   "whatsapp_app_secret", "whatsapp_config_id"}
 
 # A credential that is the wrong shape is only noticed later, as a provider error on a live call
 # ("Invalid auth_id supplied: <an email address>"), so reject the obvious mistakes at save time.

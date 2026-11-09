@@ -205,6 +205,25 @@ def _build_send_components(stored: list[dict], variables: dict[str, list[str]]) 
     return out
 
 
+class EmbeddedSignupIn(BaseModel):
+    code: str
+    phone_number_id: str
+    waba_id: str
+
+
+@router.post("/embedded-signup")
+async def embedded_signup(body: EmbeddedSignupIn, agent_id: int = Depends(workspace)):
+    result = await wa.complete_embedded_signup(body.code, body.phone_number_id, body.waba_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "Embedded signup failed")
+    from app.services import agents
+    agents.update_profile(agent_id, {
+        "whatsapp_phone_number_id": result["phone_number_id"],
+        "whatsapp_business_account_id": result["waba_id"],
+    }, actor="admin")
+    return {"ok": True, "phone_number_id": result["phone_number_id"], "waba_id": result["waba_id"]}
+
+
 @router.get("/templates")
 def list_templates(agent_id: int = Depends(workspace)):
     with get_db() as db:

@@ -9,6 +9,39 @@ import type { AgentProfile } from "@/lib/types"
 
 type ProfileResponse = { profile: AgentProfile & Record<string, unknown> }
 type ChatSummary = { last_at: string | null }
+type EmbedConfig = { app_id: string; config_id: string; configured: boolean }
+
+declare global {
+  interface Window {
+    FB?: any
+    fbAsyncInit?: () => void
+  }
+}
+
+// Meta's JS SDK must be injected at most once per page, even across component remounts. The script
+// loads asynchronously, so a click before it (and FB.init) finishes must wait rather than silently
+// no-op through FB?.login's optional chaining -- the very first "Connect with Meta" click otherwise
+// did nothing, with no error, until clicked again.
+let fbSdkLoadStarted = false
+let fbSdkReady = false
+const fbReadyCallbacks: (() => void)[] = []
+
+function loadFacebookSdk(appId: string, onReady: () => void) {
+  if (fbSdkReady) { onReady(); return }
+  fbReadyCallbacks.push(onReady)
+  if (fbSdkLoadStarted) return
+  fbSdkLoadStarted = true
+  window.fbAsyncInit = () => {
+    window.FB?.init({ appId, autoLogAppEvents: true, xfbml: false, version: "v19.0" })
+    fbSdkReady = true
+    fbReadyCallbacks.splice(0).forEach((cb) => cb())
+  }
+  const script = document.createElement("script")
+  script.src = "https://connect.facebook.net/en_US/sdk.js"
+  script.async = true
+  script.defer = true
+  document.body.appendChild(script)
+}
 
 // Derives "most recent message" from the existing chats list rather than adding a new endpoint.
 function useLastMessageAt(base: string, channel: "whatsapp" | "instagram") {
@@ -95,6 +128,72 @@ export default function Channels() {
   const waLastAt = useLastMessageAt(base, "whatsapp")
   const igLastAt = useLastMessageAt(base, "instagram")
 
+  // ---------------- WhatsApp Embedded Signup ("Connect with Meta") ----------------
+  const embedConfigQ = useQuery({
+    queryKey: ["whatsapp-embed-config"],
+    queryFn: () => api<EmbedConfig>("/api/system/whatsapp-embed-config"),
+  })
+  const embedConfig = embedConfigQ.data
+
+  // The popup's postMessage event and FB.login's own callback can arrive in either order; the
+  // exchange only fires once both the auth code and the chosen phone_number_id/waba_id are in.
+  const [embedCode, setEmbedCode] = useState<string | null>(null)
+  const [embedIds, setEmbedIds] = useState<{ phoneNumberId: string; wabaId: string } | null>(null)
+
+  const embeddedSignup = useMutation({
+    mutationFn: (vars: { code: string; phone_number_id: string; waba_id: string }) =>
+      api(`${base}/whatsapp/embedded-signup`, { method: "POST", json: vars }),
+    onSuccess: () => {
+      toast.success("Connected with Meta")
+      qc.invalidateQueries({ queryKey: ["agent-profile", id] })
+      setEmbedCode(null)
+      setEmbedIds(null)
+    },
+    onError: (e) => {
+      toast.error(e.message)
+      setEmbedCode(null)
+      setEmbedIds(null)
+    },
+  })
+
+  useEffect(() => {
+    if (embedCode && embedIds && !embeddedSignup.isPending) {
+      embeddedSignup.mutate({ code: embedCode, phone_number_id: embedIds.phoneNumberId, waba_id: embedIds.wabaId })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedCode, embedIds])
+
+  useEffect(() => {
+    function onMessage(event: MessageEvent) {
+      const data = event.data
+      if (data?.type === "WA_EMBEDDED_SIGNUP" && data?.event === "FINISH") {
+        const { phone_number_id, waba_id } = data.data || {}
+        if (phone_number_id && waba_id) setEmbedIds({ phoneNumberId: phone_number_id, wabaId: waba_id })
+      }
+    }
+    window.addEventListener("message", onMessage)
+    return () => window.removeEventListener("message", onMessage)
+  }, [])
+
+  function connectWithMeta() {
+    if (!embedConfig?.configured) return
+    loadFacebookSdk(embedConfig.app_id, () => {
+      window.FB?.login(
+        (response: any) => {
+          const code = response?.authResponse?.code
+          if (code) setEmbedCode(code)
+          // No code (user cancelled the popup): do nothing, no error toast.
+        },
+        {
+          config_id: embedConfig.config_id,
+          response_type: "code",
+          override_default_response_type: true,
+          extras: { feature: "whatsapp_embedded_signup", sessionInfoVersion: "3" },
+        },
+      )
+    })
+  }
+
   return (
     <>
       <PageHeader eyebrow="Setup" title="Channels" description="Connect WhatsApp and Instagram so customers can message this agent." />
@@ -102,6 +201,23 @@ export default function Channels() {
         <Card>
           <CardHeader title="WhatsApp" action={<Badge tone={savedWaId ? "success" : "neutral"}>{savedWaId ? "Configured" : "Not configured"}</Badge>} />
           <p className="px-4 pt-3 text-xs text-muted sm:px-5">Last message received: {waLastAt ? timeAgo(waLastAt) : "Never"}</p>
+          <div className="px-4 pt-3 sm:px-5">
+            {embedConfig && !embedConfig.configured ? (
+              <p className="text-xs text-muted">
+                Embedded Signup needs a Meta App ID, App Secret and Configuration ID set under Settings → Secrets first.
+              </p>
+            ) : (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!embedConfig?.configured || embeddedSignup.isPending}
+                loading={embeddedSignup.isPending}
+                onClick={connectWithMeta}
+              >
+                Connect with Meta
+              </Button>
+            )}
+          </div>
           <form className="space-y-5 p-4 sm:p-5" onSubmit={(e) => { e.preventDefault(); if (waId.trim() !== savedWaId && !saveWa.isPending) saveWa.mutate() }}>
             <Field label="WhatsApp phone number ID" hint="From Meta WhatsApp Manager → API setup. Leave empty to use the server default.">
               <Input value={waId} onChange={(e) => setWaId(e.target.value)} inputMode="numeric" autoComplete="off" disabled={saveWa.isPending} />

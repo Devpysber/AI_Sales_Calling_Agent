@@ -153,6 +153,7 @@ class Settings(BaseSettings):
     whatsapp_phone_number_id: str = Field("", alias="WHATSAPP_PHONE_NUMBER_ID")
     whatsapp_business_account_id: str = Field("", alias="WHATSAPP_BUSINESS_ACCOUNT_ID")
     whatsapp_app_id: str = Field("", alias="WHATSAPP_APP_ID")
+    whatsapp_config_id: str = Field("", alias="WHATSAPP_CONFIG_ID")
     whatsapp_verify_token: str = Field("", alias="WHATSAPP_VERIFY_TOKEN")
     whatsapp_app_secret: str = Field("", alias="WHATSAPP_APP_SECRET")
     whatsapp_agent_id: int = Field(0, alias="WHATSAPP_AGENT_ID")  # fallback agent for inbound chats
@@ -216,6 +217,7 @@ class Settings(BaseSettings):
             "openrouter_api_key", "sarvam_api_key", "gemini_api_key",
             "plivo_auth_id", "plivo_auth_token", "plivo_phone_number",
             "composio_api_key", "whatsapp_token", "whatsapp_phone_number_id", "whatsapp_app_id",
+            "whatsapp_app_secret", "whatsapp_config_id",
         }
         
         # We need to bypass our own override for inner Pydantic operations and `secret_key` itself

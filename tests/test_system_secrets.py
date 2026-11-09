@@ -17,6 +17,7 @@ def _clear_whatsapp_secrets(client):
     yield
     client.post("/api/system/secrets", json={
         "whatsapp_token": "", "whatsapp_phone_number_id": "", "whatsapp_app_id": "", "composio_api_key": "",
+        "whatsapp_app_secret": "", "whatsapp_config_id": "",
     })
 
 
@@ -40,6 +41,20 @@ def test_whatsapp_and_composio_secrets_actually_override_settings(client):
     assert got["whatsapp_token"] == "********"
     assert got["whatsapp_app_id"] == "********"
     assert got["composio_api_key"] == "********"
+
+
+def test_whatsapp_app_secret_and_config_id_round_trip(client):
+    res = client.post("/api/system/secrets", json={
+        "whatsapp_app_secret": "sek_test_secret",
+        "whatsapp_config_id": "987654321098765",
+    })
+    assert res.status_code == 200
+    assert settings.whatsapp_app_secret == "sek_test_secret"
+    assert settings.whatsapp_config_id == "987654321098765"
+
+    got = client.get("/api/system/secrets").json()
+    assert got["whatsapp_app_secret"] == "********"
+    assert got["whatsapp_config_id"] == "********"
 
 
 def test_system_status_reports_whatsapp(client, monkeypatch):

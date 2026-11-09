@@ -651,6 +651,42 @@ async def upload_template_header_media(file_bytes: bytes, mime_type: str, agent_
         return {"ok": False, "error": str(e)}
 
 
+async def complete_embedded_signup(code: str, phone_number_id: str, waba_id: str) -> dict:
+    """Meta's WhatsApp Embedded Signup, step 2 of 2: the frontend's FB.login() already returned
+    phone_number_id/waba_id (from the popup's own postMessage event, not from any API call) -- this
+    exchanges the short-lived authorization `code` for a business access token, then subscribes
+    this app to that WABA's webhooks so inbound messages/status updates actually start arriving.
+    Real docs: https://developers.facebook.com/docs/whatsapp/embedded-signup"""
+    app_id = getattr(settings, "whatsapp_app_id", "")
+    app_secret = getattr(settings, "whatsapp_app_secret", "")
+    if not app_id or not app_secret:
+        return {"ok": False, "error": "Meta App ID / App Secret not configured"}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            token_res = await client.get(
+                "https://graph.facebook.com/v19.0/oauth/access_token",
+                params={"client_id": app_id, "client_secret": app_secret, "code": code},
+            )
+            if token_res.status_code != 200:
+                return {"ok": False, "error": f"Meta token exchange HTTP {token_res.status_code}: {token_res.text}"}
+            access_token = token_res.json().get("access_token")
+            if not access_token:
+                return {"ok": False, "error": "Meta did not return an access token"}
+
+            # Subscribe this app to the new WABA's webhooks (required for inbound messages/status
+            # updates to reach /api/whatsapp/webhook at all).
+            sub_res = await client.post(
+                f"https://graph.facebook.com/v19.0/{waba_id}/subscribed_apps",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if sub_res.status_code != 200:
+                return {"ok": False, "error": f"Meta subscribe HTTP {sub_res.status_code}: {sub_res.text}"}
+
+            return {"ok": True, "phone_number_id": phone_number_id, "waba_id": waba_id}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
 # ---------------- WhatsApp Flows (native multi-screen forms, navigate-only) ----------------
 
 async def create_meta_flow(agent_id: int, name: str, category: str = "LEAD_GENERATION",

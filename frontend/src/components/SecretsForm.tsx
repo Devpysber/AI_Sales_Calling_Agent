@@ -159,6 +159,8 @@ export default function SecretsForm() {
           {cred('whatsapp_token', 'Meta WhatsApp Access Token (Optional)', { secret: true, placeholder: 'EAA…' })}
           {cred('whatsapp_phone_number_id', 'WhatsApp Phone Number ID (Optional)', { placeholder: '100…' })}
           {cred('whatsapp_app_id', 'Meta App ID', { placeholder: '123456789012345', help: 'From the Meta App Dashboard → Settings → Basic. Needed to upload a template header’s sample image/video/document.' })}
+          {cred('whatsapp_app_secret', 'Meta App Secret', { secret: true, placeholder: 'App Secret', help: 'From the Meta App Dashboard → Settings → Basic. Needed for Embedded Signup and to verify WhatsApp webhook signatures.' })}
+          {cred('whatsapp_config_id', 'WhatsApp Embedded Signup Configuration ID', { placeholder: '987654321098765', help: 'Embedded Signup Configuration ID, from the App Dashboard\'s WhatsApp → Configuration section.' })}
         </div>
       </div>
       <div className="grid gap-6 border-t border-border p-4 sm:p-5 md:grid-cols-2">

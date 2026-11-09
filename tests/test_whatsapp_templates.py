@@ -383,3 +383,29 @@ def test_campaign_whatsapp_template_skips_when_too_many_body_variables(client, c
             result = campaigns._send_whatsapp_lead(campaign, lead)
     assert result is None
     assert any("needs" in r.getMessage() for r in caplog.records)
+
+
+def test_embedded_signup_updates_profile(client, base, monkeypatch):
+    async def fake_signup(code, phone_number_id, waba_id):
+        return {"ok": True, "phone_number_id": "123", "waba_id": "456"}
+    monkeypatch.setattr(wa, "complete_embedded_signup", fake_signup)
+
+    res = client.post(f"{base}/whatsapp/embedded-signup",
+                      json={"code": "fake-code", "phone_number_id": "ignored", "waba_id": "ignored"})
+    assert res.status_code == 200
+    assert res.json() == {"ok": True, "phone_number_id": "123", "waba_id": "456"}
+
+    profile = client.get(f"{base}/profile").json()["profile"]
+    assert profile["whatsapp_phone_number_id"] == "123"
+    assert profile["whatsapp_business_account_id"] == "456"
+
+
+def test_embedded_signup_error_returns_400(client, base, monkeypatch):
+    async def fake_signup(code, phone_number_id, waba_id):
+        return {"ok": False, "error": "Meta App ID / App Secret not configured"}
+    monkeypatch.setattr(wa, "complete_embedded_signup", fake_signup)
+
+    res = client.post(f"{base}/whatsapp/embedded-signup",
+                      json={"code": "fake-code", "phone_number_id": "123", "waba_id": "456"})
+    assert res.status_code == 400
+    assert res.json()["detail"] == "Meta App ID / App Secret not configured"
