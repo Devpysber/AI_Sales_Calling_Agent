@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils'
 
 type Check = { ok: boolean; detail?: string | null; [k: string]: unknown }
 type Status = {
-  plivo: Check; openrouter: Check; sarvam: Check; public_url: Check; email: Check
+  plivo: Check; openrouter: Check; sarvam: Check; public_url: Check; email: Check; whatsapp: Check
   llm_providers: string[]; signature_validation: boolean
   infrastructure: Record<string, string | boolean>
 }
@@ -106,7 +106,7 @@ export default function Settings() {
     }
   }
   const base = (typeof s?.public_url?.url === 'string' && s.public_url.url) || window.location.origin
-  const checks = s ? [!!s.plivo?.ok, !!s.openrouter?.ok, !!s.sarvam?.ok, !!s.public_url?.ok, !!s.signature_validation, !!s.email?.ok] : []
+  const checks = s ? [!!s.plivo?.ok, !!s.openrouter?.ok, !!s.sarvam?.ok, !!s.public_url?.ok, !!s.signature_validation, !!s.email?.ok, !!s.whatsapp?.ok] : []
   const models = Array.isArray(s?.openrouter?.models) ? (s.openrouter.models as string[]) : []
   const providers = Array.isArray(s?.llm_providers) ? s.llm_providers : []
 
@@ -153,6 +153,11 @@ export default function Settings() {
                   <span>{s.email.ok ? (s.email.detail || 'Configured') : 'Not configured — reminders and reports are logged to Activity only.'}</span>
                   <Button variant="ghost" size="sm" onClick={sendTestEmail} loading={sendingTestEmail}>Send test</Button>
                 </div>
+              </Row>
+              <Row ok={s.whatsapp.ok} checking={isFetching} title="WhatsApp · Meta Cloud API">
+                {s.whatsapp.ok
+                  ? <>Key {String(s.whatsapp.key ?? '')} · {String(s.whatsapp.account ?? 'connected')}{s.whatsapp.phone_number_id ? <> · default number {String(s.whatsapp.phone_number_id)}</> : <> · no default phone number ID (set per agent under Channels)</>}</>
+                  : (s.whatsapp.detail || 'Not configured')}
               </Row>
               <RecentIssues />
             </Stagger>

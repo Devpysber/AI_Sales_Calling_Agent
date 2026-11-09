@@ -139,12 +139,27 @@ def _public_url():
         return {"ok": False, "url": settings.base_url, "detail": f"Not reachable: {e}"}
 
 
+def _whatsapp():
+    if not settings.whatsapp_token:
+        return {"ok": False, "detail": "Not configured (optional) — add a token under Secrets, or a workspace's Channels page for a per-agent number."}
+    try:
+        res = httpx.get("https://graph.facebook.com/v19.0/me", timeout=8, params={"access_token": settings.whatsapp_token})
+        if res.status_code != 200:
+            return {"ok": False, "key": _mask(settings.whatsapp_token), "detail": f"Meta rejected the token: HTTP {res.status_code}"}
+        data = res.json()
+        return {"ok": True, "key": _mask(settings.whatsapp_token), "account": data.get("name") or data.get("id"),
+                "phone_number_id": settings.whatsapp_phone_number_id or None}
+    except Exception as e:
+        return {"ok": False, "key": _mask(settings.whatsapp_token), "detail": str(e)}
+
+
 @router.get("/system/status")
 async def status():
-    plivo, openrouter, sarvam, public = await asyncio.gather(
-        asyncio.to_thread(_plivo), asyncio.to_thread(_openrouter), asyncio.to_thread(_sarvam), asyncio.to_thread(_public_url))
+    plivo, openrouter, sarvam, public, whatsapp = await asyncio.gather(
+        asyncio.to_thread(_plivo), asyncio.to_thread(_openrouter), asyncio.to_thread(_sarvam),
+        asyncio.to_thread(_public_url), asyncio.to_thread(_whatsapp))
     return {
-        "plivo": plivo, "openrouter": openrouter, "sarvam": sarvam, "public_url": public,
+        "plivo": plivo, "openrouter": openrouter, "sarvam": sarvam, "public_url": public, "whatsapp": whatsapp,
         "llm_providers": settings.llm_providers.split(","),
         "signature_validation": settings.plivo_validate_signature,
         "email": {"ok": email_configured(), "detail": email_detail()},
