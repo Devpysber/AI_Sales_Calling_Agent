@@ -236,7 +236,8 @@ class TeamMemberUpdate(BaseModel):
 # (pricing, credits) stays in SettingsService, where analytics and alerts read it.
 CREDENTIAL_KEYS = {"resend_api_key", "email_from", "email_reply_to", "smtp_host", "smtp_port",
                    "smtp_username", "smtp_password", "smtp_from", "openrouter_api_key",
-                   "sarvam_api_key", "plivo_auth_id", "plivo_auth_token", "plivo_phone_number"}
+                   "sarvam_api_key", "plivo_auth_id", "plivo_auth_token", "plivo_phone_number",
+                   "composio_api_key", "whatsapp_token", "whatsapp_phone_number_id", "whatsapp_app_id"}
 
 # A credential that is the wrong shape is only noticed later, as a provider error on a live call
 # ("Invalid auth_id supplied: <an email address>"), so reject the obvious mistakes at save time.

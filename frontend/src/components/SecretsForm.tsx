@@ -158,6 +158,7 @@ export default function SecretsForm() {
           {cred('composio_api_key', 'Composio API Key', { secret: true, placeholder: 'comp_…', help: 'For automated WhatsApp follow-ups and CRM post-call actions.' })}
           {cred('whatsapp_token', 'Meta WhatsApp Access Token (Optional)', { secret: true, placeholder: 'EAA…' })}
           {cred('whatsapp_phone_number_id', 'WhatsApp Phone Number ID (Optional)', { placeholder: '100…' })}
+          {cred('whatsapp_app_id', 'Meta App ID', { placeholder: '123456789012345', help: 'From the Meta App Dashboard → Settings → Basic. Needed to upload a template header’s sample image/video/document.' })}
         </div>
       </div>
       <div className="grid gap-6 border-t border-border p-4 sm:p-5 md:grid-cols-2">

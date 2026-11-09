@@ -211,10 +211,11 @@ class Settings(BaseSettings):
                 pass
         # We define the keys that are allowed to be overridden by the database
         secret_keys = {
-            "resend_api_key", "email_from", "email_reply_to", 
+            "resend_api_key", "email_from", "email_reply_to",
             "smtp_host", "smtp_port", "smtp_username", "smtp_password", "smtp_from",
             "openrouter_api_key", "sarvam_api_key", "gemini_api_key",
-            "plivo_auth_id", "plivo_auth_token", "plivo_phone_number"
+            "plivo_auth_id", "plivo_auth_token", "plivo_phone_number",
+            "composio_api_key", "whatsapp_token", "whatsapp_phone_number_id", "whatsapp_app_id",
         }
         
         # We need to bypass our own override for inner Pydantic operations and `secret_key` itself
