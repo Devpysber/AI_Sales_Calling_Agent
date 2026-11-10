@@ -186,7 +186,7 @@ if FRONTEND_DIST.exists():
     def spa(path: str):
         if path.startswith("api/"):
             return JSONResponse({"detail": "Not found"}, status_code=404)
-        file = FRONTEND_DIST / path
-        if path and file.is_file():
+        file = (FRONTEND_DIST / path).resolve()
+        if path and file.is_relative_to(FRONTEND_DIST) and file.is_file():
             return FileResponse(file)
         return FileResponse(FRONTEND_DIST / "index.html", headers={"Cache-Control": "no-cache"})
