@@ -592,7 +592,7 @@ async def create_meta_template(
     Returns {"ok": False, "error": "..."} when the WABA id or token aren't configured, so callers
     can surface a clear 400 rather than a confusing failure deeper in the call."""
     waba_id = business_account_id or _profile_waba_id(agent_id) or getattr(settings, "whatsapp_business_account_id", "")
-    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    whatsapp_token = _profile_whatsapp_token(agent_id) or getattr(settings, "whatsapp_token", "")
     if not waba_id:
         return {"ok": False, "error": "WhatsApp Business Account ID not configured for this agent"}
     if not whatsapp_token:
@@ -613,7 +613,7 @@ async def create_meta_template(
 async def fetch_meta_template(whatsapp_template_id: str, agent_id: int | None = None) -> dict:
     """Refresh a template's review status: GET /{whatsapp_template_id} returns category/status/
     rejected_reason once Meta has reviewed it. Explicit "sync status" action, never polled."""
-    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    whatsapp_token = _profile_whatsapp_token(agent_id) or getattr(settings, "whatsapp_token", "")
     if not whatsapp_token:
         return {"ok": False, "error": "WhatsApp credentials not configured"}
     try:

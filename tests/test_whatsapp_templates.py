@@ -161,6 +161,55 @@ def test_send_whatsapp_message_prefers_per_agent_token_over_global(client, monke
     assert calls[0]["Authorization"] == "Bearer global_tok"
 
 
+def test_create_meta_template_prefers_per_agent_token_over_global(client, monkeypatch):
+    """Submitting a template for Meta review must use the client's own Embedded Signup token
+    when set, and fall back to our org's global settings.whatsapp_token otherwise."""
+    from app.services import agents
+
+    agent_id = _fresh_agent(client)
+    agents.update_profile(agent_id, {"whatsapp_business_token": "EAA_agent_token"}, actor="test")
+
+    calls = []
+
+    class Res:
+        status_code = 200
+        text = ""
+        def json(self):
+            return {"id": "template_123"}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, headers=None, json=None):
+            calls.append(headers)
+            return Res()
+
+    import httpx as _httpx
+    monkeypatch.setattr(_httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(wa.settings, "whatsapp_token", "global_tok")
+    monkeypatch.setattr(wa.settings, "whatsapp_business_account_id", "waba_global")
+
+    import asyncio
+    out = asyncio.run(wa.create_meta_template(
+        "order_update", "en_US", "UTILITY", _order_update_components(), agent_id=agent_id,
+    ))
+    assert out["ok"]
+    assert calls[0]["Authorization"] == "Bearer EAA_agent_token"
+
+    # No per-agent token set: falls back to the global settings token.
+    other_agent_id = _fresh_agent(client)
+    calls.clear()
+    out = asyncio.run(wa.create_meta_template(
+        "order_update", "en_US", "UTILITY", _order_update_components(), agent_id=other_agent_id,
+    ))
+    assert out["ok"]
+    assert calls[0]["Authorization"] == "Bearer global_tok"
+
+
 def _order_update_components():
     return [
         {"type": "HEADER", "format": "TEXT", "text": "Your order {{1}}"},
