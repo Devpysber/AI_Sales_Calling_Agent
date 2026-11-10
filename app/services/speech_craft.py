@@ -35,6 +35,7 @@ def format_indian_amount(amount: int) -> str | None:
 # Regex patterns
 RUPEE_AMOUNT_PATTERN = re.compile(r"(?:₹|rs\.?|inr)?\s*(\d{5,10})\s*(?:rupees|rs|inr)?", re.IGNORECASE)
 MOBILE_PATTERN = re.compile(r"(?:\+?91[\s-]?)?([6-9]\d{4})[\s-]?(\d{5})\b")
+PERCENT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 
 def format_spoken_digits(digits: str) -> str:
     """Format 10-digit mobile numbers into spaced cadence '9 8 7 6 5, 4 3 2 1 0'."""
@@ -68,7 +69,10 @@ def humanize_voice_speech(text: str) -> str:
 
     out = RUPEE_AMOUNT_PATTERN.sub(_replace_amount, out)
 
-    # 3. Conversational software-strip
+    # 3. Transform percentages to spoken form
+    out = PERCENT_PATTERN.sub(lambda m: f"{m.group(1)} percent", out)
+
+    # 4. Conversational software-strip
     replacements = [
         (r"\bas an ai model\b", "I"),
         (r"\bas an ai voice agent\b", "I"),

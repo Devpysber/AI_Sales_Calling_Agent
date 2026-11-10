@@ -19,6 +19,7 @@ import httpx
 from app.core import store
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.services.speech_craft import humanize_voice_speech
 
 log = get_logger(__name__)
 
@@ -400,6 +401,7 @@ def warmup():
 
 def synthesize(text: str, language: str | None = None, speaker: str | None = None) -> bytes:
     """WAV audio from the configured engine."""
+    text = humanize_voice_speech(text)
     language = language or detect_language(text)
     if _local():
         from app.services import indicf5
@@ -414,6 +416,7 @@ def synthesize(text: str, language: str | None = None, speaker: str | None = Non
 
 def synthesize_pcm(text: str, language: str | None = None, speaker: str | None = None) -> bytes:
     """Raw 16-bit little-endian mono PCM at 8 kHz, ready for the phone stream."""
+    text = humanize_voice_speech(text)
     language = language or detect_language(text)
     if _local():
         from app.services import indicf5
