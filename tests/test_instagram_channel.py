@@ -352,6 +352,46 @@ def test_options_list_tool_routes_to_instagram(agent_id, monkeypatch):
     assert max_options == 10
 
 
+def test_send_instagram_message_prefers_per_agent_token_over_global(client, monkeypatch):
+    """A manually-pasted per-agent Instagram token must be used over the global settings.instagram_token
+    -- and an agent with no token set still falls back to it."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.services import agents
+
+    agent_id = client.post("/api/agents", json={"name": "IG Token Agent", "profile": {"company_name": "IG Token Agent"}}).json()["id"]
+    agents.update_profile(agent_id, {"instagram_business_token": "IGAA_agent_token"}, actor="test")
+
+    captured = {}
+
+    class Res:
+        status_code = 200
+        text = ""
+        def json(self): return {}
+
+    class Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, **k):
+            captured["params"] = k.get("params")
+            return Res()
+
+    monkeypatch.setattr(ig, "settings", SimpleNamespace(instagram_token="global_tok", instagram_page_id="PAGE-1"))
+    monkeypatch.setattr(ig.httpx, "AsyncClient", Client)
+
+    out = asyncio.run(ig.send_instagram_message("17800000001", "hi", agent_id=agent_id))
+    assert out["ok"] is True
+    assert captured["params"]["access_token"] == "IGAA_agent_token"
+
+    # No per-agent token set: falls back to the global settings token.
+    other_agent_id = client.post("/api/agents", json={"name": "IG No Token Agent", "profile": {"company_name": "IG No Token Agent"}}).json()["id"]
+    out = asyncio.run(ig.send_instagram_message("17800000001", "hi", agent_id=other_agent_id))
+    assert out["ok"] is True
+    assert captured["params"]["access_token"] == "global_tok"
+
+
 def test_send_instagram_document_posts_file_attachment_payload(monkeypatch):
     import asyncio
     from types import SimpleNamespace

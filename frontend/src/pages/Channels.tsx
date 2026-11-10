@@ -100,6 +100,14 @@ export default function Channels() {
     onError: (e) => toast.error(e.message),
   })
 
+  const [igToken, setIgToken] = useState("")
+  const igTokenSet = Boolean(profileQ.data?.profile?.instagram_business_token_set)
+  const saveIgToken = useMutation({
+    mutationFn: () => api(`${base}/profile`, { method: "PUT", json: { instagram_business_token: igToken } }),
+    onSuccess: () => { toast.success("Instagram access token saved"); setIgToken(""); qc.invalidateQueries({ queryKey: ["agent-profile", id] }) },
+    onError: (e) => toast.error(e.message),
+  })
+
   const [iceBreakers, setIceBreakers] = useState<string[]>([])
   const savedIceBreakers = (profileQ.data?.profile?.instagram_ice_breakers as string[] | undefined) ?? []
   useEffect(() => { if (profileQ.isSuccess) setIceBreakers(savedIceBreakers) }, [profileQ.isSuccess, JSON.stringify(savedIceBreakers)])
@@ -259,6 +267,27 @@ export default function Channels() {
             </Field>
             <div className="-mx-4 flex justify-end border-t border-border px-4 pt-3 sm:-mx-5 sm:px-5">
               <Button type="submit" variant="primary" disabled={igId.trim() === savedIgId} loading={saveIg.isPending}>Save</Button>
+            </div>
+          </form>
+          <form
+            className="space-y-5 border-t border-border p-4 sm:p-5"
+            onSubmit={(e) => { e.preventDefault(); if (igToken.trim() && !saveIgToken.isPending) saveIgToken.mutate() }}
+          >
+            <Field
+              label="Instagram access token (optional)"
+              hint={<>A long-lived Instagram/Facebook Page access token for this account, from Meta's Graph API Explorer or App Dashboard. Leave empty to use the server's default token. {igTokenSet && <Badge tone="success">Saved</Badge>}</>}
+            >
+              <Input
+                type="password"
+                value={igToken}
+                onChange={(e) => setIgToken(e.target.value)}
+                autoComplete="off"
+                disabled={saveIgToken.isPending}
+                placeholder={igTokenSet ? "••••••••••••" : ""}
+              />
+            </Field>
+            <div className="-mx-4 flex justify-end border-t border-border px-4 pt-3 sm:-mx-5 sm:px-5">
+              <Button type="submit" variant="primary" disabled={!igToken.trim()} loading={saveIgToken.isPending}>Save</Button>
             </div>
           </form>
           <form

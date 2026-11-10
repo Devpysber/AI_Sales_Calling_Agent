@@ -56,6 +56,30 @@ def test_whatsapp_business_token_empty_string_clears_it(base):
     assert agents.get_profile(agent_id)["whatsapp_business_token_set"] is False
 
 
+def test_instagram_business_token_is_never_returned_by_get_profile(base):
+    """Manually-pasted Instagram access token must round-trip through encrypt/decrypt internally, but
+    get_profile() (what every API route hands back to the frontend) must never see the raw or
+    encrypted value -- only a boolean flag that one is set."""
+    agent_id = int(base.rsplit("/", 1)[1])
+    agents.update_profile(agent_id, {"instagram_business_token": "IGAA_test_123"}, actor="test")
+
+    profile = agents.get_profile(agent_id)
+    assert profile.get("instagram_business_token_set") is True
+    assert "instagram_business_token" not in profile
+    assert "IGAA_test_123" not in str(profile)
+
+    assert agents.get_agent_instagram_token(agent_id) == "IGAA_test_123"
+
+
+def test_instagram_business_token_empty_string_clears_it(base):
+    agent_id = int(base.rsplit("/", 1)[1])
+    agents.update_profile(agent_id, {"instagram_business_token": "IGAA_test_123"}, actor="test")
+    agents.update_profile(agent_id, {"instagram_business_token": ""}, actor="test")
+
+    assert agents.get_agent_instagram_token(agent_id) is None
+    assert agents.get_profile(agent_id)["instagram_business_token_set"] is False
+
+
 def test_team_member_can_set_a_passcode_on_a_workspace_they_created(client):
     """The admin bypasses every passcode, so the creator setting one locks nobody out; someone else's stays admin-only."""
     import pytest

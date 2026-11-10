@@ -76,6 +76,7 @@ PROFILE_LIMITS = {
     "customer_noun": 40, "website_url": 200, "sales_playbook": 2000, "instagram_greeting": 150,
     "ai_disclosure_line": 200,
     "whatsapp_business_token": 1024,
+    "instagram_business_token": 1024,
 }
 
 PROFILE_DEFAULTS = {
@@ -120,6 +121,7 @@ PROFILE_DEFAULTS = {
     "whatsapp_catalog_id": "",         # Meta WhatsApp Business product catalog ID; empty = no catalog connected
     "whatsapp_business_token": "",     # Embedded Signup business access token, stored encrypted; never returned by get_profile()
     "instagram_account_id": "",        # Instagram-connected Page/IG account ID shown on the Channels tab (display only today; routing is still env-based, see instagram_service.resolve_agent)
+    "instagram_business_token": "",    # Manually pasted Instagram/Page access token, stored encrypted; never returned by get_profile()
     "instagram_ice_breakers": [],      # up to 4 clickable starter prompts shown to a first-time IG visitor (Meta messenger_profile)
     "instagram_greeting": "",          # persistent IG greeting text; Meta substitutes the literal {{user_first_name}} token
     "team_members": [],
@@ -582,6 +584,8 @@ def get_profile(agent_id: int) -> dict:
     # through get_profile. Callers only ever need to know whether one is set.
     stored_token = profile.pop("whatsapp_business_token", "")
     profile["whatsapp_business_token_set"] = bool(stored_token)
+    stored_ig_token = profile.pop("instagram_business_token", "")
+    profile["instagram_business_token_set"] = bool(stored_ig_token)
     return profile
 
 
@@ -590,6 +594,14 @@ def get_agent_whatsapp_token(agent_id: int) -> str | None:
     Internal use only (send/management calls in whatsapp_cloud_service.py) -- never return this
     value, or call it, from a route handler that hands its result back to the frontend."""
     raw = _get_group(agent_id, "profile").get("whatsapp_business_token") or ""
+    return secret_store.decrypt_value(raw) if raw else None
+
+
+def get_agent_instagram_token(agent_id: int) -> str | None:
+    """Decrypted manually-pasted Instagram/Page access token for this agent, or None if none is set.
+    Internal use only (send/management calls in instagram_service.py) -- never return this
+    value, or call it, from a route handler that hands its result back to the frontend."""
+    raw = _get_group(agent_id, "profile").get("instagram_business_token") or ""
     return secret_store.decrypt_value(raw) if raw else None
 
 
@@ -652,9 +664,17 @@ def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
         raw_token = values.pop("whatsapp_business_token")
         raw_token = "" if raw_token is None else str(raw_token)[:PROFILE_LIMITS["whatsapp_business_token"]]
         wa_token_encrypted = secret_store.encrypt_value(raw_token) if raw_token else ""
+    ig_token_present = "instagram_business_token" in values
+    ig_token_encrypted = None
+    if ig_token_present:
+        raw_ig_token = values.pop("instagram_business_token")
+        raw_ig_token = "" if raw_ig_token is None else str(raw_ig_token)[:PROFILE_LIMITS["instagram_business_token"]]
+        ig_token_encrypted = secret_store.encrypt_value(raw_ig_token) if raw_ig_token else ""
     values = _validate_profile_values(values)
     if wa_token_present:
         values["whatsapp_business_token"] = wa_token_encrypted
+    if ig_token_present:
+        values["instagram_business_token"] = ig_token_encrypted
     if "custom_topics" in values:
         if not isinstance(values["custom_topics"], list):
             raise ValueError("custom_topics must be a list")

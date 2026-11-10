@@ -223,8 +223,21 @@ def resolve_agent(page_id: str | None) -> int | None:
     return settings.instagram_agent_id or None
 
 
+def _profile_instagram_token(agent_id: int | None) -> str:
+    """Per-agent manually-pasted Instagram/Page access token (decrypted), or "" if this agent has
+    none set -- callers fall back to the global settings.instagram_token, same pattern as
+    whatsapp_cloud_service._profile_whatsapp_token."""
+    if not agent_id:
+        return ""
+    try:
+        from app.services import agents
+        return agents.get_agent_instagram_token(agent_id) or ""
+    except Exception:
+        return ""
+
+
 async def send_instagram_message(to: str, text: str, agent_id: int | None = None, lead_id: int | None = None) -> dict:
-    token = settings.instagram_token
+    token = _profile_instagram_token(agent_id) or settings.instagram_token
     page_id = settings.instagram_page_id
     if not (token and page_id):
         events.record("instagram.queued", f"Instagram ready for {to} (Awaiting Instagram credentials)",
@@ -251,7 +264,7 @@ async def send_instagram_quick_replies(to: str, agent_id: int | None, lead_id: i
     """Up to `max_options` tappable quick-reply buttons (Meta Instagram Messaging's quick_replies array),
     mirroring whatsapp_service.send_whatsapp_buttons. Meta caps quick_replies at 13 per message, so
     max_options is clamped to that ceiling regardless of what the caller passes."""
-    token = settings.instagram_token
+    token = _profile_instagram_token(agent_id) or settings.instagram_token
     page_id = settings.instagram_page_id
     if not (token and page_id):
         events.record("instagram.queued", f"Instagram ready for {to} (Awaiting Instagram credentials)",
@@ -280,7 +293,7 @@ async def send_instagram_document(to: str, agent_id: int | None, lead_id: int | 
     """Send a file attachment (brochure/price list) via Instagram Messaging's /messages endpoint,
     mirroring send_instagram_message's structure. Instagram's attachment format has no filename/caption
     fields, so none are sent."""
-    token = settings.instagram_token
+    token = _profile_instagram_token(agent_id) or settings.instagram_token
     page_id = settings.instagram_page_id
     if not (token and page_id):
         events.record("instagram.queued", f"Instagram ready for {to} (Awaiting Instagram credentials)",
@@ -308,7 +321,7 @@ async def sync_messenger_profile(agent_id: int) -> dict:
     endpoint (a one-time profile configuration, not a chat reply): see module docstring for the
     inbound-side note on how a tapped ice breaker arrives (plain text message)."""
     from app.services import agents
-    token = settings.instagram_token
+    token = _profile_instagram_token(agent_id) or settings.instagram_token
     page_id = settings.instagram_page_id
     if not (token and page_id):
         return {"ok": False, "error": "Instagram credentials not configured"}

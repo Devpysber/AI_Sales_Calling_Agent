@@ -152,6 +152,7 @@ export interface AgentProfile {
   custom_topics: string[]
   sales_mode: boolean
   sales_playbook: string
+  instagram_business_token_set?: boolean
 }
 
 export interface AutomationSettings {
