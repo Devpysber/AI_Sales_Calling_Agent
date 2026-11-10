@@ -116,6 +116,36 @@ def test_call_campaign_queues_audience(client, base):
     assert client.get(f"{base}/crm/campaigns/{camp['id']}").json()["status"] == "completed"
 
 
+def test_campaign_run_rejects_already_running(client, base):
+    import pytest
+
+    from app.core.database import get_db
+    from app.models.crm import Campaign
+    from app.services import campaigns as campaigns_mod
+
+    agent_id = int(base.rsplit("/", 1)[1])
+    client.post(f"{base}/leads", json={"name": "RaceLead", "phone": "+919844448000", "tags": ["race-test"]})
+    camp = client.post(f"{base}/crm/campaigns", json={"name": "Race", "channel": "call",
+                                                        "segment": {"tags": ["race-test"]}}).json()
+    with get_db() as db:
+        db.get(Campaign, camp["id"]).status = "running"
+    with pytest.raises(ValueError, match="already running"):
+        campaigns_mod.run(agent_id, camp["id"])
+
+
+def test_claim_running_is_atomic_against_double_claim(client, base):
+    from app.core.database import get_db
+    from app.models.crm import Campaign
+    from app.services import campaigns as campaigns_mod
+
+    agent_id = int(base.rsplit("/", 1)[1])
+    camp = client.post(f"{base}/crm/campaigns", json={"name": "Claim", "channel": "call", "segment": {}}).json()
+    with get_db() as db:
+        db.get(Campaign, camp["id"]).status = "draft"
+    assert campaigns_mod._claim_running(camp["id"]) is True
+    assert campaigns_mod._claim_running(camp["id"]) is False
+
+
 def test_call_campaign_preview_excludes_leads_with_no_phone(client, base):
     client.post(f"{base}/leads", json={"name": "HasPhone", "phone": "+919844447000", "tags": ["call-preview"]})
     client.post(f"{base}/leads", json={"name": "NoPhone", "email": "nophone@x.test", "tags": ["call-preview"]})

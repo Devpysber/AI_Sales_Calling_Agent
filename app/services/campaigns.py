@@ -11,7 +11,7 @@ import re
 import threading
 from datetime import datetime
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 
 from app.core.database import get_db
 from app.core.logging import get_logger
@@ -70,6 +70,18 @@ def _save(campaign_id: int, **values):
         row = db.get(Campaign, campaign_id)
         for key, value in values.items():
             setattr(row, key, value)
+
+
+def _claim_running(campaign_id: int, **values) -> bool:
+    """Atomically mark a campaign "running" only if it isn't already running/cancelling -- closes the
+    check-then-set race where a double-click or two tabs could both pass a stale status read."""
+    with get_db() as db:
+        result = db.execute(
+            update(Campaign)
+            .where(Campaign.id == campaign_id, Campaign.status.notin_(["running", "cancelling"]))
+            .values(status="running", **values)
+        )
+        return result.rowcount > 0
 
 
 def _send_whatsapp_lead(campaign: dict, lead: Lead) -> dict | None:
@@ -172,8 +184,6 @@ def cancel(agent_id: int, campaign_id: int) -> dict:
 def run(agent_id: int, campaign_id: int, actor: str = "admin") -> dict:
     from app.services.crm_records import get
     campaign = get(agent_id, "campaigns", campaign_id)
-    if campaign["status"] == "running":
-        raise ValueError("This campaign is already running.")
     if campaign["channel"] in ("email", "whatsapp") and not (campaign.get("message") or "").strip():
         raise ValueError("Write the message before launching.")
     if campaign["channel"] == "email" and not (campaign.get("subject") or "").strip():
@@ -185,7 +195,10 @@ def run(agent_id: int, campaign_id: int, actor: str = "admin") -> dict:
     leads = audience(agent_id, campaign.get("segment"), campaign["channel"])
     if not leads:
         raise ValueError("No leads match this audience.")
-    _save(campaign_id, status="running", started_at=datetime.utcnow(), stats_json=json.dumps({"targeted": len(leads), "sent": 0, "failed": 0, "skipped": 0}))
+    claimed = _claim_running(campaign_id, started_at=datetime.utcnow(),
+                              stats_json=json.dumps({"targeted": len(leads), "sent": 0, "failed": 0, "skipped": 0}))
+    if not claimed:
+        raise ValueError("This campaign is already running.")
     events.record("campaign.started", f"Campaign “{campaign['name']}” launched", f"{campaign['channel']} to {len(leads)} lead(s)", agent_id=agent_id, actor=actor)
     if campaign["channel"] == "call":
         from app.services.crm_service import CRMService
