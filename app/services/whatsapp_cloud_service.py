@@ -1033,7 +1033,7 @@ def _record_turn(msg: dict, agent_id: int, wamid: str | None, wa_id: str) -> tup
     shown, say = text, text  # what the transcript shows / what the agent is told
     if not text and kind in ("audio", "voice") and msg.get("media_id"):
         try:
-            data, mime = download_media(msg["media_id"], settings.whatsapp_token)
+            data, mime = download_media(msg["media_id"], _profile_whatsapp_token(agent_id) or settings.whatsapp_token)
             text = transcribe_audio(data, mime)
         except Exception:
             log.exception("WhatsApp voice note from %s could not be transcribed", phone)

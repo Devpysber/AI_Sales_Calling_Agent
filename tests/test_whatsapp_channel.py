@@ -217,6 +217,28 @@ def test_audio_is_transcribed(agent_id, fakes, monkeypatch):
     assert sent[-1][1] == wa.NON_TEXT_REPLY
 
 
+def test_audio_download_prefers_per_agent_token_over_global(agent_id, fakes, monkeypatch):
+    """Downloading a voice note sent to a client's Embedded Signup number must use THEIR token,
+    not our org's global settings.whatsapp_token -- and fall back to it when the agent has none set."""
+    from app.services import agents
+
+    sent, _, _ = fakes
+    monkeypatch.setattr(chat_agent, "respond", lambda aid, cid, h, t, lead, **kw: {"reply": "ok", "end_call": False})
+    monkeypatch.setattr(wa, "transcribe_audio", lambda d, m: "kitna price hai")
+    monkeypatch.setattr(wa.settings, "whatsapp_token", "global_tok")
+
+    calls = []
+    monkeypatch.setattr(wa, "download_media", lambda mid, tok: calls.append(tok) or (b"x", "audio/ogg"))
+
+    agents.update_profile(agent_id, {"whatsapp_business_token": "EAA_agent_token"}, actor="test")
+    wa.handle_inbound(_msg(wamid="a3", type="audio", media_id="m3", **{"from": "919811100015"}))
+    assert calls[-1] == "EAA_agent_token"
+
+    agents.update_profile(agent_id, {"whatsapp_business_token": ""}, actor="test")
+    wa.handle_inbound(_msg(wamid="a4", type="audio", media_id="m4", **{"from": "919811100016"}))
+    assert calls[-1] == "global_tok"
+
+
 def test_image_with_and_without_caption_and_reaction(agent_id, fakes, monkeypatch):
     sent, _, _ = fakes
     told = []
