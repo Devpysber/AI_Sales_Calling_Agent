@@ -132,6 +132,7 @@ export interface AgentProfile {
   call_to_action: string
   greeting_en: string
   greeting_hi: string
+  ai_disclosure_line: string
   instructions: string
   objection_handling: string
   qualification_criteria: string

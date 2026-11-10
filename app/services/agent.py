@@ -387,6 +387,10 @@ def greeting(agent_id: int, lead: dict, language: str) -> str:
         # Replace the generic "can we talk for a minute?" question with the reason for calling.
         text = re.split(r"(?<=[।.])\s+(?=[^।.]*\?\s*$)", text)[0] + " " + suffix.format(meeting=spoken_datetime(lead.get("meeting_at", ""), not english))
     text = " ".join(text.replace(" ,", ",").split())
+    if not returning:
+        disclosure = (persona.get("ai_disclosure_line") or "").strip()
+        if disclosure:
+            text = f"{disclosure} {text}"
     return text if english or language.startswith("hi") else _translate_line(text, language)
 
 

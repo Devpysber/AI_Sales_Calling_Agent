@@ -525,6 +525,9 @@ function ProfileEditor({ section, draft, setDraft, data }: {
                 </div>
               )
             })}
+            <Field label="AI disclosure line (optional)" hint="If your business/jurisdiction requires stating this is an automated call, put that line here — it's added once, at the very start of a first-time greeting only. Leave empty to say nothing extra.">
+              <Input value={draft.ai_disclosure_line ?? ''} maxLength={200} onChange={(e) => set('ai_disclosure_line', e.target.value)} placeholder="e.g. This is an automated call from our virtual assistant." />
+            </Field>
           </div>
         </Section>
 

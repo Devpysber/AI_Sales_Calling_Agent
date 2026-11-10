@@ -351,6 +351,38 @@ def test_shared_family_phone_is_not_greeted_by_one_desks_name(client, base, monk
     assert "Alpha Cars" not in text and "Beta Hair" not in text and "help you today" in text
 
 
+def test_an_ai_disclosure_line_opens_a_first_contact_greeting(client, base, monkeypatch):
+    from app.services import agent
+    from app.services.call_service import CallService
+    a = client.post("/api/agents", json={"name": "Disclosure Desk"}).json()
+    client.put(f"/api/agents/{a['id']}/profile", json={"ai_disclosure_line": "This is an AI assistant calling."})
+    client.post(f"/api/agents/{a['id']}/leads", json={"name": "Priya", "phone": "9812300333"})
+    monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
+    session = CallService(None).create_inbound("919812300333", "918000000000", "disc-1")
+    text = agent.greeting(session["agent_id"], session["lead"], "en-IN")
+    assert text.startswith("This is an AI assistant calling.")
+
+
+def test_an_ai_disclosure_line_is_not_repeated_on_a_returning_call(client, base, monkeypatch):
+    from app.services import agent
+    a = client.post("/api/agents", json={"name": "Disclosure Returning Desk"}).json()
+    client.put(f"/api/agents/{a['id']}/profile", json={"ai_disclosure_line": "This is an AI assistant calling."})
+    lead = {"name": "Priya", "call_purpose": "follow_up"}
+    text = agent.greeting(a["id"], lead, "en-IN")
+    assert not text.startswith("This is an AI assistant calling.")
+
+
+def test_no_ai_disclosure_line_leaves_the_greeting_unchanged(client, base, monkeypatch):
+    from app.services import agent
+    a = client.post("/api/agents", json={"name": "No Disclosure Desk"}).json()
+    client.post(f"/api/agents/{a['id']}/leads", json={"name": "Priya", "phone": "9812300444"})
+    monkeypatch.setattr("app.services.call_service.within_calling_hours", lambda cfg, now=None: True)
+    from app.services.call_service import CallService
+    session = CallService(None).create_inbound("919812300444", "918000000000", "nodisc-1")
+    text = agent.greeting(session["agent_id"], session["lead"], "en-IN")
+    assert text == "Hi Priya, thank you for calling Psyber Technologies, this is Ashish. How can I help you today?"
+
+
 def test_mid_call_desk_change_needs_a_cue_and_a_name():
     from app.services import agent
     from app.services.voice_stream import DESK_SWITCH_CUE

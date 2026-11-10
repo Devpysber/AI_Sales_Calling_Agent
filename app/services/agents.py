@@ -73,6 +73,7 @@ PROFILE_LIMITS = {
     "objective": 600, "instructions": 3000, "objection_handling": 3000, "qualification_criteria": 1500,
     "forbidden_topics": 1500, "agent_name": 60, "company_name": 120, "agent_role": 60,
     "customer_noun": 40, "website_url": 200, "sales_playbook": 2000, "instagram_greeting": 150,
+    "ai_disclosure_line": 200,
 }
 
 PROFILE_DEFAULTS = {
@@ -94,6 +95,9 @@ PROFILE_DEFAULTS = {
     "call_to_action": "",
     "greeting_en": "Hi {name}, this is {agent} calling from {company}. Is this a good time to talk for a minute?",
     "greeting_hi": "नमस्ते {name}, मैं {company} से {agent} बोल रहा हूँ। क्या अभी एक मिनट बात कर सकते हैं?",
+    # Opt-in: stated once, before a first-contact greeting only, if the business's jurisdiction requires
+    # disclosing that this is an automated/AI call. Empty by default -- no behavior change unless set.
+    "ai_disclosure_line": "",
     "instructions": (
         "Be warm, confident and concise, like a senior sales consultant on a phone call.\n"
         "Ask one question at a time and listen. Qualify on need, timeline, budget and decision maker.\n"
