@@ -181,6 +181,18 @@ def _profile_waba_id(agent_id: int | None) -> str:
         return ""
 
 
+def _profile_whatsapp_token(agent_id: int | None) -> str:
+    """Per-agent Embedded Signup business token (decrypted), or "" if this agent has none set --
+    callers fall back to the global settings.whatsapp_token, same pattern as _profile_phone_id."""
+    if not agent_id:
+        return ""
+    try:
+        from app.services import agents
+        return agents.get_agent_whatsapp_token(agent_id) or ""
+    except Exception:
+        return ""
+
+
 def clean_phone(phone: str) -> str:
     """Normalize phone to E.164 without plus, e.g. 919876543210."""
     digits = re.sub(r"\D", "", phone or "")
@@ -240,7 +252,7 @@ async def send_whatsapp_message(
             return {"ok": False, "error": str(e)}
 
     # Fallback to direct Meta/WhatsApp token if configured
-    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    whatsapp_token = _profile_whatsapp_token(agent_id) or getattr(settings, "whatsapp_token", "")
     phone_number_id = phone_number_id or _profile_phone_id(agent_id) or getattr(settings, "whatsapp_phone_number_id", "")
     if whatsapp_token and phone_number_id:
         try:
@@ -530,7 +542,7 @@ async def send_whatsapp_template(
     recipient = clean_phone(to)
     if not recipient:
         return {"ok": False, "error": "Invalid phone number"}
-    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    whatsapp_token = _profile_whatsapp_token(agent_id) or getattr(settings, "whatsapp_token", "")
     phone_number_id = phone_number_id or _profile_phone_id(agent_id) or getattr(settings, "whatsapp_phone_number_id", "")
     if not (whatsapp_token and phone_number_id):
         return {"ok": False, "error": "WhatsApp credentials not configured"}
@@ -620,7 +632,7 @@ async def upload_template_header_media(file_bytes: bytes, mime_type: str, agent_
     """Meta's Resumable Upload API: returns a one-time-use media handle for a template's
     HEADER example.header_handle (required by Meta for any non-TEXT header format)."""
     app_id = getattr(settings, "whatsapp_app_id", "")
-    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    whatsapp_token = _profile_whatsapp_token(agent_id) or getattr(settings, "whatsapp_token", "")
     if not app_id:
         return {"ok": False, "error": "Meta App ID not configured (WHATSAPP_APP_ID)"}
     if not whatsapp_token:
@@ -682,7 +694,7 @@ async def complete_embedded_signup(code: str, phone_number_id: str, waba_id: str
             if sub_res.status_code != 200:
                 return {"ok": False, "error": f"Meta subscribe HTTP {sub_res.status_code}: {sub_res.text}"}
 
-            return {"ok": True, "phone_number_id": phone_number_id, "waba_id": waba_id}
+            return {"ok": True, "phone_number_id": phone_number_id, "waba_id": waba_id, "access_token": access_token}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
 
@@ -694,7 +706,7 @@ async def create_meta_flow(agent_id: int, name: str, category: str = "LEAD_GENER
     """Create a Flow shell on Meta: POST /{waba_id}/flows -> {"id": "<flow_id>"}. The Flow JSON itself
     is uploaded separately (upload_flow_json) once this id exists."""
     waba_id = business_account_id or _profile_waba_id(agent_id) or getattr(settings, "whatsapp_business_account_id", "")
-    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    whatsapp_token = _profile_whatsapp_token(agent_id) or getattr(settings, "whatsapp_token", "")
     if not waba_id:
         return {"ok": False, "error": "WhatsApp Business Account ID not configured for this agent"}
     if not whatsapp_token:
@@ -718,7 +730,7 @@ async def upload_flow_json(agent_id: int, meta_flow_id: str, screens: list[dict]
     (developers.facebook.com/docs/whatsapp/flows/reference/flowsapi): field `file` (application/json,
     max 10MB), field `name` must be exactly "flow.json", field `asset_type` must be exactly "FLOW_JSON" --
     field names, required values, and content-type all match our implementation."""
-    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    whatsapp_token = _profile_whatsapp_token(agent_id) or getattr(settings, "whatsapp_token", "")
     if not whatsapp_token:
         return {"ok": False, "error": "WhatsApp credentials not configured"}
     flow_json = json.dumps({"version": version, "screens": screens})
@@ -744,7 +756,7 @@ async def upload_flow_json(agent_id: int, meta_flow_id: str, screens: list[dict]
 async def publish_meta_flow(agent_id: int, meta_flow_id: str) -> dict:
     """Publish the Flow: POST /{flow_id}/publish. A Flow must be published before it can be sent to a
     customer."""
-    whatsapp_token = getattr(settings, "whatsapp_token", "")
+    whatsapp_token = _profile_whatsapp_token(agent_id) or getattr(settings, "whatsapp_token", "")
     if not whatsapp_token:
         return {"ok": False, "error": "WhatsApp credentials not configured"}
     try:

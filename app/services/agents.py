@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import or_, func, select
 
 from app.core import store
+from app.core import secrets as secret_store
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.logging import get_logger
@@ -74,6 +75,7 @@ PROFILE_LIMITS = {
     "forbidden_topics": 1500, "agent_name": 60, "company_name": 120, "agent_role": 60,
     "customer_noun": 40, "website_url": 200, "sales_playbook": 2000, "instagram_greeting": 150,
     "ai_disclosure_line": 200,
+    "whatsapp_business_token": 1024,
 }
 
 PROFILE_DEFAULTS = {
@@ -116,6 +118,7 @@ PROFILE_DEFAULTS = {
     "whatsapp_phone_number_id": "",    # Meta phone number ID this agent chats from; empty = server default
     "whatsapp_business_account_id": "",  # Meta WhatsApp Business Account (WABA) ID, needed to create/submit templates; empty = server default
     "whatsapp_catalog_id": "",         # Meta WhatsApp Business product catalog ID; empty = no catalog connected
+    "whatsapp_business_token": "",     # Embedded Signup business access token, stored encrypted; never returned by get_profile()
     "instagram_account_id": "",        # Instagram-connected Page/IG account ID shown on the Channels tab (display only today; routing is still env-based, see instagram_service.resolve_agent)
     "instagram_ice_breakers": [],      # up to 4 clickable starter prompts shown to a first-time IG visitor (Meta messenger_profile)
     "instagram_greeting": "",          # persistent IG greeting text; Meta substitutes the literal {{user_first_name}} token
@@ -575,7 +578,19 @@ def get_profile(agent_id: int) -> dict:
     # live call both see at most four, without waiting for someone to re-save the page.
     if isinstance(profile.get("inbound_collect"), list):
         profile["inbound_collect"] = _ordered_collect(profile["inbound_collect"])[:MAX_INBOUND_COLLECT]
+    # The Embedded Signup business token is sensitive: never let it (even encrypted) leave this module
+    # through get_profile. Callers only ever need to know whether one is set.
+    stored_token = profile.pop("whatsapp_business_token", "")
+    profile["whatsapp_business_token_set"] = bool(stored_token)
     return profile
+
+
+def get_agent_whatsapp_token(agent_id: int) -> str | None:
+    """Decrypted Embedded Signup business access token for this agent, or None if none is set.
+    Internal use only (send/management calls in whatsapp_cloud_service.py) -- never return this
+    value, or call it, from a route handler that hands its result back to the frontend."""
+    raw = _get_group(agent_id, "profile").get("whatsapp_business_token") or ""
+    return secret_store.decrypt_value(raw) if raw else None
 
 
 def _validate_profile_values(values: dict) -> dict:
@@ -628,7 +643,18 @@ def restore_persona_snapshot(agent_id: int, snapshot_id: int, actor: str = "admi
 
 
 def update_profile(agent_id: int, values: dict, actor: str = "admin") -> dict:
-    values = _validate_profile_values(dict(values))
+    values = dict(values)
+    # Encrypt the Embedded Signup business token before it ever reaches the generic PROFILE_LIMITS
+    # truncation loop below (an encrypted blob can be longer than the raw-token cap) or the DB.
+    wa_token_present = "whatsapp_business_token" in values
+    wa_token_encrypted = None
+    if wa_token_present:
+        raw_token = values.pop("whatsapp_business_token")
+        raw_token = "" if raw_token is None else str(raw_token)[:PROFILE_LIMITS["whatsapp_business_token"]]
+        wa_token_encrypted = secret_store.encrypt_value(raw_token) if raw_token else ""
+    values = _validate_profile_values(values)
+    if wa_token_present:
+        values["whatsapp_business_token"] = wa_token_encrypted
     if "custom_topics" in values:
         if not isinstance(values["custom_topics"], list):
             raise ValueError("custom_topics must be a list")

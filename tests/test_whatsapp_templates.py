@@ -116,6 +116,51 @@ def test_send_whatsapp_template_payload_shape(monkeypatch):
     assert payload["template"]["components"][0]["parameters"][0]["text"] == "Ravi"
 
 
+def test_send_whatsapp_message_prefers_per_agent_token_over_global(client, monkeypatch):
+    """A client who completed Embedded Signup must be messaged with THEIR business token, not our
+    org's global settings.whatsapp_token -- and an agent with no token set still falls back to it."""
+    from app.services import agents
+
+    agent_id = _fresh_agent(client)
+    agents.update_profile(agent_id, {"whatsapp_business_token": "EAA_agent_token"}, actor="test")
+
+    calls = []
+
+    class Res:
+        status_code = 200
+        text = ""
+        def json(self):
+            return {"messages": [{"id": "wamid.T"}]}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, headers=None, json=None):
+            calls.append(headers)
+            return Res()
+
+    import httpx as _httpx
+    monkeypatch.setattr(_httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(wa.settings, "whatsapp_token", "global_tok")
+    monkeypatch.setattr(wa.settings, "whatsapp_phone_number_id", "555")
+
+    import asyncio
+    out = asyncio.run(wa.send_whatsapp_message("919811100099", "hi", agent_id=agent_id))
+    assert out["ok"]
+    assert calls[0]["Authorization"] == "Bearer EAA_agent_token"
+
+    # No per-agent token set: falls back to the global settings token.
+    other_agent_id = _fresh_agent(client)
+    calls.clear()
+    out = asyncio.run(wa.send_whatsapp_message("919811100099", "hi", agent_id=other_agent_id))
+    assert out["ok"]
+    assert calls[0]["Authorization"] == "Bearer global_tok"
+
+
 def _order_update_components():
     return [
         {"type": "HEADER", "format": "TEXT", "text": "Your order {{1}}"},
@@ -387,17 +432,23 @@ def test_campaign_whatsapp_template_skips_when_too_many_body_variables(client, c
 
 def test_embedded_signup_updates_profile(client, base, monkeypatch):
     async def fake_signup(code, phone_number_id, waba_id):
-        return {"ok": True, "phone_number_id": "123", "waba_id": "456"}
+        return {"ok": True, "phone_number_id": "123", "waba_id": "456", "access_token": "EAA_test_secret_123"}
     monkeypatch.setattr(wa, "complete_embedded_signup", fake_signup)
 
     res = client.post(f"{base}/whatsapp/embedded-signup",
                       json={"code": "fake-code", "phone_number_id": "ignored", "waba_id": "ignored"})
     assert res.status_code == 200
     assert res.json() == {"ok": True, "phone_number_id": "123", "waba_id": "456"}
+    # The business access token must never appear in the HTTP response.
+    assert "access_token" not in res.text
+    assert "EAA_test_secret_123" not in res.text
 
     profile = client.get(f"{base}/profile").json()["profile"]
     assert profile["whatsapp_phone_number_id"] == "123"
     assert profile["whatsapp_business_account_id"] == "456"
+    assert profile["whatsapp_business_token_set"] is True
+    assert "whatsapp_business_token" not in profile
+    assert "EAA_test_secret_123" not in str(profile)
 
 
 def test_embedded_signup_error_returns_400(client, base, monkeypatch):

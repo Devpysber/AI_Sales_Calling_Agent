@@ -220,6 +220,7 @@ async def embedded_signup(body: EmbeddedSignupIn, agent_id: int = Depends(worksp
     agents.update_profile(agent_id, {
         "whatsapp_phone_number_id": result["phone_number_id"],
         "whatsapp_business_account_id": result["waba_id"],
+        "whatsapp_business_token": result["access_token"],
     }, actor="admin")
     return {"ok": True, "phone_number_id": result["phone_number_id"], "waba_id": result["waba_id"]}
 
