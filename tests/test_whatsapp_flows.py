@@ -109,6 +109,62 @@ def test_parse_webhook_nfm_reply_extracts_fields():
     assert item["flow_data"] == {"full_name": "Ravi Kumar", "phone": "9876543210"}
 
 
+def test_upload_flow_json_happy_path(monkeypatch):
+    import asyncio
+
+    class Res:
+        status_code = 200
+        text = ""
+        def json(self):
+            return {"success": True}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, headers=None, data=None, files=None):
+            return Res()
+
+    import httpx as _httpx
+    monkeypatch.setattr(_httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(wa.settings, "whatsapp_token", "tok")
+
+    out = asyncio.run(wa.upload_flow_json(1, "flow123", SCREENS))
+    assert out["ok"] is True
+    assert out["data"] == {"success": True}
+
+
+def test_upload_flow_json_validation_errors(monkeypatch):
+    import asyncio
+
+    class Res:
+        status_code = 200
+        text = ""
+        def json(self):
+            return {"success": True, "validation_errors": [{"error": "SOME_ERROR", "message": "bad screen"}]}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, headers=None, data=None, files=None):
+            return Res()
+
+    import httpx as _httpx
+    monkeypatch.setattr(_httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(wa.settings, "whatsapp_token", "tok")
+
+    out = asyncio.run(wa.upload_flow_json(1, "flow123", SCREENS))
+    assert out["ok"] is False
+    assert out["validation_errors"] == [{"error": "SOME_ERROR", "message": "bad screen"}]
+
+
 def test_flow_response_writes_lead_fields(client, base):
     from app.core.database import get_db
     from app.models.lead import Lead

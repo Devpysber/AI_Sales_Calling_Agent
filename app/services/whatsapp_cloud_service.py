@@ -714,10 +714,10 @@ async def create_meta_flow(agent_id: int, name: str, category: str = "LEAD_GENER
 
 async def upload_flow_json(agent_id: int, meta_flow_id: str, screens: list[dict], version: str = "3.1") -> dict:
     """Upload the Flow's JSON definition: POST /{flow_id}/assets (multipart, asset_type=FLOW_JSON,
-    file=<the flow JSON as a file part>). UNCERTAIN: this multipart shape is built to faithfully match
-    Meta's documented "upload a Flow JSON asset" endpoint, but it has not been exercised against a real
-    Meta sandbox -- the exact multipart field names/content-type Meta's endpoint accepts should be
-    confirmed against a live WABA before relying on this in production."""
+    file=<the flow JSON as a file part>). Verified against Meta's official Flows API reference
+    (developers.facebook.com/docs/whatsapp/flows/reference/flowsapi): field `file` (application/json,
+    max 10MB), field `name` must be exactly "flow.json", field `asset_type` must be exactly "FLOW_JSON" --
+    field names, required values, and content-type all match our implementation."""
     whatsapp_token = getattr(settings, "whatsapp_token", "")
     if not whatsapp_token:
         return {"ok": False, "error": "WhatsApp credentials not configured"}
@@ -730,7 +730,12 @@ async def upload_flow_json(agent_id: int, meta_flow_id: str, screens: list[dict]
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.post(url, headers=headers, data=data, files=files)
             if res.status_code in (200, 201):
-                return {"ok": True, "data": res.json()}
+                body = res.json()
+                validation_errors = body.get("validation_errors")
+                if isinstance(validation_errors, list) and validation_errors:
+                    return {"ok": False, "error": "Meta reported validation errors",
+                            "validation_errors": validation_errors}
+                return {"ok": True, "data": body}
             return {"ok": False, "error": f"Meta HTTP {res.status_code}: {res.text}"}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
