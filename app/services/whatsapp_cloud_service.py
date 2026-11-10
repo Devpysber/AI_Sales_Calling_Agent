@@ -797,7 +797,7 @@ def _meta_post(payload: dict, agent_id: int | None, lead_id: int | None, phone_n
     """Shared sync POST to the Meta Graph /messages endpoint for message types beyond plain text
     (document, interactive, location). Composio has no equivalent action for these, so they always go
     through the direct Meta token/phone-number-id path, same credentials as send_whatsapp_message."""
-    token = settings.whatsapp_token
+    token = _profile_whatsapp_token(agent_id) or settings.whatsapp_token
     pid = phone_number_id or _profile_phone_id(agent_id) or settings.whatsapp_phone_number_id
     if not (token and pid):
         return {"ok": False, "error": "WhatsApp credentials not configured"}

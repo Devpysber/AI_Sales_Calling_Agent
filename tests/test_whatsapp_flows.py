@@ -86,6 +86,46 @@ def test_send_whatsapp_flow_payload_shape(monkeypatch):
     assert params["flow_action_payload"] == {"screen": "WELCOME"}
 
 
+def test_meta_post_prefers_per_agent_token_over_global(base, monkeypatch):
+    """_meta_post is the shared sender behind send_whatsapp_flow and other non-text message types;
+    it must use the client's own Embedded Signup token, not our org's global settings.whatsapp_token
+    -- and fall back to it when the agent has none set."""
+    from app.services import agents
+
+    agent_id = int(base.rsplit("/", 1)[1])
+    monkeypatch.setattr(wa.settings, "whatsapp_token", "global_tok")
+    monkeypatch.setattr(wa.settings, "whatsapp_phone_number_id", "global_pid")
+
+    calls = []
+
+    class FakeRes:
+        status_code = 200
+        text = ""
+        def json(self):
+            return {}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def post(self, url, headers=None, json=None):
+            calls.append(headers["Authorization"])
+            return FakeRes()
+
+    monkeypatch.setattr(wa.httpx, "Client", FakeClient)
+
+    agents.update_profile(agent_id, {"whatsapp_business_token": "EAA_agent_token"}, actor="test")
+    wa._meta_post({"type": "text"}, agent_id, None)
+    assert calls[-1] == "Bearer EAA_agent_token"
+
+    agents.update_profile(agent_id, {"whatsapp_business_token": ""}, actor="test")
+    wa._meta_post({"type": "text"}, agent_id, None)
+    assert calls[-1] == "Bearer global_tok"
+
+
 def test_parse_webhook_nfm_reply_extracts_fields():
     payload = {
         "entry": [{"changes": [{"value": {
