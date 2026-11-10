@@ -25,6 +25,16 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # Fields the AI may never write: the phone number is what we dial, so it stays under human control.
 AI_PROTECTED = {"phone", "owner_user_id"}
 
+# CSV injection: a cell starting with one of these is a formula to Excel/Sheets, not text.
+CSV_DANGEROUS_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value):
+    """Prefix a leading quote so spreadsheet apps treat a formula-looking cell as plain text."""
+    if isinstance(value, str) and value.startswith(CSV_DANGEROUS_PREFIXES):
+        return "'" + value
+    return value
+
 EDITABLE = {"name", "company", "phone", "email", "city", "language", "source", "tags", "notes", "do_not_call",
             "status", "call_status", "retry_count", "qualification", "summary", "requirements", "objections",
             "follow_up_date", "meeting_at", "callback_at", "owner_user_id"}
@@ -710,6 +720,8 @@ class CRMService:
             rows = [l.to_dict() for l in db.scalars(self._filtered(**filters).order_by(Lead.id))]
         for r in rows:
             r["tags"] = ",".join(r["tags"])
+            for k, v in r.items():
+                r[k] = _csv_safe(v)
         return pd.DataFrame(rows).to_csv(index=False)
 
     def import_legacy_excel(self, path: str):

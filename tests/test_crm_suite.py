@@ -266,6 +266,14 @@ def test_assistant_proposes_and_executes(client, base, monkeypatch):
     assert any(t["title"] == "Follow up Priya" and t["lead_id"] == lead["id"] for t in client.get(f"{base}/crm/tasks").json())
 
 
+def test_export_csv_sanitizes_formula_injection(client, base):
+    lead = client.post(f"{base}/leads", json={"name": "=cmd|'/ C calc'!A1", "phone": "+919822223333"}).json()
+    csv = client.get(f"{base}/leads/export").text
+    row = next(line for line in csv.splitlines() if "cmd|" in line)
+    assert "'=cmd|" in row and "\n=cmd|" not in csv and not csv.startswith("=cmd|")
+    assert lead["id"]
+
+
 def test_public_demo_request(client):
     res = TestClient(app).post("/api/public/demo-request", json={"name": "Neha", "email": "neha@x.test", "message": "Demo please"})
     assert res.status_code == 200
