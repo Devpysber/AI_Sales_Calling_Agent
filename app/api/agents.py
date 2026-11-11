@@ -536,8 +536,10 @@ def analytics_channel_report(days: int = Query(14, ge=7, le=180), agent_id: int 
     return analytics.channel_report(agent_id, days)
 
 
-@router.get("/{agent_id}/analytics/leaderboard")
+@router.get("/{agent_id}/analytics/leaderboard", dependencies=[Depends(require("leads.view_all"))])
 def analytics_leaderboard(days: int = Query(30, ge=7, le=180), agent_id: int = Depends(workspace)):
+    # Unlike the two routes above (aggregate numbers only), this names every rep individually -
+    # a sales_exec is deliberately scoped to their own leads (no leads.view_all) and must not see it.
     return analytics.rep_leaderboard(agent_id, days)
 
 

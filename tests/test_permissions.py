@@ -145,6 +145,18 @@ def test_sales_exec_sees_only_assigned_leads(client, base):
     assert CRMService(agent_id).get(theirs)["owner_user_id"] == other  # an unscoped service still sees it
 
 
+def test_sales_exec_cannot_see_the_team_leaderboard(client, base):
+    """The leaderboard names every rep individually, unlike the aggregate /analytics routes - a
+    sales_exec (no leads.view_all, scoped to their own leads) must not see colleagues' numbers."""
+    _make_user("rep-leaderboard@perm.test", "sales_exec")
+    _make_user("mgr-leaderboard@perm.test", "manager")
+    rep = _login("rep-leaderboard@perm.test")
+    mgr = _login("mgr-leaderboard@perm.test")
+    assert rep.get(f"{base}/analytics/leaderboard").status_code == 403
+    assert mgr.get(f"{base}/analytics/leaderboard").status_code == 200
+    assert client.get(f"{base}/analytics/leaderboard").status_code == 200  # admin/owner session
+
+
 def test_owner_of_another_organisation_cannot_reach_this_agent(client, base):
     agent_id = int(base.rsplit("/", 1)[1])
     with get_db() as db:
