@@ -61,7 +61,7 @@ def list_agents(request: Request):
             # Locked workspace: name and colour for the switcher, nothing about its numbers or persona.
             reduced.append({
                 "id": a["id"], "name": a["name"], "color": a.get("color"), "status": a.get("status"), "locked": True,
-                "stats": {k: (None if k == "last_call_at" else 0) for k in (a.get("stats") or {"leads": 0, "hot": 0, "meetings": 0, "calls_today": 0, "connected_today": 0, "live": 0, "documents": 0, "last_call_at": None})},
+                "stats": {k: (None if k == "last_call_at" else 0) for k in (a.get("stats") or {"leads": 0, "hot": 0, "meetings": 0, "calls_today": 0, "connected_today": 0, "live": 0, "documents": 0, "awaiting_reply": 0, "last_call_at": None})},
                 "persona": {k: "" for k in (a.get("persona") or {"agent_name": "", "company_name": "", "voice_speaker": "", "default_language": ""})},
                 "setup": {k: False for k in (a.get("setup") or {})},
             })

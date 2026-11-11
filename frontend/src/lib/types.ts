@@ -281,6 +281,7 @@ export interface AgentStats {
   connected_today: number
   live: number
   documents: number
+  awaiting_reply: number
   last_call_at: string | null
 }
 

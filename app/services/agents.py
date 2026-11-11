@@ -19,6 +19,7 @@ from app.core.database import get_db
 from app.core.logging import get_logger
 from app.models.agent import Agent, PersonaSnapshot
 from app.models.call import Call
+from app.models.channel import Conversation, Message
 from app.models.document import Document, DocumentChunk
 from app.models.event import Event
 from app.models.lead import Lead
@@ -275,6 +276,17 @@ def list_agents(organization_id: int | None = None) -> list[dict]:
         live = per_agent(select(Call.agent_id, func.count(Call.id)).where(Call.status.in_(ACTIVE_CALL)).group_by(Call.agent_id))
         documents = per_agent(select(Document.agent_id, func.count(Document.id)).group_by(Document.agent_id))
         last_call = per_agent(select(Call.agent_id, func.max(Call.created_at)).group_by(Call.agent_id))
+        # Open WhatsApp/Instagram conversations whose latest message is still from the customer (the
+        # Inbox page's own "awaiting_reply" rule, aggregated here instead of refetched per nav render).
+        last_msg_ids = (select(Message.conversation_id, func.max(Message.id).label("last_id"))
+                        .group_by(Message.conversation_id).subquery())
+        awaiting_reply = per_agent(
+            select(Conversation.agent_id, func.count(Conversation.id))
+            .join(last_msg_ids, last_msg_ids.c.conversation_id == Conversation.id)
+            .join(Message, Message.id == last_msg_ids.c.last_id)
+            .where(Conversation.channel.in_(("whatsapp", "instagram")), Conversation.status == "open",
+                   Message.sender_type == "customer")
+            .group_by(Conversation.agent_id))
         customized = {a.id: bool(a.stored("profile")) for a in db.scalars(select(Agent))}
 
     from app.services.call_service import within_calling_hours
@@ -300,6 +312,7 @@ def list_agents(organization_id: int | None = None) -> list[dict]:
                 "leads": leads.get(aid, 0), "hot": hot.get(aid, 0), "meetings": meetings.get(aid, 0),
                 "calls_today": calls_today.get(aid, 0), "connected_today": connected_today.get(aid, 0),
                 "live": live.get(aid, 0), "documents": documents.get(aid, 0),
+                "awaiting_reply": awaiting_reply.get(aid, 0),
                 "last_call_at": last_call[aid].isoformat(timespec="seconds") + "Z" if last_call.get(aid) else None,
             },
         })
