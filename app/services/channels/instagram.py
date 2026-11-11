@@ -11,6 +11,9 @@ class InstagramAdapter(ChannelAdapter):
     def send(self, to: str, text: str, **kwargs) -> dict:
         return asyncio.run(_ig.send_instagram_message(to, text, **kwargs))
 
+    def send_media(self, to: str, media_id: str, **kwargs) -> dict:
+        return asyncio.run(_ig.send_instagram_document(to, kwargs.get("agent_id"), kwargs.get("lead_id"), media_id))
+
     def parse_webhook(self, payload: dict) -> list[dict]:
         return _ig.parse_webhook(payload)
 

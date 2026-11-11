@@ -512,3 +512,18 @@ def test_messenger_profile_sync_endpoint_400_when_not_configured(agent_id, clien
     monkeypatch.setattr(ig, "settings", SimpleNamespace(instagram_token="", instagram_page_id=""))
     res = client.post(f"{base}/instagram/messenger-profile/sync")
     assert res.status_code == 400
+
+
+def test_adapter_send_media_delegates_to_send_instagram_document(monkeypatch):
+    from app.services.channels.instagram import InstagramAdapter
+
+    calls = []
+
+    async def fake_send_instagram_document(to, agent_id, lead_id, link):
+        calls.append((to, agent_id, lead_id, link))
+        return {"ok": True}
+
+    monkeypatch.setattr(ig, "send_instagram_document", fake_send_instagram_document)
+    result = InstagramAdapter().send_media("17800000001", "https://example.com/brochure.pdf", agent_id=1, lead_id=2)
+    assert result == {"ok": True}
+    assert calls == [("17800000001", 1, 2, "https://example.com/brochure.pdf")]
