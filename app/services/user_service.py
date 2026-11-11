@@ -67,8 +67,10 @@ def get(user_id: int) -> dict | None:
 
 
 def list_users() -> list[dict]:
+    """A bulk listing, unlike get()/find_by_email() which exist for auth checks: strips password_hash
+    so a future caller can't accidentally leak it the way a single get() reasonably carries it."""
     with get_db() as db:
-        return [_row(u) for u in db.scalars(select(User))]
+        return [{k: v for k, v in _row(u).items() if k != "password_hash"} for u in db.scalars(select(User))]
 
 
 def default_org() -> dict | None:
