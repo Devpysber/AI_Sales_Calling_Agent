@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { AlertTriangle, Users } from 'lucide-react'
+import { AlertTriangle, Download, Users } from 'lucide-react'
 import { useState } from 'react'
 import { Button, Card, CardHeader, EmptyState, PageHeader, Skeleton, Tabs } from '@/components/ui'
 import { api } from '@/lib/api'
@@ -9,6 +9,24 @@ import type { RepLeaderboard } from '@/lib/types'
 const RANGES = [{ value: '7', label: '7d' }, { value: '14', label: '14d' }, { value: '30', label: '30d' }, { value: '90', label: '90d' }] as const
 
 const pct = (n: number | null | undefined) => (n == null ? '—' : `${n.toFixed(1)}%`)
+
+const csvCell = (v: unknown) => {
+  const s = v == null ? '' : String(v)
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+function downloadTeamCsv(data: RepLeaderboard, days: string) {
+  const header = ['rep', 'email', 'leads_owned', 'calls', 'connected', 'connect_rate', 'meetings', 'hot_leads', 'avg_lead_score']
+  const rows = data.reps.map((r) => [r.name ?? '', r.email, r.leads_owned, r.calls, r.connected, r.connect_rate, r.meetings, r.hot_leads, r.avg_lead_score])
+  const csv = [header.join(','), ...rows.map((r) => r.map(csvCell).join(','))].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `team-${days}d-${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
 
 export default function Team() {
   const { agent, base } = useAgent()
@@ -27,7 +45,10 @@ export default function Team() {
         eyebrow={<><Users className="size-3.5" />{agent?.name} · Team</>}
         title="Team performance"
         description="How each rep's leads are converting: calls, connects, meetings and lead quality."
-        actions={<Tabs value={days} onChange={setDays} items={RANGES.map((r) => ({ ...r }))} />} />
+        actions={<>
+          <Tabs value={days} onChange={setDays} items={RANGES.map((r) => ({ ...r }))} />
+          <Button onClick={() => data && downloadTeamCsv(data, days)} disabled={!data} className="no-print"><Download />Export CSV</Button>
+        </>} />
 
       {isError ? (
         <Card><EmptyState icon={<AlertTriangle />} title="Couldn't load team performance" description={error instanceof Error ? error.message : 'Something went wrong while fetching the report.'}
