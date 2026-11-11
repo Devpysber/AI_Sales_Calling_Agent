@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ExternalLink, Camera as InstagramIcon, Phone, Send, Sparkles, User } from "lucide-react"
 import { Fragment, useEffect, useRef, useState } from "react"
 import type { ReactNode } from "react"
-import { Link } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton, Textarea } from "@/components/ui"
 import { useStartCall } from "@/components/LeadSheets"
@@ -42,6 +42,7 @@ const time = (iso?: string | null) => (iso ? new Date(iso).toLocaleString(undefi
 export default function Instagram() {
   const { base, path } = useAgent()
   const qc = useQueryClient()
+  const [params] = useSearchParams()
   const [selected, setSelected] = useState<number | null>(null)
   const [text, setText] = useState("")
   const [search, setSearch] = useState("")
@@ -53,6 +54,13 @@ export default function Instagram() {
   const filteredItems = q
     ? items.filter((c) => [c.lead_name, c.lead_phone, c.last_text].some((v) => (v || "").toLowerCase().includes(q)))
     : items
+  // Arriving from a lead's "Instagram" quick action: jump straight to that lead's chat once it's loaded.
+  useEffect(() => {
+    const leadId = Number(params.get("lead"))
+    if (!leadId) return
+    const match = items.find((c) => c.lead_id === leadId)
+    if (match) setSelected(match.id)
+  }, [params, items])
   const activeId = selected ?? items[0]?.id ?? null
   const detail = useQuery({
     queryKey: ["ig-chat", base, activeId], enabled: activeId != null, refetchInterval: 5000,

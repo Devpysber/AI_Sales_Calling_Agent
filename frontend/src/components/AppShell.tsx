@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Activity, BarChart3, BookOpen, Bot, Building2, CalendarClock, Check, ChevronsLeft, ChevronsRight, ChevronsUpDown, Columns3,
-  Download, Camera, Keyboard, ListTodo, Megaphone, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Lock, Mail, Menu, MessageCircle, MessageSquare, MessageSquareText, Moon, Pause, PhoneCall, Plug, Plus, FileText, Search, Settings,
+  Download, Camera, Keyboard, Inbox, ListTodo, Megaphone, PhoneIncoming, LayoutDashboard, LayoutGrid, LogOut, Lock, Mail, Menu, MessageCircle, MessageSquare, MessageSquareText, Moon, Pause, PhoneCall, Plug, Plus, FileText, Search, Settings,
   SlidersHorizontal, Sparkles, Sun, Upload, UserPlus, Users, Wrench, X,
 } from 'lucide-react'
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -30,6 +30,7 @@ const AGENT_NAV: { section: string; items: NavItem[] }[] = [
       { to: '/pipeline', label: 'Pipeline', icon: Columns3, key: 'p', count: (a) => a.stats.hot ? <span className="text-danger">{a.stats.hot} hot</span> : null },
       { to: '/accounts', label: 'Accounts', icon: Building2, key: 'd' },
       { to: '/calls', label: 'Calls', icon: PhoneCall, key: 'c', count: (a) => a.stats.live ? <span className="rounded-full bg-success px-1.5 text-white">{a.stats.live} live</span> : a.stats.calls_today || null },
+      { to: '/inbox', label: 'Inbox', icon: Inbox, key: 'b' },
       { to: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, key: 'w' },
       { to: '/instagram', label: 'Instagram', icon: Camera, key: 'n' },
       { to: '/inbound', label: 'Inbound & transfer', icon: PhoneIncoming, key: 'i' },
