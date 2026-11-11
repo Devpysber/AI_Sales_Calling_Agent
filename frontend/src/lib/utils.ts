@@ -84,8 +84,12 @@ export const LEAD_JOURNEY = ['New', 'Contacted', 'Interested', 'Follow Up', 'Mee
  * connect rate at all), so the same lead showed two different scores depending on where you
  * looked. `connected`/`total` come from the lead row on the list and from the loaded calls on
  * the lead page; with no call data the reach term is simply absent, not guessed.
+ *
+ * `lead_score_effective` (backend: qualification + per-call sentiment trend, decayed by how
+ * stale contact has gone stale) nudges this by up to ±5 when present, instead of adding a
+ * second on-screen number next to this one.
  */
-export function leadScore(lead: { do_not_call?: boolean; qualification?: string | null; status: string; last_contacted_at?: string | null; total_calls?: number; connected_calls?: number }, calls?: { status: string; duration: number }[]): number {
+export function leadScore(lead: { do_not_call?: boolean; qualification?: string | null; status: string; last_contacted_at?: string | null; total_calls?: number; connected_calls?: number; lead_score_effective?: number | null }, calls?: { status: string; duration: number }[]): number {
   if (lead.do_not_call) return 0
   const temp = ({ Hot: 45, Warm: 28, Cold: 8 } as Record<string, number>)[lead.qualification ?? ''] ?? 12
   const stage = Math.max(0, LEAD_JOURNEY.indexOf(lead.status)) * 6
@@ -95,5 +99,9 @@ export function leadScore(lead: { do_not_call?: boolean; qualification?: string 
     : lead.connected_calls ?? 0
   const reach = total ? Math.round((15 * connected) / total) : 0
   const recent = lead.last_contacted_at && Date.now() - Date.parse(lead.last_contacted_at) < 7 * 86_400_000 ? 10 : 0
-  return Math.min(100, temp + stage + reach + recent)
+  const qualificationBaseline = ({ Hot: 85, Warm: 55, Cold: 20 } as Record<string, number>)[lead.qualification ?? ''] ?? 0
+  const sentimentTrend = lead.lead_score_effective != null && qualificationBaseline
+    ? Math.round((lead.lead_score_effective - qualificationBaseline) / 2)
+    : 0
+  return Math.min(100, Math.max(0, temp + stage + reach + recent + Math.max(-5, Math.min(5, sentimentTrend))))
 }

@@ -7,7 +7,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { LeadFormSheet, useStartCall } from '@/components/LeadSheets'
-import { CallStatusBadge, LeadStatusBadge, LeadScoreBadge, QualificationBadge } from '@/components/status'
+import { CallStatusBadge, LeadStatusBadge, QualificationBadge } from '@/components/status'
 import { Avatar, Button, Card, EmptyState, Input, PageHeader, Pagination, Select, Skeleton, TableScroll, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
 import { AnimatedNumber } from '@/lib/motion'
@@ -387,7 +387,7 @@ export default function Leads() {
                       </div>) })()}
                   </td>
                   <td className="px-3"><div className="flex items-center gap-1.5 whitespace-nowrap"><CallStatusBadge status={l.call_status} />{l.retry_count > 0 && <span className="text-xs text-muted">×{l.retry_count}</span>}</div></td>
-                  <td className="px-3"><div className="flex items-center gap-1.5 whitespace-nowrap"><QualificationBadge value={l.qualification} /><LeadScoreBadge value={l.lead_score_effective} /></div></td>
+                  <td className="px-3"><div className="flex items-center gap-1.5 whitespace-nowrap"><QualificationBadge value={l.qualification} /></div></td>
                   <td className="px-3 text-[13px] whitespace-nowrap"><NextStep l={l} /></td>
                   <td className="px-3 text-[13px] whitespace-nowrap text-muted" title={formatDate(l.last_contacted_at)}>{l.last_contacted_at ? timeAgo(l.last_contacted_at) : 'Never'}</td>
                   <td className="px-4 text-right" onClick={(e) => e.stopPropagation()}>
