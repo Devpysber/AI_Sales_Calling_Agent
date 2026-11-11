@@ -11,7 +11,7 @@ from sqlalchemy import Integer, func, select
 from app.core.database import get_db
 from app.models.call import Call
 from app.models.channel import Conversation, Message, ToolRun
-from app.models.lead import Lead
+from app.models.lead import Lead, effective_lead_score
 from app.models.user import User
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -302,7 +302,12 @@ def report(agent_id: int, days: int = 30) -> dict:
 
 
 def rep_leaderboard(agent_id: int, days: int = 30) -> dict:
-    """Per-rep leads/calls/meetings for the owners of this agent's leads."""
+    """Per-rep leads/calls/meetings for the owners of this agent's leads.
+
+    Unlike report()/channel_report() above, this names every rep individually (id, name, email) -
+    callers MUST gate access behind `leads.view_all` (see the one route that calls this,
+    app/api/agents.py's analytics_leaderboard) before invoking this function. It has no permission
+    awareness of its own; do not add a second caller without the same gate."""
     today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
     start = (today - timedelta(days=days - 1) - OFFSET).replace(tzinfo=None)
     mine = Lead.agent_id == agent_id
@@ -341,15 +346,7 @@ def rep_leaderboard(agent_id: int, days: int = 30) -> dict:
         connected = [c for c in calls if c.status == ANSWERED or (c.status == "Failed" and (c.duration or 0) > 0)]
         meetings = sum(c.outcome == "meeting_booked" for c in calls)
         hot_leads = sum(l.qualification == "Hot" for l in owned_leads)
-        scores = []
-        for l in owned_leads:
-            if l.lead_score is None:
-                continue
-            if l.last_contacted_at is None:
-                scores.append(l.lead_score)
-            else:
-                days_since_last_contact = (datetime.utcnow() - l.last_contacted_at).days
-                scores.append(max(0, l.lead_score - min(50, days_since_last_contact // 3)))
+        scores = [s for s in (effective_lead_score(l.lead_score, l.last_contacted_at) for l in owned_leads) if s is not None]
         user = users.get(owner_user_id)
         out.append({
             "user_id": owner_user_id,

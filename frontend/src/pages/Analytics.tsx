@@ -9,15 +9,11 @@ import { ChartNowDot } from '@/components/Live'
 import { AnimatedNumber, Stagger } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
 import type { AnalyticsKpis, AnalyticsReport, AnalyticsUsage, ChannelAnalyticsReport } from '@/lib/types'
-import { cn, DAYS, formatDuration, titleCase } from '@/lib/utils'
+import { cn, csvCell, DAYS, formatDuration, titleCase } from '@/lib/utils'
 
 const tooltipStyle = { background: 'var(--elevated)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12, boxShadow: 'var(--shadow-pop)' }
 const RANGES = [{ value: '7', label: '7d' }, { value: '14', label: '14d' }, { value: '30', label: '30d' }, { value: '90', label: '90d' }] as const
 
-const csvCell = (v: unknown) => {
-  const s = v == null ? '' : String(v)
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-}
 const csvSection = (title: string, header: string[], rows: (string | number | null | undefined)[][]) =>
   [title, header.map(csvCell).join(','), ...rows.map((r) => r.map(csvCell).join(','))].join('\n')
 

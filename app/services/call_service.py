@@ -18,7 +18,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.logging import get_logger
 from app.models.call import Call
-from app.models.lead import Lead
+from app.models.lead import QUALIFICATION_SCORE_BASELINE, Lead
 from app.services import agent, agents, call_session, events, tts
 from app.services.crm_service import CRMService
 
@@ -91,7 +91,7 @@ def _normalize_qualification(value) -> str | None:
 def _lead_score(qualification: str | None, sentiment: str | None, previous: int | None) -> int | None:
     """Numeric lead score: qualification base + sentiment adjustment, clamped to [0, 100]. An
     unparsable qualification leaves the previous score untouched rather than wiping it out."""
-    base = {"Hot": 85, "Warm": 55, "Cold": 20}.get(qualification or "")
+    base = QUALIFICATION_SCORE_BASELINE.get(qualification or "")
     if base is None:
         return previous
     adjustment = {"positive": 10, "negative": -10}.get(sentiment or "", 0)
@@ -331,13 +331,14 @@ def apply_turn_signals(crm_service, lead_id: int | None, result: dict, call_id: 
     if not lead_id:
         return
     crm = result["crm_update"]
+    current = crm_service.get(lead_id) or {}
     updates = {k: crm[k] for k in ("requirements", "objections", "follow_up_date", "email") if crm.get(k)}
     if crm.get("requirement") and not updates.get("requirements"):
         updates["requirements"] = str(crm["requirement"])[:500]
     meeting_at = _valid_meeting(crm.get("meeting_at"))
     if meeting_at:
         updates["meeting_at"] = meeting_at
-    elif str(crm.get("meeting_at") or "").strip().lower() in ("cancelled", "canceled", "cancel") and (crm_service.get(lead_id) or {}).get("meeting_at"):
+    elif str(crm.get("meeting_at") or "").strip().lower() in ("cancelled", "canceled", "cancel") and current.get("meeting_at"):
         # The customer called the booking off and took no new slot: the reminder job must not ring them for it.
         updates["meeting_at"] = ""
         updates["status"] = "Follow Up"
@@ -347,7 +348,7 @@ def apply_turn_signals(crm_service, lead_id: int | None, result: dict, call_id: 
         updates["call_status"] = "Pending"  # the callback job dials it
     if result["qualification"]:
         updates["qualification"] = result["qualification"]
-        updates["lead_score"] = _lead_score(result["qualification"], None, (crm_service.get(lead_id) or {}).get("lead_score"))
+        updates["lead_score"] = _lead_score(result["qualification"], None, current.get("lead_score"))
     if result["intent"] == "do_not_call":
         updates["do_not_call"] = True
         updates["status"] = "Do Not Call"

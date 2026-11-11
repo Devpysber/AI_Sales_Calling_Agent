@@ -337,14 +337,7 @@ def bulk_assign(body: BulkAssign, request: Request, agent_id: int = Depends(work
         target = user_service.get(body.user_id)
         if not target or target["status"] != "active" or target["organization_id"] != request.state.principal["organization_id"]:
             raise HTTPException(400, "That user can't be assigned leads.")
-    crm = CRMService(agent_id)
-    updated = 0
-    for lead_id in body.ids:
-        try:
-            crm.update(lead_id, {"owner_user_id": body.user_id}, actor=actor(request), title="Lead assigned")
-            updated += 1
-        except LookupError:
-            pass
+    updated = CRMService(agent_id).bulk_assign(body.ids, body.user_id, actor=actor(request))
     return {"updated": updated}
 
 

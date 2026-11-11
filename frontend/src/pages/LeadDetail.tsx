@@ -14,7 +14,8 @@ import { Avatar, Badge, Button, Card, CardHeader, Dialog, EmptyState, Input, Pag
 import { api, ApiError } from '@/lib/api'
 import { Stagger } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
-import type { ActivityEvent, AssignableUser, Call, Lead, Page } from '@/lib/types'
+import { useAssignableUsers } from '@/lib/useAssignableUsers'
+import type { ActivityEvent, Call, Lead, Page } from '@/lib/types'
 import { cn, formatDate, formatDuration, LANGUAGES, LEAD_STATUSES, leadScore, timeAgo, titleCase } from '@/lib/utils'
 
 const JOURNEY = ['New', 'Contacted', 'Interested', 'Follow Up', 'Meeting Booked', 'Closed Won']
@@ -143,7 +144,7 @@ export default function LeadDetail() {
     onSuccess: (l) => { qc.setQueryData(['lead', leadId], l); qc.invalidateQueries({ queryKey: ['leads'] }); qc.invalidateQueries({ queryKey: ['activity', 'lead', leadId] }); toast.success('Lead updated') },
     onError: (e) => toast.error(e.message),
   })
-  const assignableUsers = useQuery({ queryKey: ['assignable-users', base], queryFn: () => api<AssignableUser[]>(`${base}/leads/assignable-users`), staleTime: 60_000 })
+  const assignableUsers = useAssignableUsers(base)
   const assign = useMutation({
     mutationFn: (user_id: number | null) => api<Lead>(`${base}/leads/${leadId}/assign`, { method: 'POST', json: { user_id } }),
     onSuccess: (l) => {

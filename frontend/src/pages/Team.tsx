@@ -5,15 +5,11 @@ import { Button, Card, CardHeader, EmptyState, PageHeader, Skeleton, Tabs } from
 import { api } from '@/lib/api'
 import { useAgent } from '@/lib/agent'
 import type { RepLeaderboard } from '@/lib/types'
+import { csvCell } from '@/lib/utils'
 
 const RANGES = [{ value: '7', label: '7d' }, { value: '14', label: '14d' }, { value: '30', label: '30d' }, { value: '90', label: '90d' }] as const
 
 const pct = (n: number | null | undefined) => (n == null ? '—' : `${n.toFixed(1)}%`)
-
-const csvCell = (v: unknown) => {
-  const s = v == null ? '' : String(v)
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-}
 
 function downloadTeamCsv(data: RepLeaderboard, days: string) {
   const header = ['rep', 'email', 'leads_owned', 'calls', 'connected', 'connect_rate', 'meetings', 'hot_leads', 'avg_lead_score']

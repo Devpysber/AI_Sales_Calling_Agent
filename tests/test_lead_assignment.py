@@ -1,6 +1,7 @@
 """Assignable users list and bulk lead assignment."""
 
 from app.core.database import get_db
+from app.models.lead import Lead
 from app.models.user import Organization, User
 from app.services import user_service
 
@@ -51,3 +52,23 @@ def test_bulk_assign_to_other_org_user_rejected(client, base):
     res = client.post(f"{base}/leads/bulk/assign", json={"ids": [lead_id], "user_id": other_org_uid})
     assert res.status_code == 400
     assert client.get(f"{base}/leads/{lead_id}").json()["owner_user_id"] is None
+
+
+def test_bulk_assign_skips_a_lead_outside_this_agents_workspace():
+    """The batched UPDATE (CRMService.bulk_assign) must still scope by agent_id, the way the old
+    per-lead update()/LookupError-skip loop did - a foreign lead_id is silently excluded, not an error."""
+    from app.services.crm_service import CRMService
+
+    uid = _make_user("rep-scope@perm.test", "sales_exec")
+    with get_db() as db:
+        mine = Lead(agent_id=70001, phone="+919800030010")
+        theirs = Lead(agent_id=70002, phone="+919800030011")
+        db.add_all([mine, theirs])
+        db.flush()
+        mine_id, theirs_id = mine.id, theirs.id
+
+    updated = CRMService(70001).bulk_assign([mine_id, theirs_id], uid, actor="admin")
+    assert updated == 1
+    with get_db() as db:
+        assert db.get(Lead, mine_id).owner_user_id == uid
+        assert db.get(Lead, theirs_id).owner_user_id is None

@@ -5,6 +5,19 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 
+# The one source of truth for qualification -> lead_score baseline (call_service._lead_score() reuses
+# this instead of its own copy) and for decaying a stored score by how stale contact has gone.
+QUALIFICATION_SCORE_BASELINE = {"Hot": 85, "Warm": 55, "Cold": 20}
+
+
+def effective_lead_score(score: int | None, last_contacted_at: datetime | None) -> int | None:
+    if score is None:
+        return None
+    if last_contacted_at is None:
+        return score
+    days_since_last_contact = (datetime.utcnow() - last_contacted_at).days
+    return max(0, score - min(50, days_since_last_contact // 3))
+
 
 class Lead(Base):
     __tablename__ = "leads"
@@ -65,6 +78,7 @@ class Lead(Base):
             "qualification": self.qualification,
             "lead_score": self.lead_score,
             "lead_score_effective": self._lead_score_effective(),
+            "lead_score_sentiment_trend": self._lead_score_sentiment_trend(),
             "summary": self.summary,
             "requirements": self.requirements,
             "objections": self.objections,
@@ -78,12 +92,15 @@ class Lead(Base):
         }
 
     def _lead_score_effective(self) -> int | None:
-        if self.lead_score is None:
-            return None
-        if self.last_contacted_at is None:
-            return self.lead_score
-        days_since_last_contact = (datetime.utcnow() - self.last_contacted_at).days
-        return max(0, self.lead_score - min(50, days_since_last_contact // 3))
+        return effective_lead_score(self.lead_score, self.last_contacted_at)
+
+    def _lead_score_sentiment_trend(self) -> int:
+        """How far lead_score has moved from the plain qualification baseline (sentiment across calls),
+        clamped to +-5 - the frontend's leadScore() adds this instead of reconstructing the baseline itself."""
+        baseline = QUALIFICATION_SCORE_BASELINE.get(self.qualification or "")
+        if self.lead_score is None or not baseline:
+            return 0
+        return max(-5, min(5, round((self.lead_score - baseline) / 2)))
 
 
 def iso(value: datetime | None) -> str | None:

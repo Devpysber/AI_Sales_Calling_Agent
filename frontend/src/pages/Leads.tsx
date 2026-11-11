@@ -12,7 +12,8 @@ import { Avatar, Button, Card, EmptyState, Input, PageHeader, Pagination, Select
 import { api } from '@/lib/api'
 import { AnimatedNumber } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
-import type { AssignableUser, Lead, LeadStats, Page } from '@/lib/types'
+import { useAssignableUsers } from '@/lib/useAssignableUsers'
+import type { Lead, LeadStats, Page } from '@/lib/types'
 import { CALL_STATUSES, cn, formatDate, LANGUAGES, LEAD_STATUSES, leadScore, QUALIFICATIONS, timeAgo } from '@/lib/utils'
 
 function useDebounced<T>(value: T, ms = 300) {
@@ -149,7 +150,7 @@ export default function Leads() {
     onError: (e) => toast.error('Update failed', { description: e.message }),
   })
   const startCall = useStartCall()
-  const assignableUsers = useQuery({ queryKey: ['assignable-users', base], queryFn: () => api<AssignableUser[]>(`${base}/leads/assignable-users`), staleTime: 60_000 })
+  const assignableUsers = useAssignableUsers(base)
   const bulkAssign = useMutation({
     mutationFn: (user_id: number | null) => api<{ updated: number }>(`${base}/leads/bulk/assign`, { method: 'POST', json: { ids: [...selected], user_id } }),
     onSuccess: (r) => {
@@ -407,7 +408,7 @@ export default function Leads() {
                       </div>) })()}
                   </td>
                   <td className="px-3"><div className="flex items-center gap-1.5 whitespace-nowrap"><CallStatusBadge status={l.call_status} />{l.retry_count > 0 && <span className="text-xs text-muted">×{l.retry_count}</span>}</div></td>
-                  <td className="px-3"><div className="flex items-center gap-1.5 whitespace-nowrap"><QualificationBadge value={l.qualification} /></div></td>
+                  <td className="px-3"><QualificationBadge value={l.qualification} /></td>
                   <td className="px-3 text-[13px] whitespace-nowrap"><NextStep l={l} /></td>
                   <td className="px-3 text-[13px] whitespace-nowrap text-muted" title={formatDate(l.last_contacted_at)}>{l.last_contacted_at ? timeAgo(l.last_contacted_at) : 'Never'}</td>
                   <td className="px-4 text-right" onClick={(e) => e.stopPropagation()}>

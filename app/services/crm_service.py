@@ -544,6 +544,21 @@ class CRMService:
             events.record("lead.deleted", f"Deleted {count} lead(s)", agent_id=self.agent_id, actor=actor, data={"ids": lead_ids})
         return count
 
+    def bulk_assign(self, lead_ids: list[int], user_id: int | None, actor: str = "admin") -> int:
+        """One batched UPDATE + one event, unlike update()'s per-lead round trip: assign is a single
+        plain field with no per-row validation or side effects worth paying N transactions for."""
+        with get_db() as db:
+            query = db.query(Lead).filter(Lead.id.in_(lead_ids))
+            if self.agent_id is not None:
+                query = query.filter(Lead.agent_id == self.agent_id)
+            if self.owner_user_id is not None:
+                query = query.filter(Lead.owner_user_id == self.owner_user_id)
+            count = query.update({"owner_user_id": user_id}, synchronize_session=False)
+        if count:
+            events.record("lead.assigned", f"Assigned {count} lead(s)" if user_id else f"Unassigned {count} lead(s)",
+                          agent_id=self.agent_id, actor=actor, data={"ids": lead_ids, "user_id": user_id})
+        return count
+
     # ---------------- import / export ----------------
 
     @staticmethod
