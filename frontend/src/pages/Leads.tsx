@@ -12,7 +12,7 @@ import { Avatar, Button, Card, EmptyState, Input, PageHeader, Pagination, Select
 import { api } from '@/lib/api'
 import { AnimatedNumber } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
-import type { Lead, LeadStats, Page } from '@/lib/types'
+import type { AssignableUser, Lead, LeadStats, Page } from '@/lib/types'
 import { CALL_STATUSES, cn, formatDate, LANGUAGES, LEAD_STATUSES, leadScore, QUALIFICATIONS, timeAgo } from '@/lib/utils'
 
 function useDebounced<T>(value: T, ms = 300) {
@@ -149,6 +149,17 @@ export default function Leads() {
     onError: (e) => toast.error('Update failed', { description: e.message }),
   })
   const startCall = useStartCall()
+  const assignableUsers = useQuery({ queryKey: ['assignable-users', base], queryFn: () => api<AssignableUser[]>(`${base}/leads/assignable-users`), staleTime: 60_000 })
+  const bulkAssign = useMutation({
+    mutationFn: (user_id: number | null) => api<{ updated: number }>(`${base}/leads/bulk/assign`, { method: 'POST', json: { ids: [...selected], user_id } }),
+    onSuccess: (r) => {
+      toast.success(`Assigned ${r.updated} lead(s)`)
+      setSelected(new Set())
+      qc.invalidateQueries({ queryKey: ['leads'] })
+      qc.invalidateQueries({ queryKey: ['team-leaderboard'] })
+    },
+    onError: (e) => toast.error('Assign failed', { description: e.message }),
+  })
 
   const bulk = useMutation({
     mutationFn: ({ action, ids }: { action: 'delete' | 'queue' | 'call'; ids: number[] }) =>
@@ -191,7 +202,7 @@ export default function Leads() {
   const toggle = (id: number) => setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
   const sortBy = (key: string) => setSort((prev) => ({ key, order: prev.key === key && prev.order === 'desc' ? 'asc' : 'desc' }))
   const activeFilters = Object.values(filters).filter(Boolean).length
-  const busy = bulk.isPending || bulkUpdate.isPending
+  const busy = bulk.isPending || bulkUpdate.isPending || bulkAssign.isPending
   const clearFilters = () => { setFilters({ status: '', call_status: '', qualification: '', view: '', tag: '' }); setSearch('') }
 
   const summary: [typeof Users, string, number | undefined, () => void, boolean][] = [
@@ -320,6 +331,15 @@ export default function Leads() {
             <select aria-label="Set temperature" value="" disabled={busy} onChange={(e) => e.target.value && bulkUpdate.mutate({ qualification: e.target.value })}
               className="h-10 rounded-lg border border-border bg-surface px-2 text-[13px] font-semibold text-fg disabled:opacity-50 sm:h-8">
               <option value="">Temperature…</option>{QUALIFICATIONS.map((x) => <option key={x} value={x}>{x}</option>)}
+            </select>
+            <select aria-label="Assign to" value="" disabled={busy} onChange={(e) => {
+              if (!e.target.value) return
+              bulkAssign.mutate(e.target.value === '__unassign__' ? null : Number(e.target.value))
+            }}
+              className="h-10 rounded-lg border border-border bg-surface px-2 text-[13px] font-semibold text-fg disabled:opacity-50 sm:h-8">
+              <option value="">Assign to…</option>
+              <option value="__unassign__">Unassign</option>
+              {assignableUsers.data?.map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
             </select>
             <Button size="sm" disabled={busy} loading={bulkUpdate.isPending && bulkUpdate.variables?.do_not_call === true} onClick={async () => {
               if (await confirm({ title: `Mark ${selected.size} lead(s) Do Not Call?`, description: 'They are excluded from manual and automated calls.', confirmLabel: 'Mark Do Not Call', danger: true }))

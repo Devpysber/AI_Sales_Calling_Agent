@@ -66,6 +66,11 @@ def get(user_id: int) -> dict | None:
         return _row(db.get(User, user_id))
 
 
+def list_users() -> list[dict]:
+    with get_db() as db:
+        return [_row(u) for u in db.scalars(select(User))]
+
+
 def default_org() -> dict | None:
     with get_db() as db:
         org = db.scalar(select(Organization).order_by(Organization.id).limit(1))

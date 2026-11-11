@@ -37,6 +37,7 @@ export interface Lead {
   last_contacted_at: string | null
   created_at: string
   updated_at: string
+  owner_user_id?: number | null
 }
 
 export interface Turn {
@@ -240,6 +241,8 @@ export interface RepLeaderboard {
   reps: { user_id: number; name: string | null; email: string; leads_owned: number; calls: number
     connected: number; connect_rate: number | null; meetings: number; hot_leads: number; avg_lead_score: number | null }[]
 }
+
+export interface AssignableUser { id: number; name: string | null; email: string }
 
 export type Board = Record<string, { total: number; items: Lead[] }>
 

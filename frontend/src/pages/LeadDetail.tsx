@@ -14,7 +14,7 @@ import { Avatar, Badge, Button, Card, CardHeader, Dialog, EmptyState, Input, Pag
 import { api, ApiError } from '@/lib/api'
 import { Stagger } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
-import type { ActivityEvent, Call, Lead, Page } from '@/lib/types'
+import type { ActivityEvent, AssignableUser, Call, Lead, Page } from '@/lib/types'
 import { cn, formatDate, formatDuration, LANGUAGES, LEAD_STATUSES, leadScore, timeAgo, titleCase } from '@/lib/utils'
 
 const JOURNEY = ['New', 'Contacted', 'Interested', 'Follow Up', 'Meeting Booked', 'Closed Won']
@@ -143,6 +143,17 @@ export default function LeadDetail() {
     onSuccess: (l) => { qc.setQueryData(['lead', leadId], l); qc.invalidateQueries({ queryKey: ['leads'] }); qc.invalidateQueries({ queryKey: ['activity', 'lead', leadId] }); toast.success('Lead updated') },
     onError: (e) => toast.error(e.message),
   })
+  const assignableUsers = useQuery({ queryKey: ['assignable-users', base], queryFn: () => api<AssignableUser[]>(`${base}/leads/assignable-users`), staleTime: 60_000 })
+  const assign = useMutation({
+    mutationFn: (user_id: number | null) => api<Lead>(`${base}/leads/${leadId}/assign`, { method: 'POST', json: { user_id } }),
+    onSuccess: (l) => {
+      qc.setQueryData(['lead', leadId], l)
+      qc.invalidateQueries({ queryKey: ['leads'] })
+      qc.invalidateQueries({ queryKey: ['team-leaderboard'] })
+      toast.success('Lead assigned')
+    },
+    onError: (e) => toast.error(e.message),
+  })
   const queue = useMutation({
     mutationFn: (at?: string) => api<{ queued?: number; skipped?: number; eta?: string }>(`${base}/leads/bulk/queue`, { method: 'POST', json: { ids: [leadId], at: at || undefined } }),
     onSuccess: (res) => {
@@ -261,6 +272,10 @@ export default function LeadDetail() {
               </Select>
               <Select value={l.qualification ?? ''} disabled={patch.isPending} onChange={(e) => patch.mutate({ qualification: e.target.value })} className="h-10 w-auto max-w-full text-[13px] sm:h-8" aria-label="Temperature">
                 <option value="">No temperature</option>{['Hot', 'Warm', 'Cold'].map((q) => <option key={q}>{q}</option>)}
+              </Select>
+              <Select value={l.owner_user_id ?? ''} disabled={assign.isPending} onChange={(e) => assign.mutate(e.target.value ? Number(e.target.value) : null)} className="h-10 w-auto max-w-full text-[13px] sm:h-8" aria-label="Assigned to">
+                <option value="">Unassigned</option>
+                {assignableUsers.data?.map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
               </Select>
             </div>
           </div>

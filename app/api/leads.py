@@ -319,6 +319,35 @@ def dequeue(body: QueueOrder, request: Request, agent_id: int = Depends(workspac
     return {"removed": removed}
 
 
+@router.get("/assignable-users", dependencies=[Depends(require("leads.assign"))])
+def assignable_users(request: Request, agent_id: int = Depends(workspace)):
+    org_id = request.state.principal["organization_id"]
+    return [{"id": u["id"], "name": u["name"], "email": u["email"]}
+            for u in user_service.list_users() if u["organization_id"] == org_id and u["status"] == "active"]
+
+
+class BulkAssign(BaseModel):
+    ids: list[int]
+    user_id: int | None = None
+
+
+@router.post("/bulk/assign", dependencies=[Depends(require("leads.assign"))])
+def bulk_assign(body: BulkAssign, request: Request, agent_id: int = Depends(workspace)):
+    if body.user_id is not None:
+        target = user_service.get(body.user_id)
+        if not target or target["status"] != "active" or target["organization_id"] != request.state.principal["organization_id"]:
+            raise HTTPException(400, "That user can't be assigned leads.")
+    crm = CRMService(agent_id)
+    updated = 0
+    for lead_id in body.ids:
+        try:
+            crm.update(lead_id, {"owner_user_id": body.user_id}, actor=actor(request), title="Lead assigned")
+            updated += 1
+        except LookupError:
+            pass
+    return {"updated": updated}
+
+
 @router.post("/bulk/call")
 def bulk_call(body: Ids, request: Request, agent_id: int = Depends(workspace)):
     calls, placed, errors = CallService(agent_id), [], []
