@@ -59,6 +59,7 @@ const LeadDetail = lazy(page(() => import('@/pages/LeadDetail')))
 const Pipeline = lazy(page(() => import('@/pages/Pipeline')))
 const Accounts = lazy(page(() => import('@/pages/Accounts')))
 const Analytics = lazy(page(() => import('@/pages/Analytics')))
+const Team = lazy(page(() => import('@/pages/Team')))
 const Import = lazy(page(() => import('@/pages/Import')))
 const Calls = lazy(page(() => import('@/pages/Calls')))
 const ActivityPage = lazy(page(() => import('@/pages/Activity')))
@@ -146,6 +147,7 @@ export default function App() {
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="accounts" element={<Accounts />} />
           <Route path="analytics" element={<Analytics />} />
+          <Route path="team" element={<Team />} />
           <Route path="leads" element={<Leads />} />
           <Route path="leads/:leadId" element={<LeadDetail />} />
           <Route path="import" element={<Import />} />

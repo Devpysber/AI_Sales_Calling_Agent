@@ -12,6 +12,7 @@ from app.core.database import get_db
 from app.models.call import Call
 from app.models.channel import Conversation, Message, ToolRun
 from app.models.lead import Lead
+from app.models.user import User
 
 IST = timezone(timedelta(hours=5, minutes=30))
 OFFSET = timedelta(hours=5, minutes=30)
@@ -298,4 +299,71 @@ def report(agent_id: int, days: int = 30) -> dict:
             [{"source": s or "unknown", "leads": n, "meetings": int(m or 0), "hot": int(h or 0)} for s, n, m, h in sources],
             key=lambda x: -x["leads"])[:10],
     }
+
+
+def rep_leaderboard(agent_id: int, days: int = 30) -> dict:
+    """Per-rep leads/calls/meetings for the owners of this agent's leads."""
+    today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (today - timedelta(days=days - 1) - OFFSET).replace(tzinfo=None)
+    mine = Lead.agent_id == agent_id
+
+    with get_db() as db:
+        leads = db.execute(
+            select(Lead.owner_user_id, Lead.qualification, Lead.lead_score, Lead.last_contacted_at)
+            .where(mine, Lead.owner_user_id.is_not(None))
+        ).all()
+        call_rows = db.execute(
+            select(Lead.owner_user_id, Call.status, Call.duration, Call.outcome)
+            .join(Call, Call.lead_id == Lead.id)
+            .where(mine, Lead.owner_user_id.is_not(None), Call.created_at >= start)
+        ).all()
+        owner_ids = {l.owner_user_id for l in leads} | {c.owner_user_id for c in call_rows}
+        users = {}
+        if owner_ids:
+            users = {u.id: u for u in db.execute(select(User).where(User.id.in_(owner_ids))).scalars()}
+
+    reps: dict[int, dict] = {}
+
+    def bucket(owner_user_id: int) -> dict:
+        return reps.setdefault(owner_user_id, {"leads": [], "calls": []})
+
+    for l in leads:
+        bucket(l.owner_user_id)["leads"].append(l)
+    for c in call_rows:
+        bucket(c.owner_user_id)["calls"].append(c)
+
+    out = []
+    for owner_user_id, data in reps.items():
+        owned_leads = data["leads"]
+        calls = data["calls"]
+        if not owned_leads and not calls:
+            continue
+        connected = [c for c in calls if c.status == ANSWERED or (c.status == "Failed" and (c.duration or 0) > 0)]
+        meetings = sum(c.outcome == "meeting_booked" for c in calls)
+        hot_leads = sum(l.qualification == "Hot" for l in owned_leads)
+        scores = []
+        for l in owned_leads:
+            if l.lead_score is None:
+                continue
+            if l.last_contacted_at is None:
+                scores.append(l.lead_score)
+            else:
+                days_since_last_contact = (datetime.utcnow() - l.last_contacted_at).days
+                scores.append(max(0, l.lead_score - min(50, days_since_last_contact // 3)))
+        user = users.get(owner_user_id)
+        out.append({
+            "user_id": owner_user_id,
+            "name": user.name if user else None,
+            "email": user.email if user else None,
+            "leads_owned": len(owned_leads),
+            "calls": len(calls),
+            "connected": len(connected),
+            "connect_rate": round(100 * len(connected) / len(calls), 1) if calls else None,
+            "meetings": meetings,
+            "hot_leads": hot_leads,
+            "avg_lead_score": round(sum(scores) / len(scores), 1) if scores else None,
+        })
+
+    out.sort(key=lambda r: (-r["meetings"], -r["connected"]))
+    return {"reps": out}
 

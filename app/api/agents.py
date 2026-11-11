@@ -536,6 +536,11 @@ def analytics_channel_report(days: int = Query(14, ge=7, le=180), agent_id: int 
     return analytics.channel_report(agent_id, days)
 
 
+@router.get("/{agent_id}/analytics/leaderboard")
+def analytics_leaderboard(days: int = Query(30, ge=7, le=180), agent_id: int = Depends(workspace)):
+    return analytics.rep_leaderboard(agent_id, days)
+
+
 @router.get("/{agent_id}/activity")
 def activity(type: str | None = None, lead_id: int | None = None, before_id: int | None = None, limit: int = 50,
              agent_id: int = Depends(workspace)):

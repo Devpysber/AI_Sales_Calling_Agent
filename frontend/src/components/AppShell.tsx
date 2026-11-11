@@ -38,6 +38,7 @@ const AGENT_NAV: { section: string; items: NavItem[] }[] = [
   {
     section: 'Insights', items: [
       { to: '/analytics', label: 'Analytics', icon: BarChart3, key: 'a' },
+      { to: '/team', label: 'Team', icon: Users, key: 'r' },
       { to: '/tasks', label: 'Tasks', icon: ListTodo, key: 'j' },
       { to: '/activity', label: 'History', icon: Activity, key: 'h' },
       { to: '/emails', label: 'Email service', icon: Mail, key: 'm' },

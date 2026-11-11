@@ -236,6 +236,11 @@ export interface ChannelAnalyticsReport {
   tools: { tool_name: string; calls: number; ok: number; error: number; success_rate: number | null }[]
 }
 
+export interface RepLeaderboard {
+  reps: { user_id: number; name: string | null; email: string; leads_owned: number; calls: number
+    connected: number; connect_rate: number | null; meetings: number; hot_leads: number; avg_lead_score: number | null }[]
+}
+
 export type Board = Record<string, { total: number; items: Lead[] }>
 
 export interface PlaygroundUsage { used: number; limit: number; remaining: number | null; resets_at: string; exempt: boolean }
