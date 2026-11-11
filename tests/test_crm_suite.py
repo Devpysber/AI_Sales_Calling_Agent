@@ -116,6 +116,26 @@ def test_call_campaign_queues_audience(client, base):
     assert client.get(f"{base}/crm/campaigns/{camp['id']}").json()["status"] == "completed"
 
 
+def test_campaign_segment_filters_by_owner_user_id(client, base):
+    rep_a = client.post(f"{base}/leads", json={"name": "Owned A", "phone": "+919844446001"}).json()
+    client.post(f"{base}/leads", json={"name": "Owned B", "phone": "+919844446002"})
+    from app.core.database import get_db
+    from app.models.user import Organization, User
+    from app.services import user_service
+
+    org_id = user_service.default_org()["id"]
+    with get_db() as db:
+        rep = User(organization_id=org_id, email="camp-rep@perm.test", role="sales_exec", status="active", name="Rep")
+        db.add(rep)
+        db.flush()
+        rep_id = rep.id
+    client.post(f"{base}/leads/{rep_a['id']}/assign", json={"user_id": rep_id})
+
+    preview = client.post(f"{base}/crm/campaigns/preview", json={"segment": {"owner_user_id": rep_id}, "channel": "call"}).json()
+    assert preview["count"] == 1
+    assert preview["sample"][0]["id"] == rep_a["id"]
+
+
 def test_campaign_run_rejects_already_running(client, base):
     import pytest
 

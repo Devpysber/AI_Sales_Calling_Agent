@@ -37,6 +37,8 @@ def _audience_query(agent_id: int, segment: dict):
         q = q.where(Lead.language == segment["language"])
     if segment.get("tags"):
         q = q.where(or_(*[func.lower(Lead.tags).like(f"%{t.strip().lower()}%") for t in segment["tags"] if t.strip()]))
+    if segment.get("owner_user_id"):
+        q = q.where(Lead.owner_user_id == segment["owner_user_id"])
     return q
 
 

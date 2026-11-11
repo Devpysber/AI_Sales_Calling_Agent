@@ -6,9 +6,10 @@ import { toast } from 'sonner'
 import { Badge, Button, Card, Dialog, EmptyState, Field, Input, Meter, Select, Sheet, Skeleton, StatTile, Tabs, Textarea, useConfirm } from '@/components/ui'
 import { api } from '@/lib/api'
 import { useAgent } from '@/lib/agent'
+import { useAssignableUsers } from '@/lib/useAssignableUsers'
 import { LEAD_STATUSES, QUALIFICATIONS } from '@/lib/utils'
 
-type Segment = { status?: string[]; qualification?: string[]; tags?: string[]; source?: string }
+type Segment = { status?: string[]; qualification?: string[]; tags?: string[]; source?: string; owner_user_id?: number }
 type Stats = { targeted?: number; sent?: number; skipped?: number; failed?: number }
 type Campaign = {
   id: number; agent_id: number; name: string; channel: 'call' | 'email' | 'whatsapp'
@@ -17,17 +18,18 @@ type Campaign = {
   started_at: string | null; created_at: string
 }
 type PreviewResult = { count: number; sample: { id: number; name: string; phone: string | null; email: string | null; status: string }[] }
-type Draft = { name: string; channel: Campaign['channel']; status: string[]; qualification: string[]; tags: string; source: string; subject: string; message: string }
+type Draft = { name: string; channel: Campaign['channel']; status: string[]; qualification: string[]; tags: string; source: string; ownerUserId: string; subject: string; message: string }
 
 const CHANNEL_LABEL: Record<string, string> = { call: 'Call', email: 'Email', whatsapp: 'WhatsApp' }
 const CHANNEL_ICON: Record<string, typeof Phone> = { call: Phone, email: Mail, whatsapp: MessageCircle }
 
-const emptyDraft = (): Draft => ({ name: '', channel: 'whatsapp', status: [], qualification: [], tags: '', source: '', subject: '', message: '' })
+const emptyDraft = (): Draft => ({ name: '', channel: 'whatsapp', status: [], qualification: [], tags: '', source: '', ownerUserId: '', subject: '', message: '' })
 
 const toDraft = (c: Campaign): Draft => ({
   name: c.name, channel: c.channel,
   status: c.segment?.status ?? [], qualification: c.segment?.qualification ?? [],
   tags: (c.segment?.tags ?? []).join(', '), source: c.segment?.source ?? '',
+  ownerUserId: c.segment?.owner_user_id ? String(c.segment.owner_user_id) : '',
   subject: c.subject ?? '', message: c.message ?? '',
 })
 
@@ -36,15 +38,20 @@ const segmentOf = (d: Draft): Segment => ({
   qualification: d.qualification.length ? d.qualification : undefined,
   tags: d.tags.trim() ? d.tags.split(',').map((t) => t.trim()).filter(Boolean) : undefined,
   source: d.source.trim() || undefined,
+  owner_user_id: d.ownerUserId ? Number(d.ownerUserId) : undefined,
 })
 
-function segmentSummary(s: Segment | null): string {
-  if (!s || (!s.status?.length && !s.qualification?.length && !s.tags?.length && !s.source)) return 'Everyone'
+function segmentSummary(s: Segment | null, reps?: { id: number; name: string | null; email: string }[]): string {
+  if (!s || (!s.status?.length && !s.qualification?.length && !s.tags?.length && !s.source && !s.owner_user_id)) return 'Everyone'
   const parts: string[] = []
   if (s.status?.length) parts.push(s.status.join('/'))
   if (s.qualification?.length) parts.push(s.qualification.join('/'))
   if (s.tags?.length) parts.push(`tags: ${s.tags.join(', ')}`)
   if (s.source) parts.push(`source: ${s.source}`)
+  if (s.owner_user_id) {
+    const rep = reps?.find((r) => r.id === s.owner_user_id)
+    parts.push(`rep: ${rep?.name || rep?.email || `#${s.owner_user_id}`}`)
+  }
   return parts.join(' · ')
 }
 
@@ -75,6 +82,7 @@ export default function Campaigns() {
   const { base } = useAgent()
   const qc = useQueryClient()
   const confirm = useConfirm()
+  const repsQ = useAssignableUsers(base)
   const campaignsQ = useQuery({
     queryKey: ['campaigns', base],
     queryFn: () => api<Campaign[]>(`${base}/crm/campaigns`),
@@ -174,7 +182,7 @@ export default function Campaigns() {
                         {c.status === 'cancelling' ? 'stopping…' : c.status}
                       </Badge>
                     </div>
-                    <p className="mt-1 text-xs break-words text-muted">Targets: {segmentSummary(c.segment)}</p>
+                    <p className="mt-1 text-xs break-words text-muted">Targets: {segmentSummary(c.segment, repsQ.data)}</p>
                     {c.stats?.targeted ? (
                       <div className="mt-1.5 max-w-xs">
                         <Meter value={(sent + failed + skipped) / c.stats.targeted * 100} tone={c.status === 'completed' ? 'success' : 'brand'} />
@@ -235,6 +243,7 @@ function CampaignForm({ campaign, onClose, onSaved, onPreview }: {
 }) {
   const { base, path } = useAgent()
   const [draft, setDraft] = useState<Draft>(() => campaign ? toDraft(campaign) : emptyDraft())
+  const repsQ = useAssignableUsers(base)
 
   const livePreviewQ = useQuery({
     queryKey: ['campaigns-live-preview', JSON.stringify(segmentOf(draft)), draft.channel],
@@ -298,6 +307,12 @@ function CampaignForm({ campaign, onClose, onSaved, onPreview }: {
             </Field>
             <Field label="Source" hint="Exact match, e.g. website:demo">
               <Input value={draft.source} onChange={(e) => setDraft((d) => ({ ...d, source: e.target.value }))} placeholder="e.g. website" />
+            </Field>
+            <Field label="Assigned rep" hint="Leave empty to include leads owned by anyone (or no one)">
+              <Select value={draft.ownerUserId} onChange={(e) => setDraft((d) => ({ ...d, ownerUserId: e.target.value }))}>
+                <option value="">Any rep</option>
+                {(repsQ.data ?? []).map((r) => <option key={r.id} value={r.id}>{r.name || r.email}</option>)}
+              </Select>
             </Field>
           </div>
         </div>
