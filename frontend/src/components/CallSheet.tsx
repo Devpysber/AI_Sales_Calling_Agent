@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bot, Clock, Gauge, PhoneOff, Timer, User } from 'lucide-react'
+import { Bot, Clock, Download, Gauge, PhoneOff, Timer, User } from 'lucide-react'
 import { toast } from 'sonner'
 import ActivityFeed from '@/components/ActivityFeed'
 import { CallStatusBadge, QualificationBadge, SentimentDot } from '@/components/status'
@@ -16,6 +16,18 @@ const SUMMARY_GRACE_MS = 2 * 60 * 1000
 
 // A summary is only "on its way" when the call finished moments ago and the customer actually spoke;
 // the backend skips summarising assistant-only transcripts and gives up silently when the LLM is down.
+function downloadTranscript(call: Call) {
+  const lines = (call.transcript ?? []).map((t) => `${t.role === 'assistant' ? 'Agent' : 'Customer'}: ${t.text}`)
+  const header = `${callParty(call)} · ${formatDate(call.created_at)}${call.summary ? `\n\nSummary: ${call.summary}` : ''}`
+  const blob = new Blob([`${header}\n\n${lines.join('\n\n')}`], { type: 'text/plain;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `call-${call.id}-transcript.txt`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 const summaryPending = (c: Call) => {
   if (c.summary || c.status !== 'Completed' || c.trigger === 'internal') return false // team check-ins are never summarised
   const turns = c.transcript ?? []
@@ -97,9 +109,14 @@ export default function CallSheet({ callId, onClose, onOpenLead }: { callId: num
           {call.recording_url && <audio controls src={call.recording_url} className="w-full" />}
 
           <section>
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-semibold">Transcript</h3>
-              {live && <Badge tone="info" pulse>Live</Badge>}
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold">Transcript</h3>
+                {live && <Badge tone="info" pulse>Live</Badge>}
+              </div>
+              {(call.transcript?.length ?? 0) > 0 && (
+                <Button variant="ghost" size="sm" onClick={() => downloadTranscript(call)}><Download />Download</Button>
+              )}
             </div>
             {call.transcript?.length ? (
               <div className="space-y-3">
