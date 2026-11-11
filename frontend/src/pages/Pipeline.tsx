@@ -11,7 +11,7 @@ import { AnimatedNumber, Stagger } from '@/lib/motion'
 import { useAgent } from '@/lib/agent'
 import { useDebounced } from '@/lib/useDebounced'
 import type { Board, Lead } from '@/lib/types'
-import { cn, QUALIFICATIONS, timeAgo } from '@/lib/utils'
+import { cn, leadScore, QUALIFICATIONS, timeAgo } from '@/lib/utils'
 
 const STAGES = ['New', 'Contacted', 'Interested', 'Follow Up', 'Meeting Booked', 'Closed Won', 'Closed Lost', 'Not Interested', 'Do Not Call']
 const OPEN = STAGES.slice(0, 6)
@@ -56,6 +56,10 @@ function LeadCard({ lead, onOpen, onDragStart, onMove, moving }: { lead: Lead; o
       {(lead.tags?.length ?? 0) > 0 && <div className="mt-2 flex flex-wrap gap-1">{lead.tags!.map((t) => <span key={t} className="rounded-md bg-surface-2 px-1.5 py-px text-[10.5px] text-fg-2">{t}</span>)}</div>}
       <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5">
         <QualificationBadge value={lead.qualification} />
+        {(() => { const v = leadScore(lead); return (
+          <span title={`Lead score ${v}/100`} className={cn('rounded-md px-1.5 py-px text-[10.5px] font-semibold tabular-nums',
+            v >= 60 ? 'bg-success-soft text-success' : v >= 35 ? 'bg-warning-soft text-warning' : 'bg-surface-2 text-fg-2')}>{v}</span>
+        ) })()}
         {lead.call_status && <CallStatusBadge status={lead.call_status} />}
       </div>
       {/* Actions on their own row so badges never push them out of narrow columns */}
