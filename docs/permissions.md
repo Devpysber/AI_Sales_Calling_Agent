@@ -48,7 +48,14 @@ organisation at startup (`user_service.ensure_bootstrap`).
 Without `leads.view_all`, the `lead_scope` router dependency sets `LEAD_OWNER_SCOPE`; `CRMService`
 then filters every query and lookup to `leads.owner_user_id == principal.user_id` (someone else's lead
 is a 404) and stamps new leads with the creator. Assign with
-`POST /api/agents/{agent_id}/leads/{lead_id}/assign {"user_id": 5}` (`leads.assign`; `null` unassigns).
+`POST /api/agents/{agent_id}/leads/{lead_id}/assign {"user_id": 5}` (`leads.assign`; `null` unassigns),
+or in bulk with `POST /api/agents/{agent_id}/leads/bulk/assign {"ids": [...], "user_id": 5}` (same
+permission, same validation). `GET /api/agents/{agent_id}/leads/assignable-users` lists active users in
+the caller's own organisation, for populating either control.
+
+`GET /api/agents/{agent_id}/analytics/leaderboard` names every rep individually (unlike the aggregate
+`/analytics` and `/analytics/channels` reports), so it requires `leads.view_all` on top of `workspace`
+scoping — a `sales_exec` gets 403 there even though they can call `/analytics` itself.
 
 ## Adding a permission
 
