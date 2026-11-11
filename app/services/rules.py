@@ -28,7 +28,7 @@ TRIGGERS = {
 ACTIONS = {
     "create_task": "Create a follow-up task", "update_lead": "Update lead fields", "add_tag": "Tag the lead",
     "queue_call": "Queue an AI call", "send_email": "Email the lead", "send_whatsapp": "WhatsApp the lead",
-    "notify_team": "Notify the team", "create_deal": "Create a deal",
+    "notify_team": "Notify the team", "create_deal": "Create a deal", "assign_lead": "Assign the lead to a rep",
 }
 OPS = ("eq", "neq", "contains", "gt", "lt", "exists", "not_exists")
 
@@ -112,6 +112,9 @@ def _run_action(agent_id: int, action: dict, ctx: dict, rule_name: str):
             from app.services.notification_service import send_email
             send_email(ctx["email"], render(action.get("subject") or "Hello {name}", ctx), render(action.get("body") or "", ctx),
                        lead_id=lead_id, agent_id=agent_id, actor="ai")
+        elif kind == "assign_lead":
+            user_id = action.get("user_id")
+            crm.bulk_assign([lead_id], int(user_id) if user_id not in (None, "") else None, actor=actor)
         elif kind == "send_whatsapp":
             lead = crm.get(lead_id) or {}
             if lead.get("do_not_call"):

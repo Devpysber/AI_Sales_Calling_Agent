@@ -236,6 +236,30 @@ def test_rule_actions_refuse_opted_out_leads(client, base):
     assert res["actions"][0]["ok"] is False and "opted out" in res["actions"][0]["error"]
 
 
+def test_rule_assign_lead_action(client, base):
+    from app.core.database import get_db
+    from app.models.user import Organization, User
+    from app.services import rules, user_service
+
+    agent_id = int(base.rsplit("/", 1)[1])
+    org_id = user_service.default_org()["id"]
+    with get_db() as db:
+        rep = User(organization_id=org_id, email="rule-assign@perm.test", role="sales_exec", status="active", name="Rep")
+        db.add(rep)
+        db.flush()
+        rep_id = rep.id
+    lead = client.post(f"{base}/leads", json={"name": "RuleAssign", "phone": "+919844440020"}).json()
+
+    rule = {"name": "r", "actions": [{"type": "assign_lead", "user_id": rep_id}]}
+    res = rules.execute(rule, agent_id, lead["id"], {})
+    assert res["actions"][0]["ok"] is True
+    assert client.get(f"{base}/leads/{lead['id']}").json()["owner_user_id"] == rep_id
+
+    unassign = rules.execute({"name": "r", "actions": [{"type": "assign_lead", "user_id": ""}]}, agent_id, lead["id"], {})
+    assert unassign["actions"][0]["ok"] is True
+    assert client.get(f"{base}/leads/{lead['id']}").json()["owner_user_id"] is None
+
+
 def test_campaign_audience_excludes_opted_out_leads_on_every_channel(client, base):
     from app.services import campaigns
     from app.services.whatsapp_service import OPT_OUT_TAG

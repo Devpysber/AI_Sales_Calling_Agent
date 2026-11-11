@@ -34,6 +34,7 @@ const ACTION_PARAMS: Record<string, string> = {
   send_email: 'subject, body',
   send_whatsapp: 'text',
   queue_call: 'no params needed',
+  assign_lead: 'user_id (the rep to assign to; leave blank to unassign)',
 }
 
 // update_lead is the one action whose params the backend reads nested under "fields" ({fields: {status:
