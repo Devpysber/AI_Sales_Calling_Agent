@@ -114,7 +114,7 @@ def test_apply_turn_signals_maps_a_turn_onto_the_lead():
     crm = _FakeCRM({"meeting_at": None})
     result = {"crm_update": {"requirement": "2BHK in Indore", "email": "a@b.co"}, "qualification": "Warm", "intent": "pricing"}
     apply_turn_signals(crm, 5, result)
-    assert crm.updates == [{"email": "a@b.co", "requirements": "2BHK in Indore", "qualification": "Warm", "status": "Interested"}]
+    assert crm.updates == [{"email": "a@b.co", "requirements": "2BHK in Indore", "qualification": "Warm", "lead_score": 55, "status": "Interested"}]
     apply_turn_signals(crm, None, result)   # no lead: nothing happens
     assert len(crm.updates) == 1
 

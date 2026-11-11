@@ -355,3 +355,18 @@ def test_apply_status_update_failed_always_applies(agent_id):
 
 def test_apply_status_update_unknown_wamid_is_noop(agent_id):
     assert wa.apply_status_update("wamid.does-not-exist", "delivered") is False
+
+
+def test_adapter_send_media_delegates_to_send_whatsapp_document(monkeypatch):
+    from app.services.channels.whatsapp import WhatsAppAdapter
+
+    calls = []
+
+    def fake_send_whatsapp_document(to, agent_id, lead_id, link, filename=None, caption=None, phone_number_id=None):
+        calls.append((to, agent_id, lead_id, link, filename, caption, phone_number_id))
+        return {"ok": True}
+
+    monkeypatch.setattr(wa, "send_whatsapp_document", fake_send_whatsapp_document)
+    result = WhatsAppAdapter().send_media("919999999999", "https://example.com/doc.pdf", agent_id=1, lead_id=2, filename="brochure.pdf")
+    assert result == {"ok": True}
+    assert calls == [("919999999999", 1, 2, "https://example.com/doc.pdf", "brochure.pdf", None, None)]

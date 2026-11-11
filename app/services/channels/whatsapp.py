@@ -20,7 +20,11 @@ class WhatsAppAdapter(ChannelAdapter):
         return asyncio.run(_wa.send_whatsapp_message(to, text, **kwargs))
 
     def send_media(self, to: str, media_id: str, **kwargs) -> dict:
-        return {"ok": False, "error": "WhatsApp outbound media not yet implemented"}
+        return _wa.send_whatsapp_document(
+            to, kwargs.get("agent_id"), kwargs.get("lead_id"), media_id,
+            filename=kwargs.get("filename"), caption=kwargs.get("caption"),
+            phone_number_id=kwargs.get("phone_number_id"),
+        )
 
     def parse_webhook(self, payload: dict) -> list[dict]:
         return _wa.parse_webhook(payload)

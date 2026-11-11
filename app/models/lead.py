@@ -31,6 +31,7 @@ class Lead(Base):
     owner_user_id: Mapped[int | None] = mapped_column(Integer, index=True)  # the sales rep this lead is assigned to
 
     qualification: Mapped[str | None] = mapped_column(String(64), index=True)
+    lead_score: Mapped[int | None] = mapped_column(Integer)
     summary: Mapped[str | None] = mapped_column(Text)
     requirements: Mapped[str | None] = mapped_column(Text)
     objections: Mapped[str | None] = mapped_column(Text)
@@ -62,6 +63,8 @@ class Lead(Base):
             "queue_position": self.queue_position,
             "owner_user_id": self.owner_user_id,
             "qualification": self.qualification,
+            "lead_score": self.lead_score,
+            "lead_score_effective": self._lead_score_effective(),
             "summary": self.summary,
             "requirements": self.requirements,
             "objections": self.objections,
@@ -73,6 +76,14 @@ class Lead(Base):
             "created_at": iso(self.created_at),
             "updated_at": iso(self.updated_at),
         }
+
+    def _lead_score_effective(self) -> int | None:
+        if self.lead_score is None:
+            return None
+        if self.last_contacted_at is None:
+            return self.lead_score
+        days_since_last_contact = (datetime.utcnow() - self.last_contacted_at).days
+        return max(0, self.lead_score - min(50, days_since_last_contact // 3))
 
 
 def iso(value: datetime | None) -> str | None:

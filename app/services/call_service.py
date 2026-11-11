@@ -88,6 +88,16 @@ def _normalize_qualification(value) -> str | None:
     return cleaned if cleaned in ("Hot", "Warm", "Cold") else None
 
 
+def _lead_score(qualification: str | None, sentiment: str | None, previous: int | None) -> int | None:
+    """Numeric lead score: qualification base + sentiment adjustment, clamped to [0, 100]. An
+    unparsable qualification leaves the previous score untouched rather than wiping it out."""
+    base = {"Hot": 85, "Warm": 55, "Cold": 20}.get(qualification or "")
+    if base is None:
+        return previous
+    adjustment = {"positive": 10, "negative": -10}.get(sentiment or "", 0)
+    return max(0, min(100, base + adjustment))
+
+
 def _valid_date(value) -> str | None:
     """Normalise an LLM-extracted follow-up date (YYYY-MM-DD); drop anything unparsable, past or more than a year out."""
     try:
@@ -337,6 +347,7 @@ def apply_turn_signals(crm_service, lead_id: int | None, result: dict, call_id: 
         updates["call_status"] = "Pending"  # the callback job dials it
     if result["qualification"]:
         updates["qualification"] = result["qualification"]
+        updates["lead_score"] = _lead_score(result["qualification"], None, (crm_service.get(lead_id) or {}).get("lead_score"))
     if result["intent"] == "do_not_call":
         updates["do_not_call"] = True
         updates["status"] = "Do Not Call"
@@ -1040,6 +1051,7 @@ class CallService:
                 updates["language"] = spoken_lang
             if qualification:
                 updates["qualification"] = qualification
+                updates["lead_score"] = _lead_score(qualification, s.get("sentiment"), current.get("lead_score"))
             if s.get("status"):
                 current = (self.crm.get(lead_id) or {}).get("status")
                 if _ai_may_move(current, s["status"]):

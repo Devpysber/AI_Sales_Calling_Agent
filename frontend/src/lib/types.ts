@@ -21,6 +21,8 @@ export interface Lead {
   call_status: string | null
   retry_count: number
   qualification: string | null
+  lead_score?: number | null
+  lead_score_effective?: number | null
   summary: string | null
   requirements: string | null
   objections: string | null

@@ -41,6 +41,12 @@ export function QualificationBadge({ value }: { value?: string | null }) {
   return <Badge className={BADGE}><span className="truncate">{v}</span></Badge>
 }
 
+export function LeadScoreBadge({ value }: { value?: number | null }) {
+  if (value == null) return null
+  const tone: Tone = value >= 70 ? 'success' : value >= 40 ? 'warning' : 'neutral'
+  return <span title={`Lead score: ${value}`}><Badge className={BADGE} tone={tone}><span className="truncate">{value}</span></Badge></span>
+}
+
 export function SentimentDot({ value }: { value?: string | null }) {
   const v = value?.trim().toLowerCase()
   if (!v) return null
